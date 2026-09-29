@@ -12,6 +12,8 @@ import { activeTab, settings, showToast, updateSettings, type Tab } from "./stor
 
 export type AnnotTool =
   | "highlight" | "underline" | "strike" | "area" | "pen" | "note" | "text" | "rect" | "ellipse" | "line" | "arrow"
+  /** Fill & Sign: a straight black line across anything ("strike out whichever is not applicable"). */
+  | "fs-strike"
   | `stamp:${string}`
   | `sig:${string}`
   | `box:${string}`;
@@ -146,7 +148,20 @@ export async function markupFromSelection(tab: Tab, src: number, quads: Quad[], 
     const r = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
     if (r[2] - r[0] < 4 || r[3] - r[1] < 4) return;
     await editAnnot(tab, src, { kind: "Highlight", props: { quads: [r[0], r[1], r[2], r[1], r[0], r[3], r[2], r[3]], color } });
+  } else {
+    // No text there (a scan): strike through or underline along the drag, as a line.
+    const e = straighten(a, b);
+    if (Math.hypot(e[0] - a[0], e[1] - a[1]) < 6) return;
+    await editAnnot(tab, src, { kind: "Line", props: { line: [a[0], a[1], e[0], e[1]], lineEndings: [0, 0], color: color.map((c) => c * 0.8), border: 1.5 } });
   }
+}
+
+/** A drag's end point, made level or upright when it's nearly so. */
+export function straighten(a: [number, number], b: [number, number]): [number, number] {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  if (Math.abs(dy) < Math.abs(dx) * 0.25) return [b[0], a[1]];
+  if (Math.abs(dx) < Math.abs(dy) * 0.25) return [a[0], b[1]];
+  return b;
 }
 
 // ---------------------------------------------------------------- the layer
@@ -391,11 +406,12 @@ class AnnotLayer implements PageLayer {
     svg.setAttribute("class", "an-draft");
     svg.setAttribute("viewBox", `0 0 ${page.w} ${page.h}`);
     root.append(svg);
-    const shape = document.createElementNS(SVG, tool === "pen" ? "polyline" : tool === "ellipse" ? "ellipse" : tool === "line" || tool === "arrow" ? "line" : "rect");
+    const lineTool = tool === "line" || tool === "arrow" || tool === "fs-strike";
+    const shape = document.createElementNS(SVG, tool === "pen" ? "polyline" : tool === "ellipse" ? "ellipse" : lineTool ? "line" : "rect");
     shape.setAttribute("fill", tool === "area" ? st.color : "none");
     if (tool === "area") shape.setAttribute("fill-opacity", "0.4");
-    shape.setAttribute("stroke", tool === "area" ? "none" : st.color);
-    shape.setAttribute("stroke-width", String(st.width));
+    shape.setAttribute("stroke", tool === "area" ? "none" : tool === "fs-strike" ? "#000" : st.color);
+    shape.setAttribute("stroke-width", String(tool === "fs-strike" ? 1.5 : st.width));
     shape.setAttribute("stroke-linecap", "round");
     shape.setAttribute("stroke-linejoin", "round");
     const boxer = tool.startsWith("box:") ? boxers.get(tool.slice(4)) : undefined;
@@ -411,7 +427,7 @@ class AnnotLayer implements PageLayer {
     const draw = () => {
       const [x0, y0, x1, y1] = [Math.min(start[0], end[0]), Math.min(start[1], end[1]), Math.max(start[0], end[0]), Math.max(start[1], end[1])];
       if (tool === "pen") shape.setAttribute("points", pts.join(" "));
-      else if (tool === "line" || tool === "arrow") {
+      else if (lineTool) {
         shape.setAttribute("x1", String(start[0]));
         shape.setAttribute("y1", String(start[1]));
         shape.setAttribute("x2", String(end[0]));
@@ -431,7 +447,7 @@ class AnnotLayer implements PageLayer {
     const move = (ev: PointerEvent) => {
       const p = v.clientToPage(page.view, ev.clientX, ev.clientY);
       if (!p) return;
-      end = p;
+      end = tool === "fs-strike" ? straighten(start, p) : p;
       if (tool === "pen") {
         const lx = pts[pts.length - 2], ly = pts[pts.length - 1];
         if (Math.hypot(p[0] - lx, p[1] - ly) >= 0.8) pts.push(p[0], p[1]);
@@ -456,6 +472,7 @@ class AnnotLayer implements PageLayer {
           : tool === "area" ? { kind: "Highlight", props: { quads: [x0, y0, x1, y0, x0, y1, x1, y1], color } }
           : tool === "rect" ? { kind: "Square", props: { rect: [x0, y0, x1, y1], color, border: st.width } }
           : tool === "ellipse" ? { kind: "Circle", props: { rect: [x0, y0, x1, y1], color, border: st.width } }
+          : tool === "fs-strike" ? { kind: "Line", props: { line: [start[0], start[1], end[0], end[1]], lineEndings: [0, 0], color: [0, 0, 0], border: 1.5 } }
           : { kind: "Line", props: { line: [start[0], start[1], end[0], end[1]], lineEndings: [0, tool === "arrow" ? 4 : 0], color, border: st.width } };
       if (!req) {
         svg.remove();

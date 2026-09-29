@@ -1137,7 +1137,8 @@ int fo_widget_toggle(fo_ctx *c, fo_page *p, int num)
 	return 1;
 }
 
-/* Undo (redo = 0) or redo one journal step. Returns 1 if a step was taken. */
+/* Undo (redo = 0) or redo one journal step. Returns 1 if a step was taken, 2 if
+ * that step added, removed or resized pages. */
 int fo_pdf_undo(fo_ctx *c, fo_doc *d, int redo)
 {
 	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
@@ -1148,13 +1149,16 @@ int fo_pdf_undo(fo_ctx *c, fo_doc *d, int redo)
 	{
 		if (redo ? pdf_can_redo(CTX, pdf) : pdf_can_undo(CTX, pdf))
 		{
+			int steps, cur = pdf_undoredo_state(CTX, pdf, &steps);
+			const char *title = pdf_undoredo_step(CTX, pdf, redo ? cur : cur - 1);
+			int layout = title && (!strcmp(title, "Page size") || !strncmp(title, "Insert ", 7));
 			/* The journal restores the fields' drawn appearance too; redrawing
 			 * here would be a new edit and wipe out the redo history. */
 			if (redo)
 				pdf_redo(CTX, pdf);
 			else
 				pdf_undo(CTX, pdf);
-			done = 1;
+			done = layout ? 2 : 1;
 		}
 	}
 	fz_catch(CTX)
@@ -1392,6 +1396,16 @@ void fo_pdf_end_op(fo_ctx *c, fo_doc *d)
 		;
 }
 
+void fo_pdf_abandon_op(fo_ctx *c, fo_doc *d)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	fz_try(CTX)
+		if (pdf)
+			pdf_abandon_operation(CTX, pdf);
+	fz_catch(CTX)
+		;
+}
+
 /* Creates an annotation of the given type ("Highlight", "Ink", "FreeText"…).
  * Returns its object number, or -1. */
 int fo_annot_create(fo_ctx *c, fo_page *p, const char *type, const char *author)
@@ -1584,20 +1598,263 @@ char *fo_doc_annots_json(fo_ctx *c, fo_doc *d)
 
 /* ---------------------------------------------------------------- page edits and saving */
 
-int fo_pdf_apply_page_edits(fo_ctx *c, fo_doc *d, const int *rot, int npages, const int *order, int count)
+/* A small growable set of object numbers. */
+typedef struct { int *v; int n, cap; } num_set;
+
+static int num_set_has(const num_set *s, int x)
+{
+	for (int i = 0; i < s->n; i++)
+		if (s->v[i] == x)
+			return 1;
+	return 0;
+}
+
+static void num_set_add(fz_context *ctx, num_set *s, int x)
+{
+	if (num_set_has(s, x))
+		return;
+	if (s->n == s->cap)
+	{
+		s->cap = s->cap ? s->cap * 2 : 32;
+		s->v = fz_realloc_array(ctx, s->v, s->cap, int);
+	}
+	s->v[s->n++] = x;
+}
+
+/* A page's label: style (/D, /R, /r, /A, /a or none), prefix and number. */
+typedef struct
+{
+	pdf_obj *style;
+	const char *prefix;
+	int value;
+} page_label;
+
+/* Collects the ranges of a page label number tree, in page order. */
+static void label_ranges(fz_context *ctx, pdf_obj *node, pdf_obj *starts, pdf_obj *dicts, int depth)
+{
+	pdf_obj *nums = pdf_dict_get(ctx, node, PDF_NAME(Nums));
+	pdf_obj *kids = pdf_dict_get(ctx, node, PDF_NAME(Kids));
+	if (depth > 32)
+		return;
+	for (int i = 0; i + 1 < pdf_array_len(ctx, nums); i += 2)
+	{
+		pdf_array_push(ctx, starts, pdf_array_get(ctx, nums, i));
+		pdf_array_push(ctx, dicts, pdf_array_get(ctx, nums, i + 1));
+	}
+	for (int i = 0; i < pdf_array_len(ctx, kids); i++)
+		label_ranges(ctx, pdf_array_get(ctx, kids, i), starts, dicts, depth + 1);
+}
+
+/* Every page's label from the document's /PageLabels tree. */
+static page_label *read_labels(fz_context *ctx, pdf_document *doc, pdf_obj *tree, int n)
+{
+	page_label *out = fz_calloc(ctx, n > 0 ? n : 1, sizeof *out);
+	pdf_obj *starts = NULL, *dicts = NULL;
+	fz_var(starts);
+	fz_var(dicts);
+	fz_try(ctx)
+	{
+		starts = pdf_new_array(ctx, doc, 8);
+		dicts = pdf_new_array(ctx, doc, 8);
+		label_ranges(ctx, tree, starts, dicts, 0);
+		for (int i = 0; i < n; i++)
+		{
+			int r = -1;
+			for (int k = 0; k < pdf_array_len(ctx, starts); k++)
+				if (pdf_array_get_int(ctx, starts, k) <= i)
+					r = k;
+			out[i].prefix = "";
+			out[i].value = i + 1;
+			if (r >= 0)
+			{
+				pdf_obj *d = pdf_array_get(ctx, dicts, r);
+				pdf_obj *st = pdf_dict_get(ctx, d, PDF_NAME(St));
+				out[i].style = pdf_dict_get(ctx, d, PDF_NAME(S));
+				out[i].prefix = pdf_dict_get_text_string(ctx, d, PDF_NAME(P));
+				out[i].value = (st ? pdf_to_int(ctx, st) : 1) + i - pdf_array_get_int(ctx, starts, r);
+			}
+		}
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_obj(ctx, starts);
+		pdf_drop_obj(ctx, dicts);
+	}
+	fz_catch(ctx)
+	{
+		fz_free(ctx, out);
+		fz_rethrow(ctx);
+	}
+	return out;
+}
+
+/* Page labels for the new page order: a page with the same style and prefix as
+ * the one before it continues its numbering (so deleting page 5 of 1…10 gives
+ * 1…9, and front matter in i, ii, iii stays apart); pages added from other
+ * files continue the page before them. */
+static void write_labels(fz_context *ctx, pdf_obj *root, const page_label *old, int file_pages, const int *order, int count)
+{
+	pdf_obj *tree = pdf_dict_put_dict(ctx, root, PDF_NAME(PageLabels), 1);
+	pdf_obj *nums = pdf_dict_put_array(ctx, tree, PDF_NAME(Nums), 8);
+	page_label prev = { NULL, "", 0 };
+	for (int k = 0; k < count; k++)
+	{
+		page_label l = old[order[k]];
+		int added = order[k] >= file_pages;
+		int same = k > 0 && (added || (pdf_name_eq(ctx, l.style, prev.style) && !strcmp(l.prefix, prev.prefix)));
+		if (same)
+		{
+			l.style = prev.style;
+			l.prefix = prev.prefix;
+			l.value = prev.value + 1;
+		}
+		else
+		{
+			pdf_obj *d;
+			pdf_array_push_int(ctx, nums, k);
+			d = pdf_array_push_dict(ctx, nums, 3);
+			if (l.style)
+				pdf_dict_put(ctx, d, PDF_NAME(S), l.style);
+			if (l.prefix[0])
+				pdf_dict_put_text_string(ctx, d, PDF_NAME(P), l.prefix);
+			if (l.value != 1)
+				pdf_dict_put_int(ctx, d, PDF_NAME(St), l.value);
+		}
+		prev = l;
+	}
+}
+
+/* A field (or any of its kids) has a widget on a kept page. Kids that don't are dropped. */
+static int field_kept(fz_context *ctx, pdf_obj *field, const num_set *widgets, int depth)
+{
+	pdf_obj *kids = pdf_dict_get(ctx, field, PDF_NAME(Kids));
+	int kept = num_set_has(widgets, pdf_to_num(ctx, field));
+	if (depth > 32 || !pdf_is_array(ctx, kids))
+		return kept;
+	for (int i = pdf_array_len(ctx, kids) - 1; i >= 0; i--)
+		if (!field_kept(ctx, pdf_array_get(ctx, kids, i), widgets, depth + 1))
+			pdf_array_delete(ctx, kids, i);
+	return kept || pdf_array_len(ctx, kids) > 0;
+}
+
+/* A page destination (explicit array, or an action going to one) on a kept page. */
+static int dest_kept(fz_context *ctx, pdf_obj *dest, const num_set *pages)
+{
+	if (pdf_is_dict(ctx, dest))
+	{
+		if (!pdf_name_eq(ctx, pdf_dict_get(ctx, dest, PDF_NAME(S)), PDF_NAME(GoTo)))
+			return 1;
+		dest = pdf_dict_get(ctx, dest, PDF_NAME(D));
+	}
+	if (!pdf_is_array(ctx, dest))
+		return 1; /* a named destination: kept or not with the Dests tree */
+	return num_set_has(pages, pdf_to_num(ctx, pdf_array_get(ctx, dest, 0)));
+}
+
+/* pdf_rearrange_pages rebuilds the catalog with only a few entries, which
+ * would lose the form, page labels, attachments, document scripts, metadata
+ * and viewer settings. Puts them back, leaving out what only served dropped
+ * pages (so a full rewrite doesn't keep those pages alive). */
+static void restore_catalog(fz_context *ctx, pdf_document *doc, pdf_obj *old, const page_label *labels, int file_pages, const int *order, int count)
+{
+	pdf_obj *root = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root));
+	int n = pdf_count_pages(ctx, doc);
+	num_set pages = { 0 }, widgets = { 0 };
+	fz_try(ctx)
+	{
+		for (int i = 0; i < n; i++)
+		{
+			pdf_obj *page = pdf_lookup_page_obj(ctx, doc, i);
+			pdf_obj *annots = pdf_dict_get(ctx, page, PDF_NAME(Annots));
+			num_set_add(ctx, &pages, pdf_to_num(ctx, page));
+			for (int k = 0; k < pdf_array_len(ctx, annots); k++)
+			{
+				pdf_obj *a = pdf_array_get(ctx, annots, k);
+				if (pdf_name_eq(ctx, pdf_dict_get(ctx, a, PDF_NAME(Subtype)), PDF_NAME(Widget)))
+					num_set_add(ctx, &widgets, pdf_to_num(ctx, a));
+			}
+		}
+		for (int i = 0; i < pdf_dict_len(ctx, old); i++)
+		{
+			pdf_obj *key = pdf_dict_get_key(ctx, old, i);
+			pdf_obj *val = pdf_dict_get_val(ctx, old, i);
+			/* What pdf_rearrange_pages rebuilt or dropped on purpose (bookmarks and
+			 * destinations of deleted pages) stays as it left it. */
+			if (pdf_dict_get(ctx, root, key) || pdf_name_eq(ctx, key, PDF_NAME(PageLabels)) || pdf_name_eq(ctx, key, PDF_NAME(Outlines))
+				|| pdf_name_eq(ctx, key, PDF_NAME(Dests)) || pdf_name_eq(ctx, key, PDF_NAME(OCProperties))
+				|| pdf_name_eq(ctx, key, PDF_NAME(StructTreeRoot)) || pdf_name_eq(ctx, key, PDF_NAME(Pages)))
+				continue;
+			if (pdf_name_eq(ctx, key, PDF_NAME(Names)))
+			{
+				/* Dests were rebuilt; the other name trees (attachments, scripts…) come back. */
+				pdf_obj *names = pdf_dict_get(ctx, root, PDF_NAME(Names));
+				for (int k = 0; k < pdf_dict_len(ctx, val); k++)
+				{
+					pdf_obj *tk = pdf_dict_get_key(ctx, val, k);
+					if (pdf_name_eq(ctx, tk, PDF_NAME(Dests)))
+						continue;
+					if (!names)
+						names = pdf_dict_put_dict(ctx, root, PDF_NAME(Names), 2);
+					if (!pdf_dict_get(ctx, names, tk))
+						pdf_dict_put(ctx, names, tk, pdf_dict_get_val(ctx, val, k));
+				}
+				continue;
+			}
+			if (!strcmp(pdf_to_name(ctx, key), "OpenAction") && !dest_kept(ctx, val, &pages))
+				continue;
+			if (pdf_name_eq(ctx, key, PDF_NAME(AcroForm)))
+			{
+				pdf_obj *fields = pdf_dict_get(ctx, val, PDF_NAME(Fields));
+				pdf_obj *co = pdf_dict_get(ctx, val, PDF_NAME(CO));
+				for (int k = pdf_array_len(ctx, fields) - 1; k >= 0; k--)
+					if (!field_kept(ctx, pdf_array_get(ctx, fields, k), &widgets, 0))
+						pdf_array_delete(ctx, fields, k);
+				/* Calculation order: only fields still there. */
+				for (int k = pdf_array_len(ctx, co) - 1; k >= 0; k--)
+				{
+					pdf_obj *f = pdf_array_get(ctx, co, k);
+					if (!num_set_has(&widgets, pdf_to_num(ctx, f)) && !pdf_array_len(ctx, pdf_dict_get(ctx, f, PDF_NAME(Kids))))
+						pdf_array_delete(ctx, co, k);
+				}
+			}
+			pdf_dict_put(ctx, root, key, val);
+		}
+		if (pdf_dict_get(ctx, old, PDF_NAME(PageLabels)))
+			write_labels(ctx, root, labels, file_pages, order, count);
+	}
+	fz_always(ctx)
+	{
+		fz_free(ctx, pages.v);
+		fz_free(ctx, widgets.v);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+int fo_pdf_apply_page_edits(fo_ctx *c, fo_doc *d, const int *rot, int npages, const int *order, int count, int file_pages)
 {
 	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
 	int identity = 1;
+	pdf_obj *old = NULL;
+	page_label *labels = NULL;
 	if (!pdf)
 	{
 		snprintf(c->err, sizeof c->err, "not a PDF");
 		return -1;
 	}
+	fz_var(old);
+	fz_var(labels);
+	/* With the undo journal on, every change must be inside an operation. The
+	 * document is reopened after saving, so this step is never undone. */
+	pdf_begin_operation(CTX, pdf, "Page edits");
 	fz_try(CTX)
 	{
 		int n = pdf_count_pages(CTX, pdf);
 		if (npages != n)
 			fz_throw(CTX, FZ_ERROR_ARGUMENT, "page count changed (%d vs %d)", npages, n);
+		for (int i = 0; i < count; i++)
+			if (order[i] < 0 || order[i] >= n)
+				fz_throw(CTX, FZ_ERROR_ARGUMENT, "no page %d", order[i]);
 		/* Rotations first: they refer to pages by their original position. */
 		for (int i = 0; i < n; i++)
 		{
@@ -1615,7 +1872,20 @@ int fo_pdf_apply_page_edits(fo_ctx *c, fo_doc *d, const int *rot, int npages, co
 			if (order[i] != i)
 				identity = 0;
 		if (!identity)
+		{
+			pdf_obj *root = pdf_dict_get(CTX, pdf_trailer(CTX, pdf), PDF_NAME(Root));
+			old = pdf_copy_dict(CTX, root);
+			if (pdf_dict_get(CTX, old, PDF_NAME(PageLabels)))
+				labels = read_labels(CTX, pdf, pdf_dict_get(CTX, old, PDF_NAME(PageLabels)), n);
 			pdf_rearrange_pages(CTX, pdf, count, order, PDF_CLEAN_STRUCTURE_KEEP);
+			restore_catalog(CTX, pdf, old, labels, file_pages, order, count);
+		}
+	}
+	fz_always(CTX)
+	{
+		pdf_end_operation(CTX, pdf);
+		pdf_drop_obj(CTX, old);
+		fz_free(CTX, labels);
 	}
 	fz_catch(CTX)
 	{
@@ -1719,6 +1989,1019 @@ int fo_convert_to_pdf(fo_ctx *c, fo_doc *d, const char *path, const int *order, 
 	{
 		fz_drop_page(CTX, page);
 		fz_drop_document_writer(CTX, w);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* ---------------------------------------------------------------- inserting pages */
+
+/* Link annotations that jump to a page of their own document: after copying,
+ * that page isn't there (or is somewhere else). */
+static int is_internal_link(fz_context *ctx, pdf_obj *annot)
+{
+	pdf_obj *a;
+	if (!pdf_name_eq(ctx, pdf_dict_get(ctx, annot, PDF_NAME(Subtype)), PDF_NAME(Link)))
+		return 0;
+	if (pdf_dict_get(ctx, annot, PDF_NAME(Dest)))
+		return 1;
+	a = pdf_dict_get(ctx, annot, PDF_NAME(A));
+	return pdf_name_eq(ctx, pdf_dict_get(ctx, a, PDF_NAME(S)), PDF_NAME(GoTo));
+}
+
+/* Where an internal link goes: the index in pages[] of its target page (with
+ * the view in *view, a new array in dst without the page), or -1 when its
+ * page isn't among those copied. */
+static int link_target(fz_context *ctx, pdf_document *dst, pdf_document *src, pdf_obj *a, const int *pages, int count, pdf_obj **view)
+{
+	pdf_obj *dest = pdf_dict_get(ctx, a, PDF_NAME(Dest)), *first;
+	int t;
+	if (!dest)
+		dest = pdf_dict_get(ctx, pdf_dict_get(ctx, a, PDF_NAME(A)), PDF_NAME(D));
+	if (pdf_is_name(ctx, dest) || pdf_is_string(ctx, dest))
+		dest = pdf_lookup_dest(ctx, src, dest);
+	if (pdf_is_dict(ctx, dest))
+		dest = pdf_dict_get(ctx, dest, PDF_NAME(D));
+	if (!pdf_is_array(ctx, dest))
+		return -1;
+	first = pdf_array_get(ctx, dest, 0);
+	t = pdf_is_int(ctx, first) ? pdf_to_int(ctx, first) : pdf_lookup_page_number(ctx, src, first);
+	for (int k = 0; k < count; k++)
+		if (pages[k] == t)
+		{
+			*view = pdf_new_array(ctx, dst, 4);
+			for (int i = 1; i < pdf_array_len(ctx, dest); i++)
+			{
+				pdf_obj *v = pdf_array_get(ctx, dest, i);
+				if (pdf_is_number(ctx, v))
+					pdf_array_push_real(ctx, *view, pdf_to_real(ctx, v));
+				else if (pdf_is_name(ctx, v))
+					pdf_array_push(ctx, *view, v);
+				else
+					pdf_array_push(ctx, *view, PDF_NULL);
+			}
+			return k;
+		}
+	return -1;
+}
+
+/* Drops the kids of a form field that have no widget on the copied pages, so
+ * copying the field doesn't pull in widgets (and through them, pages) from
+ * the rest of the document. Returns 1 if the field is kept. */
+static int prune_field(fz_context *ctx, pdf_obj *field, const num_set *keep, int depth)
+{
+	pdf_obj *kids = pdf_dict_get(ctx, field, PDF_NAME(Kids));
+	int kept = num_set_has(keep, pdf_to_num(ctx, field));
+	if (depth > 32 || !pdf_is_array(ctx, kids))
+		return kept;
+	for (int i = pdf_array_len(ctx, kids) - 1; i >= 0; i--)
+		if (!prune_field(ctx, pdf_array_get(ctx, kids, i), keep, depth + 1))
+			pdf_array_delete(ctx, kids, i);
+	return kept || pdf_array_len(ctx, kids) > 0;
+}
+
+static pdf_obj *acroform(fz_context *ctx, pdf_document *doc, int create)
+{
+	pdf_obj *root = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root));
+	pdf_obj *form = pdf_dict_get(ctx, root, PDF_NAME(AcroForm));
+	if (!form && create)
+		form = pdf_dict_put_dict(ctx, root, PDF_NAME(AcroForm), 4);
+	return form;
+}
+
+/* Copies PDF pages with their annotations and form fields. */
+static void insert_pdf_pages(fz_context *ctx, pdf_document *dst, pdf_document *src, const int *pages, int count)
+{
+	static pdf_obj * const copy_list[] = {
+		PDF_NAME(Contents), PDF_NAME(Resources), PDF_NAME(MediaBox), PDF_NAME(CropBox), PDF_NAME(BleedBox),
+		PDF_NAME(TrimBox), PDF_NAME(ArtBox), PDF_NAME(Rotate), PDF_NAME(UserUnit), PDF_NAME(Group),
+	};
+	int total = pdf_count_pages(ctx, src);
+	int base = pdf_count_pages(ctx, dst);
+	num_set widgets = { 0 }, tops = { 0 };
+	pdf_graft_map *map = NULL;
+	pdf_obj *page_dict = NULL, *ref = NULL, *annots = NULL, *field_objs = NULL, *links = NULL, *view = NULL;
+	fz_var(links);
+	fz_var(view);
+	fz_var(map);
+	fz_var(page_dict);
+	fz_var(ref);
+	fz_var(annots);
+	fz_var(field_objs);
+	fz_try(ctx)
+	{
+		/* Annotations point at their page (/P); copying one would copy that page
+		 * too. src is a throwaway copy, so those links are cut here. */
+		for (int i = 0; i < total; i++)
+		{
+			pdf_obj *list = pdf_dict_get(ctx, pdf_lookup_page_obj(ctx, src, i), PDF_NAME(Annots));
+			for (int k = 0; k < pdf_array_len(ctx, list); k++)
+			{
+				pdf_obj *a = pdf_array_get(ctx, list, k);
+				pdf_dict_del(ctx, a, PDF_NAME(P));
+				pdf_dict_del(ctx, a, PDF_NAME(Popup));
+			}
+		}
+		/* The fields that have widgets on the copied pages, trimmed to those widgets. */
+		field_objs = pdf_new_array(ctx, src, 8);
+		for (int k = 0; k < count; k++)
+		{
+			pdf_obj *list = pdf_dict_get(ctx, pdf_lookup_page_obj(ctx, src, pages[k]), PDF_NAME(Annots));
+			for (int j = 0; j < pdf_array_len(ctx, list); j++)
+			{
+				pdf_obj *a = pdf_array_get(ctx, list, j), *top = a;
+				if (!pdf_name_eq(ctx, pdf_dict_get(ctx, a, PDF_NAME(Subtype)), PDF_NAME(Widget)))
+					continue;
+				num_set_add(ctx, &widgets, pdf_to_num(ctx, a));
+				for (int depth = 0; depth < 32 && pdf_dict_get(ctx, top, PDF_NAME(Parent)); depth++)
+					top = pdf_dict_get(ctx, top, PDF_NAME(Parent));
+				if (!num_set_has(&tops, pdf_to_num(ctx, top)))
+				{
+					num_set_add(ctx, &tops, pdf_to_num(ctx, top));
+					pdf_array_push(ctx, field_objs, top);
+				}
+			}
+		}
+		for (int i = 0; i < pdf_array_len(ctx, field_objs); i++)
+			prune_field(ctx, pdf_array_get(ctx, field_objs, i), &widgets, 0);
+
+		map = pdf_new_graft_map(ctx, dst);
+		/* Links to copied pages: (link, index in pages[], view) triples, pointed at the new pages at the end. */
+		links = pdf_new_array(ctx, dst, 12);
+		for (int k = 0; k < count; k++)
+		{
+			pdf_obj *from = pdf_lookup_page_obj(ctx, src, pages[k]);
+			pdf_obj *list = pdf_dict_get(ctx, from, PDF_NAME(Annots));
+			page_dict = pdf_new_dict(ctx, dst, 12);
+			pdf_dict_put(ctx, page_dict, PDF_NAME(Type), PDF_NAME(Page));
+			for (int i = 0; i < (int)nelem(copy_list); i++)
+			{
+				pdf_obj *obj = pdf_dict_get_inheritable(ctx, from, copy_list[i]);
+				if (obj)
+					pdf_dict_put_drop(ctx, page_dict, copy_list[i], pdf_graft_mapped_object(ctx, map, obj));
+			}
+			ref = pdf_add_object(ctx, dst, page_dict);
+			if (pdf_array_len(ctx, list))
+			{
+				annots = pdf_new_array(ctx, dst, pdf_array_len(ctx, list));
+				for (int j = 0; j < pdf_array_len(ctx, list); j++)
+				{
+					pdf_obj *a = pdf_array_get(ctx, list, j), *copy;
+					int to = -1;
+					if (pdf_name_eq(ctx, pdf_dict_get(ctx, a, PDF_NAME(Subtype)), PDF_NAME(Popup)))
+						continue;
+					if (is_internal_link(ctx, a))
+					{
+						/* Kept only if its page came along; its target is set once that page is in. */
+						to = link_target(ctx, dst, src, a, pages, count, &view);
+						if (to < 0)
+							continue;
+						pdf_dict_del(ctx, a, PDF_NAME(Dest));
+						pdf_dict_del(ctx, a, PDF_NAME(A));
+					}
+					copy = pdf_graft_mapped_object(ctx, map, a);
+					pdf_dict_put(ctx, copy, PDF_NAME(P), ref);
+					if (to >= 0)
+					{
+						pdf_array_push(ctx, links, copy);
+						pdf_array_push_int(ctx, links, to);
+						pdf_array_push_drop(ctx, links, view);
+						view = NULL;
+					}
+					pdf_array_push_drop(ctx, annots, copy);
+				}
+				pdf_dict_put(ctx, ref, PDF_NAME(Annots), annots);
+				pdf_drop_obj(ctx, annots);
+				annots = NULL;
+			}
+			pdf_insert_page(ctx, dst, -1, ref);
+			pdf_drop_obj(ctx, ref);
+			ref = NULL;
+			pdf_drop_obj(ctx, page_dict);
+			page_dict = NULL;
+		}
+
+		for (int i = 0; i + 2 < pdf_array_len(ctx, links); i += 3)
+		{
+			pdf_obj *v = pdf_array_get(ctx, links, i + 2);
+			pdf_obj *dest = pdf_dict_put_array(ctx, pdf_array_get(ctx, links, i), PDF_NAME(Dest), 1 + pdf_array_len(ctx, v));
+			pdf_array_push(ctx, dest, pdf_lookup_page_obj(ctx, dst, base + pdf_array_get_int(ctx, links, i + 1)));
+			for (int k = 0; k < pdf_array_len(ctx, v); k++)
+				pdf_array_push(ctx, dest, pdf_array_get(ctx, v, k));
+		}
+
+		/* Register the copied fields with this document's form. */
+		if (pdf_array_len(ctx, field_objs))
+		{
+			pdf_obj *sform = acroform(ctx, src, 0);
+			pdf_obj *form = acroform(ctx, dst, 1);
+			pdf_obj *fields = pdf_dict_get(ctx, form, PDF_NAME(Fields));
+			pdf_obj *sfonts = pdf_dict_getp(ctx, sform, "DR/Font");
+			pdf_obj *da = pdf_dict_get(ctx, sform, PDF_NAME(DA));
+			if (!pdf_is_array(ctx, fields))
+				fields = pdf_dict_put_array(ctx, form, PDF_NAME(Fields), 8);
+			for (int i = 0; i < pdf_array_len(ctx, field_objs); i++)
+			{
+				pdf_obj *copy = pdf_graft_mapped_object(ctx, map, pdf_array_get(ctx, field_objs, i));
+				const char *name = pdf_dict_get_text_string(ctx, copy, PDF_NAME(T));
+				fz_try(ctx)
+				{
+					/* A field with the same name would share its value: rename. */
+					if (name[0])
+					{
+						char base[200], next[220];
+						int taken = 1;
+						fz_strlcpy(base, name, sizeof base);
+						fz_strlcpy(next, base, sizeof next);
+						for (int n = 2; taken && n < 10000; )
+						{
+							taken = 0;
+							for (int f = 0; f < pdf_array_len(ctx, fields); f++)
+								if (!strcmp(pdf_dict_get_text_string(ctx, pdf_array_get(ctx, fields, f), PDF_NAME(T)), next))
+									taken = 1;
+							if (taken)
+								fz_snprintf(next, sizeof next, "%s_%d", base, n++);
+						}
+						if (strcmp(next, base))
+							pdf_dict_put_text_string(ctx, copy, PDF_NAME(T), next);
+					}
+					if (da && !pdf_dict_get(ctx, copy, PDF_NAME(DA)))
+						pdf_dict_put_drop(ctx, copy, PDF_NAME(DA), pdf_graft_mapped_object(ctx, map, da));
+					pdf_array_push(ctx, fields, copy);
+				}
+				fz_always(ctx)
+					pdf_drop_obj(ctx, copy);
+				fz_catch(ctx)
+					fz_rethrow(ctx);
+			}
+			/* Fonts the fields' text is drawn with. */
+			if (pdf_is_dict(ctx, sfonts))
+			{
+				pdf_obj *dr = pdf_dict_get(ctx, form, PDF_NAME(DR));
+				pdf_obj *fonts;
+				if (!pdf_is_dict(ctx, dr))
+					dr = pdf_dict_put_dict(ctx, form, PDF_NAME(DR), 1);
+				fonts = pdf_dict_get(ctx, dr, PDF_NAME(Font));
+				if (!pdf_is_dict(ctx, fonts))
+					fonts = pdf_dict_put_dict(ctx, dr, PDF_NAME(Font), 4);
+				for (int i = 0; i < pdf_dict_len(ctx, sfonts); i++)
+				{
+					pdf_obj *key = pdf_dict_get_key(ctx, sfonts, i);
+					if (!pdf_dict_get(ctx, fonts, key))
+						pdf_dict_put_drop(ctx, fonts, key, pdf_graft_mapped_object(ctx, map, pdf_dict_get_val(ctx, sfonts, i)));
+				}
+			}
+			if (da && !pdf_dict_get(ctx, form, PDF_NAME(DA)))
+				pdf_dict_put_drop(ctx, form, PDF_NAME(DA), pdf_graft_mapped_object(ctx, map, da));
+		}
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_obj(ctx, annots);
+		pdf_drop_obj(ctx, ref);
+		pdf_drop_obj(ctx, page_dict);
+		pdf_drop_obj(ctx, field_objs);
+		pdf_drop_obj(ctx, links);
+		pdf_drop_obj(ctx, view);
+		pdf_drop_graft_map(ctx, map);
+		fz_free(ctx, widgets.v);
+		fz_free(ctx, tops.v);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* Draws pages of any other format (pictures, EPUB, XPS…) into new PDF pages. */
+static void insert_drawn_pages(fz_context *ctx, pdf_document *dst, fz_document *src, const int *pages, int count, const float fit[2])
+{
+	fz_page *page = NULL;
+	fz_device *dev = NULL;
+	pdf_obj *res = NULL, *ref = NULL;
+	fz_buffer *contents = NULL;
+	fz_var(page);
+	fz_var(dev);
+	fz_var(res);
+	fz_var(ref);
+	fz_var(contents);
+	fz_try(ctx)
+	{
+		for (int k = 0; k < count; k++)
+		{
+			fz_rect b, box;
+			fz_matrix m;
+			float bw, bh;
+			page = fz_load_page(ctx, src, pages[k]);
+			b = fz_bound_page(ctx, page);
+			bw = b.x1 - b.x0;
+			bh = b.y1 - b.y0;
+			m = fz_translate(-b.x0, -b.y0);
+			box = fz_make_rect(0, 0, bw, bh);
+			if (fit && fit[0] > 0 && fit[1] > 0 && bw > 0 && bh > 0)
+			{
+				/* The page turned to the picture's orientation, the picture centred in it. */
+				float w = fit[0], h = fit[1], s;
+				if ((bw > bh) != (w > h))
+				{
+					float t = w;
+					w = h;
+					h = t;
+				}
+				s = fz_min(w / bw, h / bh);
+				m = fz_concat(m, fz_scale(s, s));
+				m = fz_concat(m, fz_translate((w - bw * s) / 2, (h - bh * s) / 2));
+				box = fz_make_rect(0, 0, w, h);
+			}
+			dev = pdf_page_write(ctx, dst, box, &res, &contents);
+			fz_run_page(ctx, page, dev, m, NULL);
+			fz_close_device(ctx, dev);
+			fz_drop_device(ctx, dev);
+			dev = NULL;
+			ref = pdf_add_page(ctx, dst, box, 0, res, contents);
+			pdf_insert_page(ctx, dst, -1, ref);
+			pdf_drop_obj(ctx, ref);
+			ref = NULL;
+			pdf_drop_obj(ctx, res);
+			res = NULL;
+			fz_drop_buffer(ctx, contents);
+			contents = NULL;
+			fz_drop_page(ctx, page);
+			page = NULL;
+		}
+	}
+	fz_always(ctx)
+	{
+		fz_drop_device(ctx, dev);
+		pdf_drop_obj(ctx, ref);
+		pdf_drop_obj(ctx, res);
+		fz_drop_buffer(ctx, contents);
+		fz_drop_page(ctx, page);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+int fo_pdf_insert_pages(fo_ctx *c, fo_doc *d, fo_doc *s, const int *pages, int count, const float fit[2])
+{
+	pdf_document *dst = pdf_specifics(CTX, (fz_document *)d);
+	pdf_document *src = pdf_specifics(CTX, (fz_document *)s);
+	if (!dst)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	fz_try(CTX)
+	{
+		int n = fz_count_pages(CTX, (fz_document *)s);
+		for (int k = 0; k < count; k++)
+			if (pages[k] < 0 || pages[k] >= n)
+				fz_throw(CTX, FZ_ERROR_ARGUMENT, "page %d is out of range", pages[k] + 1);
+		if (src)
+			insert_pdf_pages(CTX, dst, src, pages, count);
+		else
+			insert_drawn_pages(CTX, dst, (fz_document *)s, pages, count, fit);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return count;
+}
+
+int fo_pdf_insert_blank(fo_ctx *c, fo_doc *d, float w, float h, int count)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_obj *res = NULL, *ref = NULL;
+	fz_buffer *contents = NULL;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	fz_var(res);
+	fz_var(ref);
+	fz_var(contents);
+	fz_try(CTX)
+	{
+		for (int k = 0; k < count; k++)
+		{
+			res = pdf_new_dict(CTX, pdf, 1);
+			contents = fz_new_buffer(CTX, 1);
+			ref = pdf_add_page(CTX, pdf, fz_make_rect(0, 0, w, h), 0, res, contents);
+			pdf_insert_page(CTX, pdf, -1, ref);
+			pdf_drop_obj(CTX, ref);
+			ref = NULL;
+			pdf_drop_obj(CTX, res);
+			res = NULL;
+			fz_drop_buffer(CTX, contents);
+			contents = NULL;
+		}
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, ref);
+		pdf_drop_obj(CTX, res);
+		fz_drop_buffer(CTX, contents);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return count;
+}
+
+fo_doc *fo_pdf_new(fo_ctx *c)
+{
+	pdf_document *pdf = NULL;
+	fz_try(CTX)
+		pdf = pdf_create_document(CTX);
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return (fo_doc *)pdf;
+}
+
+/* Adds an outline item as the last child of parent (the /Outlines root or an
+ * item). New items are closed; the root counts its visible children. */
+static pdf_obj *outline_add(fz_context *ctx, pdf_document *doc, pdf_obj *parent, int is_root, const char *title, int page, float y)
+{
+	pdf_obj *item = pdf_add_new_dict(ctx, doc, 6);
+	pdf_obj *last = pdf_dict_get(ctx, parent, PDF_NAME(Last));
+	fz_try(ctx)
+	{
+		pdf_dict_put_text_string(ctx, item, PDF_NAME(Title), title ? title : "");
+		pdf_dict_put(ctx, item, PDF_NAME(Parent), parent);
+		if (page >= 0)
+		{
+			pdf_obj *pobj = pdf_lookup_page_obj(ctx, doc, page);
+			fz_rect mb = pdf_to_rect(ctx, pdf_dict_get_inheritable(ctx, pobj, PDF_NAME(MediaBox)));
+			pdf_obj *dest = pdf_dict_put_array(ctx, item, PDF_NAME(Dest), 5);
+			pdf_array_push(ctx, dest, pobj);
+			pdf_array_push(ctx, dest, PDF_NAME(XYZ));
+			pdf_array_push(ctx, dest, PDF_NULL);
+			if (y > 0 && y < mb.y1 - mb.y0)
+				pdf_array_push_real(ctx, dest, mb.y1 - y);
+			else
+				pdf_array_push(ctx, dest, PDF_NULL);
+			pdf_array_push(ctx, dest, PDF_NULL);
+		}
+		if (last)
+		{
+			pdf_dict_put(ctx, last, PDF_NAME(Next), item);
+			pdf_dict_put(ctx, item, PDF_NAME(Prev), last);
+		}
+		else
+			pdf_dict_put(ctx, parent, PDF_NAME(First), item);
+		pdf_dict_put(ctx, parent, PDF_NAME(Last), item);
+		pdf_dict_put_int(ctx, parent, PDF_NAME(Count), pdf_dict_get_int(ctx, parent, PDF_NAME(Count)) + (is_root ? 1 : -1));
+	}
+	fz_catch(ctx)
+	{
+		pdf_drop_obj(ctx, item);
+		fz_rethrow(ctx);
+	}
+	return item;
+}
+
+/* Where a source outline entry lands: its page in the new document, or -1. */
+static int outline_target(fz_context *ctx, fz_document *src, fz_outline *o, const int *map, int n)
+{
+	int p;
+	if (!o->uri && o->page.page < 0)
+		return -1;
+	p = fz_page_number_from_location(ctx, src, o->page);
+	return p >= 0 && p < n ? map[p] : -1;
+}
+
+/* The first kept page among an entry's descendants, or -1. */
+static int first_kept_target(fz_context *ctx, fz_document *src, fz_outline *o, const int *map, int n, int depth)
+{
+	for (; o && depth < 32; o = o->next)
+	{
+		int t = outline_target(ctx, src, o, map, n);
+		if (t < 0)
+			t = first_kept_target(ctx, src, o->down, map, n, depth + 1);
+		if (t >= 0)
+			return t;
+	}
+	return -1;
+}
+
+/* Copies source outline entries whose pages were kept. An entry whose own page
+ * was left out stays if something under it was kept (it then goes there). */
+static void copy_outline(fz_context *ctx, pdf_document *dst, pdf_obj *parent, int is_root, fz_document *src, fz_outline *o, const int *map, int n, int depth)
+{
+	for (; o && depth < 32; o = o->next)
+	{
+		int t = outline_target(ctx, src, o, map, n);
+		float y = o->y;
+		pdf_obj *item;
+		if (t < 0)
+		{
+			t = first_kept_target(ctx, src, o->down, map, n, depth + 1);
+			y = 0;
+		}
+		if (t < 0)
+			continue;
+		item = outline_add(ctx, dst, parent, is_root, o->title, t, y);
+		fz_try(ctx)
+			copy_outline(ctx, dst, item, 0, src, o->down, map, n, depth + 1);
+		fz_always(ctx)
+			pdf_drop_obj(ctx, item);
+		fz_catch(ctx)
+			fz_rethrow(ctx);
+	}
+}
+
+int fo_pdf_outline_group(fo_ctx *c, fo_doc *d, fo_doc *s, const char *title, int base, const int *pages, int count)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	fz_outline *outline = NULL;
+	int *map = NULL;
+	pdf_obj *group = NULL;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	fz_var(outline);
+	fz_var(map);
+	fz_var(group);
+	fz_try(CTX)
+	{
+		pdf_obj *root = pdf_dict_get(CTX, pdf_trailer(CTX, pdf), PDF_NAME(Root));
+		pdf_obj *outlines = pdf_dict_get(CTX, root, PDF_NAME(Outlines));
+		int n = fz_count_pages(CTX, (fz_document *)s);
+		map = fz_malloc_array(CTX, n > 0 ? n : 1, int);
+		for (int i = 0; i < n; i++)
+			map[i] = -1;
+		for (int k = count - 1; k >= 0; k--)
+			if (pages[k] >= 0 && pages[k] < n)
+				map[pages[k]] = base + k;
+		if (!outlines)
+		{
+			outlines = pdf_add_new_dict(CTX, pdf, 4);
+			pdf_dict_put(CTX, outlines, PDF_NAME(Type), PDF_NAME(Outlines));
+			pdf_dict_put(CTX, root, PDF_NAME(Outlines), outlines);
+			pdf_drop_obj(CTX, outlines);
+		}
+		group = outline_add(CTX, pdf, outlines, 1, title, count ? base : -1, 0);
+		fz_try(CTX)
+			outline = fz_load_outline(CTX, (fz_document *)s);
+		fz_catch(CTX)
+			outline = NULL; /* a broken outline just isn't copied */
+		copy_outline(CTX, pdf, group, 0, (fz_document *)s, outline, map, n, 0);
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, group);
+		fz_drop_outline(CTX, outline);
+		fz_free(CTX, map);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* ---------------------------------------------------------------- splitting by size */
+
+typedef struct
+{
+	pdf_document *doc;
+	int *page_stamp, *part_stamp; /* per object number: last page / part that counted it */
+	int n, page, part;
+	int64_t added;
+} size_walk;
+
+/* Adds the bytes of objects a page uses that its part doesn't have yet. Other
+ * pages (reached through links, parents or annotations' /P) are not followed. */
+static void walk_size(fz_context *ctx, size_walk *w, pdf_obj *o, int depth)
+{
+	if (depth > 64 || !o)
+		return;
+	if (pdf_is_indirect(ctx, o))
+	{
+		int num = pdf_to_num(ctx, o);
+		if (num <= 0 || num >= w->n || w->page_stamp[num] == w->page)
+			return;
+		w->page_stamp[num] = w->page;
+		if (w->part_stamp[num] != w->part)
+		{
+			w->part_stamp[num] = w->part;
+			w->added += 40; /* object header and xref entry */
+			if (pdf_is_stream(ctx, o))
+				w->added += pdf_dict_get_int(ctx, o, PDF_NAME(Length));
+		}
+		if (depth > 0 && pdf_name_eq(ctx, pdf_dict_get(ctx, o, PDF_NAME(Type)), PDF_NAME(Page)))
+			return;
+	}
+	if (pdf_is_dict(ctx, o))
+	{
+		for (int i = 0; i < pdf_dict_len(ctx, o); i++)
+		{
+			pdf_obj *key = pdf_dict_get_key(ctx, o, i);
+			if (pdf_name_eq(ctx, key, PDF_NAME(Parent)) || pdf_name_eq(ctx, key, PDF_NAME(P)))
+				continue;
+			walk_size(ctx, w, pdf_dict_get_val(ctx, o, i), depth + 1);
+		}
+	}
+	else if (pdf_is_array(ctx, o))
+	{
+		for (int i = 0; i < pdf_array_len(ctx, o); i++)
+			walk_size(ctx, w, pdf_array_get(ctx, o, i), depth + 1);
+	}
+}
+
+int fo_pdf_split_by_size(fo_ctx *c, fo_doc *d, const int *order, int count, double max_bytes, int *starts)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	size_walk w = { 0 };
+	int parts = 0;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	fz_var(w);
+	fz_try(CTX)
+	{
+		int64_t part_bytes = 0;
+		w.doc = pdf;
+		w.n = pdf_xref_len(CTX, pdf);
+		w.page_stamp = fz_calloc(CTX, w.n, sizeof(int));
+		w.part_stamp = fz_calloc(CTX, w.n, sizeof(int));
+		w.part = 1;
+		for (int k = 0; k < count; k++)
+		{
+			w.page = k + 1;
+			w.added = 0;
+			walk_size(CTX, &w, pdf_lookup_page_obj(CTX, pdf, order[k]), 0);
+			if (k > 0 && part_bytes > 0 && part_bytes + w.added > max_bytes)
+			{
+				/* Start a new part with this page: count it again from scratch. */
+				starts[parts++] = k;
+				w.part++;
+				w.page = count + k + 1;
+				w.added = 0;
+				walk_size(CTX, &w, pdf_lookup_page_obj(CTX, pdf, order[k]), 0);
+				part_bytes = 0;
+			}
+			else if (k == 0)
+				starts[parts++] = 0;
+			part_bytes += w.added;
+		}
+	}
+	fz_always(CTX)
+	{
+		fz_free(CTX, w.page_stamp);
+		fz_free(CTX, w.part_stamp);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return parts;
+}
+
+/* ---------------------------------------------------------------- page size (crop and resize) */
+
+/* Where the page's content is: the box around everything drawn (page
+ * coordinates, relative to its top-left), or an empty box on a blank page. */
+int fo_page_content_box(fo_ctx *c, fo_page *p, float out[4])
+{
+	fz_rect r = fz_empty_rect;
+	fz_device *dev = NULL;
+	fz_var(dev);
+	fz_try(CTX)
+	{
+		fz_rect b = fz_bound_page(CTX, (fz_page *)p);
+		dev = fz_new_bbox_device(CTX, &r);
+		fz_run_page(CTX, (fz_page *)p, dev, fz_translate(-b.x0, -b.y0), NULL);
+		fz_close_device(CTX, dev);
+		r = fz_intersect_rect(r, fz_make_rect(0, 0, b.x1 - b.x0, b.y1 - b.y0));
+	}
+	fz_always(CTX)
+		fz_drop_device(CTX, dev);
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	out[0] = r.x0;
+	out[1] = r.y0;
+	out[2] = r.x1;
+	out[3] = r.y1;
+	return fz_is_empty_rect(r) ? 0 : 1;
+}
+
+/* Transforms a flat array of x, y pairs in place. */
+static void transform_points(fz_context *ctx, pdf_obj *arr, fz_matrix m)
+{
+	for (int i = 0; i + 1 < pdf_array_len(ctx, arr); i += 2)
+	{
+		fz_point p = fz_transform_point(fz_make_point(pdf_array_get_real(ctx, arr, i), pdf_array_get_real(ctx, arr, i + 1)), m);
+		pdf_array_put_real(ctx, arr, i, p.x);
+		pdf_array_put_real(ctx, arr, i + 1, p.y);
+	}
+}
+
+/* Moves an annotation's geometry (PDF user space) with the page's content. */
+static void transform_annot_obj(fz_context *ctx, pdf_obj *obj, fz_matrix m)
+{
+	pdf_obj *ink = pdf_dict_get(ctx, obj, PDF_NAME(InkList));
+	pdf_dict_put_rect(ctx, obj, PDF_NAME(Rect), fz_transform_rect(pdf_dict_get_rect(ctx, obj, PDF_NAME(Rect)), m));
+	transform_points(ctx, pdf_dict_get(ctx, obj, PDF_NAME(QuadPoints)), m);
+	transform_points(ctx, pdf_dict_get(ctx, obj, PDF_NAME(Vertices)), m);
+	transform_points(ctx, pdf_dict_get(ctx, obj, PDF_NAME(L)), m);
+	transform_points(ctx, pdf_dict_get(ctx, obj, PDF_NAME(CL)), m);
+	for (int i = 0; i < pdf_array_len(ctx, ink); i++)
+		transform_points(ctx, pdf_array_get(ctx, ink, i), m);
+}
+
+/* Kinds whose look MuPDF draws itself are redrawn after moving; others
+ * (stamps, pictures) keep theirs, which viewers fit to the new rectangle. */
+static void redraw_moved(fz_context *ctx, pdf_annot *a)
+{
+	switch (pdf_annot_type(ctx, a))
+	{
+	case PDF_ANNOT_HIGHLIGHT: case PDF_ANNOT_UNDERLINE: case PDF_ANNOT_STRIKE_OUT: case PDF_ANNOT_SQUIGGLY:
+	case PDF_ANNOT_INK: case PDF_ANNOT_SQUARE: case PDF_ANNOT_CIRCLE: case PDF_ANNOT_LINE:
+	case PDF_ANNOT_POLYGON: case PDF_ANNOT_POLY_LINE: case PDF_ANNOT_FREE_TEXT: case PDF_ANNOT_WIDGET:
+		pdf_dirty_annot(ctx, a);
+		pdf_update_annot(ctx, a);
+		break;
+	default:
+		break;
+	}
+}
+
+/* Appends a page's content streams, one after the other, to buf. */
+static void append_contents(fz_context *ctx, fz_buffer *buf, pdf_obj *contents)
+{
+	if (pdf_is_array(ctx, contents))
+	{
+		for (int i = 0; i < pdf_array_len(ctx, contents); i++)
+			append_contents(ctx, buf, pdf_array_get(ctx, contents, i));
+		return;
+	}
+	if (pdf_is_stream(ctx, contents))
+	{
+		fz_buffer *b = pdf_load_stream(ctx, contents);
+		fz_try(ctx)
+		{
+			fz_append_buffer(ctx, buf, b);
+			fz_append_byte(ctx, buf, '\n');
+		}
+		fz_always(ctx)
+			fz_drop_buffer(ctx, b);
+		fz_catch(ctx)
+			fz_rethrow(ctx);
+	}
+}
+
+/* A w×h RGB picture from pixels of pix (x0, y0 with steps dx, dy per column / row). */
+static pdf_obj *strip_image(fz_context *ctx, pdf_document *doc, fz_pixmap *pix, int x0, int y0, int w, int h)
+{
+	fz_pixmap *strip = fz_new_pixmap(ctx, fz_device_rgb(ctx), w, h, NULL, 0);
+	fz_image *img = NULL;
+	pdf_obj *ref = NULL;
+	fz_var(img);
+	fz_try(ctx)
+	{
+		for (int y = 0; y < h; y++)
+			for (int x = 0; x < w; x++)
+			{
+				int sx = fz_clampi(x0 + x, 0, pix->w - 1), sy = fz_clampi(y0 + y, 0, pix->h - 1);
+				memcpy(strip->samples + y * strip->stride + x * 3, pix->samples + sy * pix->stride + sx * pix->n, 3);
+			}
+		img = fz_new_image_from_pixmap(ctx, strip, NULL);
+		ref = pdf_add_image(ctx, doc, img);
+	}
+	fz_always(ctx)
+	{
+		fz_drop_image(ctx, img);
+		fz_drop_pixmap(ctx, strip);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return ref;
+}
+
+static void put_color_rect(fz_context *ctx, fz_buffer *buf, const unsigned char *rgb, fz_rect r)
+{
+	if (r.x1 - r.x0 < 0.01f || r.y1 - r.y0 < 0.01f)
+		return;
+	fz_append_printf(ctx, buf, "%g %g %g rg %g %g %g %g re f\n", rgb[0] / 255.0f, rgb[1] / 255.0f, rgb[2] / 255.0f, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+}
+
+int fo_pdf_page_size(fo_ctx *c, fo_page *p, const float crop[4], const float size[2], int fit, float ax, float ay, int remove, int fill, const float rgb[3])
+{
+	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
+	pdf_document *doc = page ? page->doc : NULL;
+	fz_buffer *old = NULL, *buf = NULL;
+	fz_pixmap *pix = NULL;
+	pdf_obj *res = NULL, *xobjs = NULL, *form = NULL, *contents = NULL, *img = NULL;
+	if (!page)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF page");
+		return -1;
+	}
+	fz_var(old);
+	fz_var(buf);
+	fz_var(pix);
+	fz_var(res);
+	fz_var(form);
+	fz_var(contents);
+	fz_var(img);
+	fz_try(CTX)
+	{
+		pdf_obj *pobj = page->obj;
+		fz_rect media, bounds, C;
+		fz_matrix ctm, inv;
+		pdf_page_transform(CTX, page, &media, &ctm);
+		bounds = fz_transform_rect(media, ctm);
+		C = fz_intersect_rect(fz_make_rect(crop[0] + bounds.x0, crop[1] + bounds.y0, crop[2] + bounds.x0, crop[3] + bounds.y0), bounds);
+		if (C.x1 - C.x0 < 1 || C.y1 - C.y0 < 1)
+			fz_throw(CTX, FZ_ERROR_ARGUMENT, "the crop box is empty");
+		inv = fz_invert_matrix(ctm);
+
+		/* Content outside: deleted (redacted without boxes), and comments fully outside dropped. */
+		if (remove)
+		{
+			fz_rect strips[4] = {
+				{ bounds.x0, bounds.y0, C.x0, bounds.y1 }, { C.x1, bounds.y0, bounds.x1, bounds.y1 },
+				{ C.x0, bounds.y0, C.x1, C.y0 }, { C.x0, C.y1, C.x1, bounds.y1 },
+			};
+			pdf_redact_options opts = { 0, PDF_REDACT_IMAGE_PIXELS, PDF_REDACT_LINE_ART_REMOVE_IF_COVERED, PDF_REDACT_TEXT_REMOVE };
+			pdf_annot *a, *next;
+			pdf_obj *annots = pdf_dict_get(CTX, pobj, PDF_NAME(Annots));
+			int any = 0;
+			/* pdf_redact_page applies every redaction mark on the page: marks
+			 * someone placed and hasn't applied yet are hidden from it meanwhile. */
+			for (int i = 0; i < pdf_array_len(CTX, annots); i++)
+			{
+				pdf_obj *o = pdf_array_get(CTX, annots, i);
+				if (pdf_name_eq(CTX, pdf_dict_get(CTX, o, PDF_NAME(Subtype)), PDF_NAME(Redact)))
+					pdf_dict_puts_drop(CTX, o, "Subtype", pdf_new_name(CTX, "PaginautKeepRedact"));
+			}
+			for (a = pdf_first_annot(CTX, page); a; a = next)
+			{
+				next = pdf_next_annot(CTX, a);
+				if (fz_is_empty_rect(fz_intersect_rect(pdf_bound_annot(CTX, a), C)))
+					pdf_delete_annot(CTX, page, a);
+			}
+			for (int i = 0; i < 4; i++)
+				if (strips[i].x1 - strips[i].x0 > 0.01f && strips[i].y1 - strips[i].y0 > 0.01f)
+				{
+					pdf_annot *r = pdf_create_annot(CTX, page, PDF_ANNOT_REDACT);
+					pdf_set_annot_rect(CTX, r, strips[i]);
+					pdf_drop_annot(CTX, r);
+					any = 1;
+				}
+			if (any)
+				pdf_redact_page(CTX, doc, page, &opts);
+			annots = pdf_dict_get(CTX, pobj, PDF_NAME(Annots));
+			for (int i = 0; i < pdf_array_len(CTX, annots); i++)
+			{
+				pdf_obj *o = pdf_array_get(CTX, annots, i);
+				if (!strcmp(pdf_to_name(CTX, pdf_dict_get(CTX, o, PDF_NAME(Subtype))), "PaginautKeepRedact"))
+					pdf_dict_put(CTX, o, PDF_NAME(Subtype), PDF_NAME(Redact));
+			}
+		}
+
+		pdf_dict_del(CTX, pobj, PDF_NAME(TrimBox));
+		pdf_dict_del(CTX, pobj, PDF_NAME(BleedBox));
+		pdf_dict_del(CTX, pobj, PDF_NAME(ArtBox));
+		if (!(size && size[0] > 0 && size[1] > 0))
+		{
+			/* Crop only: the page box shrinks, nothing moves. */
+			fz_rect cu = fz_transform_rect(C, inv);
+			pdf_dict_put_rect(CTX, pobj, PDF_NAME(CropBox), cu);
+			if (remove)
+				pdf_dict_put_rect(CTX, pobj, PDF_NAME(MediaBox), cu);
+		}
+		else
+		{
+			/* Resize: the content (from the crop box) is placed on a W×H page. */
+			float W = size[0], H = size[1];
+			float cw = C.x1 - C.x0, ch = C.y1 - C.y0;
+			float s = fit == 0 ? fz_min(W / cw, H / ch) : fit == 1 ? fz_max(W / cw, H / ch) : 1;
+			float pw = cw * s, ph = ch * s, ox = (W - pw) * ax, oy = (H - ph) * ay;
+			fz_matrix flip = { 1, 0, 0, -1, 0, H };
+			fz_matrix place = fz_concat(fz_concat(fz_translate(-C.x0, -C.y0), fz_scale(s, s)), fz_translate(ox, oy));
+			fz_matrix T = fz_concat(fz_concat(ctm, place), flip);
+			fz_rect page_box = fz_make_rect(0, 0, W, H);
+			fz_rect placed = fz_intersect_rect(fz_transform_rect(fz_make_rect(ox, oy, ox + pw, oy + ph), flip), page_box);
+			pdf_obj *group = pdf_dict_get(CTX, pobj, PDF_NAME(Group));
+			pdf_annot *a;
+
+			old = fz_new_buffer(CTX, 1024);
+			append_contents(CTX, old, pdf_dict_get(CTX, pobj, PDF_NAME(Contents)));
+			form = pdf_new_xobject(CTX, doc, media, fz_identity, pdf_dict_get_inheritable(CTX, pobj, PDF_NAME(Resources)), old);
+			if (group)
+				pdf_dict_put(CTX, form, PDF_NAME(Group), group);
+			res = pdf_new_dict(CTX, doc, 2);
+			xobjs = pdf_dict_put_dict(CTX, res, PDF_NAME(XObject), 6);
+			pdf_dict_puts(CTX, xobjs, "PaginautPage", form);
+			buf = fz_new_buffer(CTX, 512);
+
+			/* The new space around the content. */
+			if (fill && (placed.x0 > 0.01f || placed.y0 > 0.01f || placed.x1 < W - 0.01f || placed.y1 < H - 0.01f))
+			{
+				fz_rect top = { placed.x0, placed.y1, placed.x1, H }, bottom = { placed.x0, 0, placed.x1, placed.y0 };
+				fz_rect left = { 0, placed.y0, placed.x0, placed.y1 }, right = { placed.x1, placed.y0, W, placed.y1 };
+				fz_rect corners[4] = { { 0, placed.y1, placed.x0, H }, { placed.x1, placed.y1, W, H }, { 0, 0, placed.x0, placed.y0 }, { placed.x1, 0, W, placed.y0 } };
+				fz_append_string(CTX, buf, "q\n");
+				if (fill == 1)
+				{
+					unsigned char col[3] = { (unsigned char)(rgb[0] * 255 + 0.5f), (unsigned char)(rgb[1] * 255 + 0.5f), (unsigned char)(rgb[2] * 255 + 0.5f) };
+					put_color_rect(CTX, buf, col, top);
+					put_color_rect(CTX, buf, col, bottom);
+					put_color_rect(CTX, buf, col, left);
+					put_color_rect(CTX, buf, col, right);
+					for (int i = 0; i < 4; i++)
+						put_color_rect(CTX, buf, col, corners[i]);
+				}
+				else
+				{
+					/* Extend edges: the crop box's outer rows and columns of pixels, stretched outwards. */
+					float k = fz_min(2.0f, 1400.0f / fz_max(cw, ch));
+					int x0, y0, x1, y1;
+					struct { fz_rect r; const char *name; int sx, sy, w, h; } strips[4];
+					const unsigned char *tl, *tr, *bl, *br;
+					pix = fz_new_pixmap_from_page(CTX, (fz_page *)p, fz_concat(fz_translate(-bounds.x0, -bounds.y0), fz_scale(k, k)), fz_device_rgb(CTX), 0);
+					x0 = fz_clampi((int)((C.x0 - bounds.x0) * k), 0, pix->w - 1);
+					y0 = fz_clampi((int)((C.y0 - bounds.y0) * k), 0, pix->h - 1);
+					x1 = fz_clampi((int)((C.x1 - bounds.x0) * k) - 1, x0, pix->w - 1);
+					y1 = fz_clampi((int)((C.y1 - bounds.y0) * k) - 1, y0, pix->h - 1);
+					strips[0].r = top; strips[0].name = "PaginautT"; strips[0].sx = x0; strips[0].sy = y0; strips[0].w = x1 - x0 + 1; strips[0].h = 1;
+					strips[1].r = bottom; strips[1].name = "PaginautB"; strips[1].sx = x0; strips[1].sy = y1; strips[1].w = x1 - x0 + 1; strips[1].h = 1;
+					strips[2].r = left; strips[2].name = "PaginautL"; strips[2].sx = x0; strips[2].sy = y0; strips[2].w = 1; strips[2].h = y1 - y0 + 1;
+					strips[3].r = right; strips[3].name = "PaginautR"; strips[3].sx = x1; strips[3].sy = y0; strips[3].w = 1; strips[3].h = y1 - y0 + 1;
+					for (int i = 0; i < 4; i++)
+					{
+						fz_rect r = strips[i].r;
+						if (r.x1 - r.x0 < 0.01f || r.y1 - r.y0 < 0.01f)
+							continue;
+						img = strip_image(CTX, doc, pix, strips[i].sx, strips[i].sy, strips[i].w, strips[i].h);
+						pdf_dict_puts(CTX, xobjs, strips[i].name, img);
+						pdf_drop_obj(CTX, img);
+						img = NULL;
+						fz_append_printf(CTX, buf, "q %g 0 0 %g %g %g cm /%s Do Q\n", r.x1 - r.x0, r.y1 - r.y0, r.x0, r.y0, strips[i].name);
+					}
+					tl = pix->samples + y0 * pix->stride + x0 * pix->n;
+					tr = pix->samples + y0 * pix->stride + x1 * pix->n;
+					bl = pix->samples + y1 * pix->stride + x0 * pix->n;
+					br = pix->samples + y1 * pix->stride + x1 * pix->n;
+					put_color_rect(CTX, buf, tl, corners[0]);
+					put_color_rect(CTX, buf, tr, corners[1]);
+					put_color_rect(CTX, buf, bl, corners[2]);
+					put_color_rect(CTX, buf, br, corners[3]);
+				}
+				fz_append_string(CTX, buf, "Q\n");
+			}
+			/* The content, clipped to where the crop box went. */
+			fz_append_printf(CTX, buf, "q %g %g %g %g re W n %g %g %g %g %g %g cm /PaginautPage Do Q\n",
+				placed.x0, placed.y0, placed.x1 - placed.x0, placed.y1 - placed.y0, T.a, T.b, T.c, T.d, T.e, T.f);
+			contents = pdf_add_stream(CTX, doc, buf, NULL, 0);
+
+			/* Comments, links and form fields move with the content. */
+			{
+				pdf_obj *annots = pdf_dict_get(CTX, pobj, PDF_NAME(Annots));
+				for (int i = 0; i < pdf_array_len(CTX, annots); i++)
+					transform_annot_obj(CTX, pdf_array_get(CTX, annots, i), T);
+			}
+			pdf_dict_put_rect(CTX, pobj, PDF_NAME(MediaBox), page_box);
+			pdf_dict_del(CTX, pobj, PDF_NAME(CropBox));
+			pdf_dict_put_int(CTX, pobj, PDF_NAME(Rotate), 0);
+			pdf_dict_put(CTX, pobj, PDF_NAME(Resources), res);
+			pdf_dict_put(CTX, pobj, PDF_NAME(Contents), contents);
+			for (a = pdf_first_annot(CTX, page); a; a = pdf_next_annot(CTX, a))
+				redraw_moved(CTX, a);
+			for (a = pdf_first_widget(CTX, page); a; a = pdf_next_widget(CTX, a))
+				redraw_moved(CTX, a);
+		}
+	}
+	fz_always(CTX)
+	{
+		fz_drop_buffer(CTX, old);
+		fz_drop_buffer(CTX, buf);
+		fz_drop_pixmap(CTX, pix);
+		pdf_drop_obj(CTX, res);
+		pdf_drop_obj(CTX, form);
+		pdf_drop_obj(CTX, contents);
+		pdf_drop_obj(CTX, img);
 	}
 	fz_catch(CTX)
 	{

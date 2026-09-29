@@ -8,6 +8,9 @@ import { setCoverSeparate, setViewMode } from "../modes";
 import { startLayoutEdit } from "./LayoutPanel";
 import { clearForm } from "../forms";
 import { recognize, removeRecognized } from "../ocr";
+import { extractPages, insertBlankPage, startInsert, startMerge, startSplit } from "./PagesUI";
+import { toggleGrid } from "./PageGrid";
+import { startPageSize } from "../pagesize";
 import { helpPanel } from "./HelpDialogs";
 import { activeTab, baseName, dialog, findOpen, openFiles, paletteOpen, recent, settings, toast, unlockTab, updateSettings, type Tab } from "../store";
 
@@ -212,6 +215,13 @@ function commands(): Item[] {
     c("Rotate page left", withTab((t) => P.rotatePages(t, -90)), "Shift+R", hasDoc),
     c("Rotate page 180°", withTab((t) => P.rotatePages(t, 180)), "", hasDoc),
     c("Delete page", withTab((t) => P.deletePages(t)), "Del", hasDoc),
+    c("Insert pages from a file…", withTab((t) => void startInsert(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Merge files into one PDF…", () => void startMerge(activeTab.value?.status.value === "ready" ? activeTab.value : null), ""),
+    c("Page grid (organize pages)", withTab((t) => toggleGrid(t)), "Ctrl+Shift+G", hasDoc),
+    c("Crop and resize pages (page size)…", withTab((t) => startPageSize(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Split into files…", withTab((t) => startSplit(t)), "", hasDoc),
+    c("Save selected pages as a new PDF (extract)…", withTab((t) => void extractPages(t)), "", hasDoc),
+    c("Insert blank page", withTab((t) => void insertBlankPage(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Undo", withTab((t) => P.undo(t)), "Ctrl+Z", () => !!activeTab.value?.history.canUndo),
     c("Redo", withTab((t) => P.redo(t)), "Ctrl+Y", () => !!activeTab.value?.history.canRedo),
     c("Save", withTab((t) => P.save(t)), "Ctrl+S", () => !!activeTab.value?.dirty.value),

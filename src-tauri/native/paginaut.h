@@ -87,13 +87,47 @@ char *fo_text_search_json(fo_ctx *c, fo_text *t, const float bounds[4], const ch
 char *fo_text_match_json(fo_ctx *c, fo_text *t, const float bounds[4], const char *needle, int flags, int snippets);
 
 /* Page edits and saving (PDF). rot[i] is extra rotation for source page i
- * (npages entries); order lists source pages in their new order (count entries). */
-int fo_pdf_apply_page_edits(fo_ctx *c, fo_doc *d, const int *rot, int npages, const int *order, int count);
+ * (npages entries); order lists source pages in their new order (count entries).
+ * Pages from file_pages on were added in memory (their page labels continue
+ * the page before them). The form, page labels, attachments and other
+ * document-wide entries are kept. */
+int fo_pdf_apply_page_edits(fo_ctx *c, fo_doc *d, const int *rot, int npages, const int *order, int count, int file_pages);
 int fo_pdf_can_save_incrementally(fo_ctx *c, fo_doc *d);
 /* incremental = 1: append changes to the document's own file (path must be that file). */
 int fo_pdf_save(fo_ctx *c, fo_doc *d, const char *path, int incremental);
 /* Writes any document as a new PDF with the given page order and extra rotations. */
 int fo_convert_to_pdf(fo_ctx *c, fo_doc *d, const char *path, const int *order, int count, const int *rot);
+
+/* Appends pages[0..count) of src (any format) to the end of PDF d, as part of
+ * the current undo operation (see fo_pdf_begin_op). PDF pages keep their
+ * comments and form fields (fields whose names are taken get a suffix); links
+ * to pages that come along point at their new place, others are left out. src is changed in memory, so open it just for
+ * this. fit (w, h) > 0: pages of other formats (pictures…) are scaled to fit a
+ * page of that size, turned to their own orientation. Returns pages added. */
+int fo_pdf_insert_pages(fo_ctx *c, fo_doc *d, fo_doc *src, const int *pages, int count, const float fit[2]);
+/* Appends count empty w×h pages (points) to PDF d, in the current operation. */
+int fo_pdf_insert_blank(fo_ctx *c, fo_doc *d, float w, float h, int count);
+/* Splits pages (in the given order) into parts of about max_bytes each, counting
+ * what pages share (fonts, pictures) once per part. Writes each part's first
+ * index in order[] to starts (count entries at most); returns the part count. */
+int fo_pdf_split_by_size(fo_ctx *c, fo_doc *d, const int *order, int count, double max_bytes, int *starts);
+/* The box around everything drawn on the page (relative to its top-left).
+ * Returns 1, or 0 for a blank page, -1 on error. */
+int fo_page_content_box(fo_ctx *c, fo_page *p, float out[4]);
+/* Crops and/or resizes a PDF page, in the current undo operation. crop: the
+ * part to keep (page coordinates relative to its top-left). remove: delete
+ * what's outside (else it's only hidden). size (w, h) > 0: a new page size, the
+ * kept part placed on it by fit (0 fit, 1 fill, 2 actual size) at anchor (ax,
+ * ay: 0, 0.5 or 1); the page's own rotation is made part of it. fill for the
+ * new space: 0 nothing, 1 the colour rgb (0..1), 2 the edges stretched out.
+ * Comments, links and form fields move with the content. */
+int fo_pdf_page_size(fo_ctx *c, fo_page *p, const float crop[4], const float size[2], int fit, float ax, float ay, int remove, int fill, const float rgb[3]);
+/* A new, empty PDF in memory. */
+fo_doc *fo_pdf_new(fo_ctx *c);
+/* Adds a bookmark titled `title` at the end of d's outline, pointing at page
+ * base, with src's own bookmarks under it for the pages that were copied
+ * (pages[k] of src became page base + k of d). */
+int fo_pdf_outline_group(fo_ctx *c, fo_doc *d, fo_doc *src, const char *title, int base, const int *pages, int count);
 
 /* JSON [[x0,y0,x1,y1],...]: where images are drawn on the page (relative to its origin). */
 char *fo_image_rects_json(fo_ctx *c, fo_list *l, const float bounds[4]);
@@ -125,6 +159,8 @@ char *fo_annots_json(fo_ctx *c, fo_page *p, const float bounds[4]);
 char *fo_doc_annots_json(fo_ctx *c, fo_doc *d);
 void fo_pdf_begin_op(fo_ctx *c, fo_doc *d, const char *name);
 void fo_pdf_end_op(fo_ctx *c, fo_doc *d);
+/* Undoes everything since fo_pdf_begin_op and leaves no undo step (after an error). */
+void fo_pdf_abandon_op(fo_ctx *c, fo_doc *d);
 int fo_annot_create(fo_ctx *c, fo_page *p, const char *type, const char *author);
 int fo_annot_delete(fo_ctx *c, fo_page *p, int num);
 int fo_annot_update(fo_ctx *c, fo_page *p, int num);

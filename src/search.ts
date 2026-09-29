@@ -4,6 +4,7 @@
 import { signal } from "@preact/signals";
 import { api, newId } from "./api";
 import type { Tab } from "./store";
+import { sourceCount } from "./edits";
 
 /** Search options shared by the find bar and the command palette (remembered). */
 export interface SearchOpts {
@@ -127,7 +128,7 @@ export function runSearch(
     const sid = newId();
     const opts = searchOpts.value;
     const { needle, regex } = engineNeedle(q, opts);
-    const n = tab.info.value?.pageCount ?? 0;
+    const n = tab.edits.value ? sourceCount(tab.edits.value) : (tab.info.value?.pageCount ?? 0);
     const startPage = tab.page.value;
     const state: SearchState = {
       query: q, sid, hits: new Map(), pages: [], snippets: new Map(), total: 0, error: null,

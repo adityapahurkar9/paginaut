@@ -16,6 +16,7 @@ import { HelpDialogs } from "./HelpDialogs";
 import { Ribbon, Toolbar, ViewControls } from "./Toolbar";
 import { ReflowHost } from "./Reflow";
 import { LayoutPanel } from "./LayoutPanel";
+import { PageSizePanel } from "./PageSizePanel";
 import { FormBar } from "./FormBar";
 import { fieldHighlightClass, initForms } from "../forms";
 import { annotTool, attachAnnotLayer, markupFromSelection } from "../annots";
@@ -24,6 +25,9 @@ import { Home } from "./Home";
 import { SignPane } from "./SignPane";
 import { SigBar } from "./SigPanel";
 import { OcrBar, OcrDialog } from "./OcrUI";
+import { InsertDialog, MergeDialog, SplitDialog } from "./PagesUI";
+import { PageDragGhost } from "./Sidebar";
+import { PageGrid } from "./PageGrid";
 import { selectedAnnot } from "../annots";
 
 export const tool = signal<"select" | "hand">("select");
@@ -46,6 +50,7 @@ export function App() {
             {!tab && <Home />}
             {tab && findOpen.value && <FindBar tab={tab} />}
             {tab && <LayoutPanel tab={tab} />}
+            {tab && <PageSizePanel tab={tab} />}
             {tab && tab.mode.value === "pages" && selectedAnnot.value?.tab !== tab && (
               <div class="topbars">
                 <SigBar tab={tab} />
@@ -63,6 +68,10 @@ export function App() {
       <AskDialog />
       <HelpDialogs />
       <OcrDialog />
+      <InsertDialog />
+      <MergeDialog />
+      <SplitDialog />
+      <PageDragGhost />
       <Toast />
       {dropping.value && <div class="drop-veil" />}
     </div>
@@ -95,6 +104,7 @@ function TitleBar() {
           <button
             key={t.key}
             class={`tab ${t.key === activeKey.value ? "on" : ""}`}
+            data-tab={t.key}
             title={t.path}
             onMouseDown={(e) => {
               if (e.button === 1) {
@@ -215,8 +225,9 @@ function TabView({ tab, active }: { tab: Tab; active: boolean }) {
   const t = tool.value;
   useEffect(() => tab.viewer?.setTool(t), [t]);
 
-  // Read and Book modes replace the page viewer; it gives back its memory meanwhile.
-  const reflowing = tab.mode.value !== "pages";
+  // Read and Book modes and the page grid replace the page viewer; it gives back its memory meanwhile.
+  const grid = tab.grid.value && status === "ready";
+  const reflowing = tab.mode.value !== "pages" || grid;
   const wasReflowing = useRef(false);
   useEffect(() => {
     const v = tab.viewer;
@@ -232,7 +243,8 @@ function TabView({ tab, active }: { tab: Tab; active: boolean }) {
 
   return (
     <div class={`tabhost ${settings.value.night ? "night" : ""} ${reflowing ? "reflowing" : ""} ${fieldHighlightClass()} ${annotTool.value ? `tool-${annotTool.value.split(":")[0]}` : ""}`} style={{ display: active ? "block" : "none" }} ref={host}>
-      {reflowing && status === "ready" && active && <ReflowHost key={tab.info.value?.docId} tab={tab} />}
+      {grid && active && <PageGrid key={tab.info.value?.docId} tab={tab} />}
+      {!grid && reflowing && status === "ready" && active && <ReflowHost key={tab.info.value?.docId} tab={tab} />}
       {status === "loading" && <div class="state-msg">Opening {tab.name}…</div>}
       {status === "error" && (
         <div class="state-msg">

@@ -203,8 +203,123 @@ Later:
       words in 1.9 s, 91% mean confidence on page 2; Marathi search finds the words. Few misreads (a large bold
       heading dropped words); Best models may help
 - [ ] Recognise again with other settings (today: Remove recognized text, then Recognize text)
-## Phase 6: Tools suite
-## Phase 7: Conversions
+## Phase 6: Tools suite, in three parts, then Redact
+Installer versions follow the phases: part 6.1 = 0.6.10, 6.2 = 0.6.20, 6.3 = 0.6.30, 6.5 = 0.6.50; fixes in between
+count up from there (0.6.11, 0.6.12…).
+
+### Phase 6.1 (0.6.10): Pages (done)
+Foundation:
+- [x] Pages from other documents: incoming pages are copied into the open document as one MuPDF journal step (like OCR
+      and forms), so the page order can point at them, undo/redo come for free and saving drops what isn't used (a
+      full rewrite when pages were added and then removed again). PDF pages keep their comments and form fields
+      (fields whose names are taken get "_2"); links to pages that come along (a table of contents) point at their new
+      place, links to pages left behind are dropped, web links kept. Other
+      formats (pictures, EPUB, XPS…) are drawn into new PDF pages, JPEGs kept as they are. Search and Read mode see
+      the new pages at once. 300 pages of a 241 MB scan in 0.3 s (src-tauri/examples/insert_test.rs)
+- [x] Fix: saving after deleting or moving pages lost the form (fields became dead), page labels, attachments,
+      document scripts and viewer settings: MuPDF's page rearranging rebuilds the document catalog with only a few
+      entries. They're put back now; form fields are trimmed to the kept pages and page labels renumbered (deleting
+      page 5 of 1…10 gives 1…9, front matter in i, ii, iii stays apart). Saving rotations failed once undo was on
+
+Build documents from pages:
+- [x] Insert pages (Tools › Insert, command palette): from other files (several at once, a page range for one,
+      password-protected ones unlocked in the dialog), after/before the current page, at the start or end; pictures
+      fitted to this document's page size, A4, Letter or their own size. Blank page: same size as the current page,
+      straight after it. One undo step each
+- [x] Merge (Tools › Organize, command palette, Home page): files into one new PDF, starting with the open document;
+      reorder by dragging or arrows, a page range per file, password-protected files unlocked in the dialog; a bookmark
+      per file with that file's own bookmarks inside (only those whose pages were taken); clashing form field names
+      renamed; pictures fitted to A4, Letter or their own size. Saved beside the target first, then opened in a tab
+      (4 files, 20 pages: 23 ms)
+- [x] Drag thumbnails from one open document into another: holding over the other document's tab opens it, then drop
+      among its thumbnails (or on the tab itself: at the end). The pages come as they're shown there (rotations,
+      unsaved form answers and comments included); one undo step
+- [x] Right-click on thumbnails: rotate, delete, save as a new PDF, insert pages from a file, insert a blank page
+- [x] Extract (Tools › Organize, right-click, command palette): the selected pages as a new PDF, opened in a tab.
+      Unsaved changes and rotations are included; the document itself stays as it is
+- [x] Split into files: every N pages, by page ranges ("1-3, 4-10, 11-", one file each), by top-level bookmarks (files
+      named after them), by file size (pages grouped counting shared fonts and pictures once per file: a 241 MB scan
+      into 37 MB files, grouped in 3 ms, written in 0.9 s). Preview of the files, folder choice, asks before
+      replacing files
+- [x] Page grid (View tab, Tools › Organize, Ctrl+Shift+G): all pages as big thumbnails in place of the pages. Size by
+      slider or Ctrl+wheel (remembered); select (click, Ctrl, Shift, Ctrl+A), drag to reorder or onto another
+      document's tab, rotate, delete, save as a new PDF, insert, right-click menu; double-click opens a page, Esc or
+      Done goes back
+
+Page size (crop and resize in one tool; Tools › Organize, right-click on pages, command palette):
+- [x] Crop box on the page (whole page in view): drag edges, corners or the box; size shown on it; shape lock: any,
+      the page's own, paper (A3, A4, A5, A6, B5, Letter, Legal, Tabloid), photo (passport 35×45 mm, 4×6 in, 5×7 in),
+      screen (1:1, 4:5, 2:3, 3:4, 9:16) with portrait/landscape; width × height typed in mm / in / pt; Whole page;
+      Fit to content (trims empty margins). The lock follows the page as shown, even on turned pages
+- [x] Crop mode: "Hide edges" (the page's crop box; can be shown again) or "Remove outside" (text, pictures and
+      drawings outside deleted through MuPDF's redaction, comments outside dropped)
+- [x] ☐ Change the page size: paper and photo sizes or custom; content Fit (all of it shows), Fill (covers the page,
+      overflow cut off) or Actual size, placed with a 3×3 anchor. The page's content becomes one form object drawn
+      with a matrix (stays vector and searchable); its own rotation is made part of it; comments, links and form
+      fields move and scale with it (tested: a form turned landscape still fills in)
+- [x] Fill for the new space: nothing (see-through), a colour (with a picker from the screen), or the edges stretched
+      out (the outermost pixel rows and columns of the content, for scans). Only the new margins are filled
+- [x] Apply to: this page, selected, all, odd, even, a range (same margins on each). One undo step; page sizes come
+      back on undo/redo (src-tauri/examples/pagesize_test.rs)
+- [ ] Optional, later: content-aware fill of the new margins (inpainting from the page's own picture)
+
+Strike-through in both places (highlight stays in the Comment tab only):
+- [x] Fill & Sign strike line (Sign tab, Sign pane, Stamp menu): drag a black line across anything, scans too ("strike
+      out whichever is not applicable"); it snaps level or upright when the drag nearly is; stays on for more lines
+- [x] Comment tab Strike and Underline on scans: where there's no text, a line along the drag
+
+- [x] Placeholder: Tools › Organize › "Edit PDF" shown as coming in 6.3
+
+### Phase 6.2 (0.6.20): Stamp, protect, extract
+Stamped on pages (marked streams like /PaginautOCR, so they can be removed or redone):
+- [ ] Page numbers, headers and footers: position, font, "Page {n} of {N}", date, file name, page range, skip first page
+- [ ] Bates numbering
+- [ ] Watermark: text or picture, opacity, angle, behind or in front, which pages; in its own layer (Adobe shows it
+      as a watermark)
+
+Document details:
+- [ ] Bookmarks editor: add, rename, drag to reorder, build from headings
+- [ ] Properties (title, author, subject, keywords) and page labels
+
+Security:
+- [ ] Protect: password to open (AES-256) and a permissions password (printing, copying, editing)
+- [ ] Unlock: remove the password when you know it
+- [ ] Warning before any of these on digitally signed documents
+
+Size and repair:
+- [ ] Compress: presets (Screen / eBook / Print) that shrink and recompress pictures and clean up the file; size before
+      and after; saves as a new file by default
+- [ ] Repair: rewrite a damaged file and report what was fixed
+
+Extract content (right-click the item on the page; the same menu in Read/Book mode):
+- [ ] Pictures: copy, or save in their original quality: the image as stored in the PDF (JPEGs saved as they are,
+      no recompression, full resolution, not a screenshot), PNG, or a one-page PDF. "Save all pictures" for the
+      document or selected pages, with a minimum size so icons and specks are skipped
+- [ ] Tables: copy as a real table (pastes into Excel and Word with cells), save as CSV or Excel (.xlsx), save as PDF
+      (vector, cut from the page) or picture. Cells from ruling lines and text positions (Read-mode table hunt);
+      borderless tables: draw a box round the table and adjust the column lines
+- [ ] Charts and drawings: save as PDF or SVG (vector), or PNG at a chosen resolution
+- [ ] Any area: drag a box, then save as PDF (vector), picture at a chosen resolution, or copy its text
+- [ ] Attachments: files stored in the PDF (attached to the document or pinned to a page) listed in an Attachments
+      side panel: open, save, save all
+
+### Phase 6.3 (0.6.30): Edit PDF
+- [ ] Edit existing text: click a line, change it; same font where the PDF carries the letters needed, a close
+      match where it doesn't; lines reflow within their paragraph
+- [ ] Pictures on the page: add, replace, move, resize, delete
+- [ ] Attachments: add and remove (listing and saving them come in 6.2)
+
+### Phase 6.5 (0.6.50): Redact
+- [ ] Mark text or areas by hand, or by search
+- [ ] Two modes: Remove (default; text, image pixels and drawings under the box deleted through MuPDF's redaction,
+      then checked to confirm the text is gone) or Cover only (a box that can't be moved, text still underneath;
+      labelled clearly as not secure)
+- [ ] Box colour, optional "REDACTED" text on the box
+- [ ] Pattern search, kept small: PAN, Aadhaar, phone, email, IFSC, GSTIN, plus the existing regex search
+- [ ] Sanitize: remove metadata, hidden text, JavaScript, attached files, comments
+- [ ] Warning on digitally signed documents
+
+## Phase 7 (0.7.0): Conversions
 - [ ] Office quality test first: convert a mixed set of real Office files with MuPDF and with Microsoft Office,
       then compare visually (page similarity score), by text (missing or reordered words) and by layout
       (page count, table breaks, images). Results go into a side-by-side report and stay as a regression test.
@@ -217,7 +332,15 @@ Later:
 - [ ] LibreOffice pack: official TDF installer, verified against its published checksum, unpacked into
       Paginaut's own folder (no system install, no admin rights)
 
-## Phase 8: Packaging, updates and signing
+## Phase 7.5 (0.7.50): Compare
+- [ ] Two PDFs side by side, scrolling together: word-by-word text diff with a list of changes, plus a picture overlay
+      for changes in drawings and scans
+- [ ] Word vs PDF: the .docx text read directly, compared with the PDF's text ("is this PDF the final version of this
+      Word file?"). Text only, since no two programs draw a Word file quite the same way
+- [ ] Excel vs PDF: cell by cell against the tables found in the PDF (Read-mode table detection); only as good as the
+      printout (hidden columns, number formats and page breaks change what's in the PDF)
+
+## Phase 8 (0.8.0): Packaging, updates and signing
 - [ ] GitHub repository (the user has an account) hosting source, releases and update files
 - [ ] "Check for updates" button that checks the repo's releases, plus optional automatic checks
       (Tauri updater: signed updates, verified before installing)

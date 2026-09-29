@@ -15,6 +15,8 @@ import { endLayoutEdit } from "./ui/LayoutPanel";
 import { helpPanel } from "./ui/HelpDialogs";
 import { creating, droppedPicture } from "./sign";
 import { fileMenuOpen } from "./ui/Toolbar";
+import { toggleGrid } from "./ui/PageGrid";
+import { endPageSize, pageSizeEdit } from "./pagesize";
 
 render(<App />, document.getElementById("app")!);
 
@@ -106,7 +108,10 @@ window.addEventListener("keydown", (e) => {
       case "tab": handled(); return A.nextTab();
       case "h": if (ready) { handled(); A.toggleMode("read"); } return;
       case "c": if (!typing && activeTab.value?.hasSelection.value) { handled(); return A.copySelection(); } return;
-      case "a": if (!typing && activeTab.value?.viewer) { handled(); return activeTab.value.viewer.selectAllOnPage(); } return;
+      case "a":
+        if (!typing && ready?.grid.value) { handled(); ready.pageSel.value = new Set(ready.edits.value?.order.map((_, i) => i)); return; }
+        if (!typing && activeTab.value?.viewer) { handled(); return activeTab.value.viewer.selectAllOnPage(); }
+        return;
     }
   }
   if (ctrl && e.shiftKey) {
@@ -115,6 +120,7 @@ window.addEventListener("keydown", (e) => {
     if (k === "z" && !typing && ready) { handled(); return P.redo(ready); }
     if (k === "n") { handled(); return A.toggleNight(); }
     if (k === "d") { handled(); return A.toggleTheme(); }
+    if (k === "g" && ready) { handled(); return toggleGrid(ready); }
   }
   if (e.altKey && !ctrl && k === "f") { handled(); fileMenuOpen.value = true; return; }
   if (e.key === "F1") { handled(); helpPanel.value = "shortcuts"; return; }
@@ -126,6 +132,8 @@ window.addEventListener("keydown", (e) => {
     if (findOpen.value) return A.closeFind();
     if (bookScreen.value) return exitBook();
     if (layoutEdit.value) return endLayoutEdit();
+    if (pageSizeEdit.value) return endPageSize();
+    if (ready?.grid.value) return toggleGrid(ready, false);
     if (annotTool.value || selectedAnnot.value) {
       annotTool.value = null;
       selectedAnnot.value = null;

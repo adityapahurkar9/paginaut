@@ -12,6 +12,7 @@ import { BookView } from "../reflow/BookView";
 import { ReadView, type ReflowView } from "../reflow/ReadView";
 import { createPictures, type Pictures } from "../reflow/render";
 import { isDark, settings, updateSettings, type ReflowSettings, type Tab } from "../store";
+import { sourceCount } from "../edits";
 import { ocrState, recognize } from "../ocr";
 
 // ---------------------------------------------------------------- loading
@@ -38,14 +39,16 @@ export function analysisOf(tab: Tab): Loaded {
   prev?.cancel();
   const progress = signal(0);
   const sid = newId();
-  const pages: (RawPage | undefined)[] = new Array(info.pageCount);
+  // Pages inserted since opening are part of the document too.
+  const count = tab.edits.value ? sourceCount(tab.edits.value) : info.pageCount;
+  const pages: (RawPage | undefined)[] = new Array(count);
   let received = 0;
   const analysis = new Promise<Analysis>((resolve, reject) => {
     api
       .reflow(info.docId, tab.edits.value?.order[tab.page.value] ?? 0, sid, (ev) => {
         if (ev.kind === "page") {
           pages[ev.page] = JSON.parse(ev.data) as RawPage;
-          progress.value = ++received / info.pageCount;
+          progress.value = ++received / count;
         } else if (ev.error) reject(new Error(ev.error));
         else if (!ev.complete) reject(new Error("cancelled"));
         else resolve(new Analysis(pages));
@@ -60,7 +63,7 @@ export function analysisOf(tab: Tab): Loaded {
 
 /** The reflowed text for the tab's current page order and your corrections. */
 function flowOf(tab: Tab, a: Analysis): Flow {
-  const n = tab.info.value!.pageCount;
+  const n = tab.edits.value ? sourceCount(tab.edits.value) : tab.info.value!.pageCount;
   const order = tab.edits.value?.order ?? Array.from({ length: n }, (_, i) => i);
   const t0 = performance.now();
   const f = a.flow(order, overridesOf(tab).value);

@@ -2,7 +2,7 @@
 // tab's Edits snapshot; the viewer and thumbnails redraw from it instantly
 // and nothing touches the file until the user saves.
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { api, type DocInfo } from "./api";
+import { api, type DocInfo, type Inserted, type InsertSource } from "./api";
 import * as E from "./edits";
 import { formsChanged, initForms } from "./forms";
 import { baseName, rememberFile, setSaveHook, settings, showToast, type Tab } from "./store";
@@ -35,7 +35,8 @@ let autoSaveTimer = 0;
 function maybeAutoSave(tab: Tab) {
   clearTimeout(autoSaveTimer);
   const e = tab.edits.value;
-  if (!settings.value.autoSaveRotations || !e || !tab.info.value?.isPdf || !E.onlyRotations(e) || E.isIdentity(e)) return;
+  // Only rotations: other unsaved changes (inserted pages, forms) wait for Save.
+  if (!settings.value.autoSaveRotations || !e || !tab.info.value?.isPdf || tab.docChanged.value || !E.onlyRotations(e) || E.isIdentity(e)) return;
   autoSaveTimer = window.setTimeout(() => void save(tab), 1200);
 }
 
@@ -87,12 +88,105 @@ async function docStep(tab: Tab, redo: boolean) {
   }
 }
 
+/**
+ * What gets inserted: pages of files, blank pages of a size in points, or pages
+ * of another open document (with the rotations they're shown with there).
+ */
+export type InsertWhat =
+  | { sources: InsertSource[]; fit?: [number, number] | null }
+  | { blank: [number, number]; count?: number }
+  | { fromDoc: number; pages: number[]; rot?: number[] };
+
+/**
+ * Inserts pages at a gap in the displayed order (0 = before the first page) as
+ * one undo step. Errors are thrown (a file may need a password: "PASSWORD:<path>").
+ */
+export async function insertPages(tab: Tab, at: number, what: InsertWhat): Promise<Inserted> {
+  const info = tab.info.value;
+  if (!info || !tab.edits.value) throw new Error("no document");
+  if (!info.isPdf) throw new Error("Pages can only be added to a PDF. Save this file as a PDF first (Save as).");
+  const r =
+    "blank" in what
+      ? await api.insertBlank(info.docId, what.blank[0], what.blank[1], what.count ?? 1)
+      : "fromDoc" in what
+        ? await api.insertFromOpen(info.docId, what.fromDoc, what.pages)
+        : await api.insertPages(info.docId, what.sources, what.fit ?? null);
+  const e = tab.edits.value;
+  if (!e || tab.info.value !== info) return r;
+  const added = Array.from({ length: r.count }, (_, k) => r.first + k);
+  const rot = e.rot.slice();
+  while (rot.length < r.first + r.count) rot.push(0);
+  if ("fromDoc" in what && what.rot) what.rot.forEach((d, k) => k < r.count && (rot[r.first + k] = d));
+  const pos = Math.max(0, Math.min(at, e.order.length));
+  const next = { order: [...e.order.slice(0, pos), ...added, ...e.order.slice(pos)], rot };
+  if (tab.sizes.value) {
+    const sizes = tab.sizes.value.slice();
+    r.sizes.forEach((s, k) => (sizes[r.first + k] = s));
+    tab.sizes.value = sizes;
+  } else {
+    tab.sizes.value = await api.pageSizes(info.docId);
+  }
+  tab.history.push({ doc: e });
+  tab.historyVersion.value++;
+  setEdits(tab, next, pos);
+  tab.pageSel.value = new Set(added.map((_, k) => pos + k));
+  pagesChanged(tab);
+  return r;
+}
+
+/** Crops and/or resizes pages (document indices) as one undo step. */
+export async function resizePages(
+  tab: Tab,
+  ops: { page: number; crop: [number, number, number, number]; size?: [number, number] }[],
+  opts: { fit: number; anchor: [number, number]; remove: boolean; fill: number; color: [number, number, number] },
+) {
+  const info = tab.info.value;
+  if (!info || !tab.edits.value) return;
+  const sizes = await api.pageSize(info.docId, ops, opts);
+  const e = tab.edits.value;
+  applySizes(tab, ops.map((o) => o.page), sizes);
+  tab.history.push({ doc: e, resized: ops.map((o) => o.page) });
+  tab.historyVersion.value++;
+  setEdits(tab, e);
+  pagesChanged(tab);
+}
+
+function applySizes(tab: Tab, pages: number[], sizes: [number, number][]) {
+  const next = (tab.sizes.value ?? []).slice();
+  pages.forEach((p, k) => (next[p] = sizes[k]));
+  tab.sizes.value = next;
+}
+
+/** After undo/redo of a size change: the pages' sizes as they are now. */
+async function refreshSizes(tab: Tab, pages: number[] | undefined) {
+  const info = tab.info.value;
+  if (!pages?.length || !info) return;
+  applySizes(tab, pages, await api.pageSizesOf(info.docId, pages));
+  if (tab.edits.value) setEdits(tab, tab.edits.value);
+}
+
+/** The document's own pages changed (inserted, or that undone): text, fields and drawings are stale. */
+function pagesChanged(tab: Tab) {
+  tab.textRev.value++;
+  formsChanged(tab, true);
+  void initForms(tab);
+}
+
 export function undo(tab: Tab) {
   const e = tab.edits.value;
   const prev = e && tab.history.undo(e);
   if (!prev) return;
   tab.historyVersion.value++;
   if (prev === E.DOC_STEP) return void docStep(tab, false);
+  if (E.withDoc(prev)) {
+    // Drop the pages from view first, then from the document.
+    setEdits(tab, prev.doc);
+    tab.pageSel.value = new Set();
+    return void docStep(tab, false).then(() => {
+      void refreshSizes(tab, prev.resized);
+      void initForms(tab);
+    });
+  }
   setEdits(tab, prev);
   tab.pageSel.value = new Set();
   maybeAutoSave(tab);
@@ -104,6 +198,15 @@ export function redo(tab: Tab) {
   if (!next) return;
   tab.historyVersion.value++;
   if (next === E.DOC_STEP) return void docStep(tab, true);
+  if (E.withDoc(next)) {
+    // Put the pages back in the document first, then in view.
+    return void docStep(tab, true).then(async () => {
+      await refreshSizes(tab, next.resized);
+      setEdits(tab, next.doc);
+      tab.pageSel.value = new Set();
+      void initForms(tab);
+    });
+  }
   setEdits(tab, next);
   tab.pageSel.value = new Set();
   maybeAutoSave(tab);

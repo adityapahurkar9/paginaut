@@ -17,6 +17,27 @@ export interface DocInfo {
   firstSize: [number, number];
 }
 
+/** A file to take pages from: all of them, or `pages` (0-based). */
+export interface InsertSource {
+  path: string;
+  pages?: number[];
+  password?: string;
+}
+
+/** A file's page count and kind; `locked`: it needs a password (none or a wrong one given). */
+export interface Peek {
+  pages: number;
+  isPdf: boolean;
+  locked: boolean;
+}
+
+/** Pages added at the end of a document: source indices first..first + count - 1. */
+export interface Inserted {
+  first: number;
+  count: number;
+  sizes: [number, number][];
+}
+
 export interface OutlineItem {
   t: string;
   p: number;
@@ -137,6 +158,28 @@ export const api = {
   save: (doc: number, order: number[], rot: number[], target: string | null) =>
     invoke<DocInfo>("save_document", { doc, order, rot, target }),
   pageSizes: (doc: number) => invoke<[number, number][]>("page_sizes", { doc }),
+  /** Adds pages of other files at the end of the document (one undo step); the page order puts them in place. */
+  insertPages: (doc: number, sources: InsertSource[], fit: [number, number] | null) => invoke<Inserted>("insert_pages", { doc, sources, fit }),
+  insertBlank: (doc: number, w: number, h: number, count: number) => invoke<Inserted>("insert_blank", { doc, w, h, count }),
+  /** Combines files into a new PDF at `target`; returns its page count. */
+  mergeFiles: (sources: InsertSource[], fit: [number, number] | null, bookmarks: boolean, target: string) =>
+    invoke<number>("merge_files", { sources, fit, bookmarks, target }),
+  /** Copies pages of another open document to the end of this one (one undo step). */
+  insertFromOpen: (doc: number, from: number, pages: number[]) => invoke<Inserted>("insert_from_open", { doc, from, pages }),
+  /** Writes pages (document indices) to new PDFs; `rot` per document page. Returns each file's size. */
+  saveParts: (doc: number, parts: { pages: number[]; path: string }[], rot: number[]) => invoke<number[]>("save_parts", { doc, parts, rot }),
+  /** Groups pages (document indices, in order) into parts of about maxBytes. */
+  splitBySize: (doc: number, order: number[], maxBytes: number) => invoke<number[][]>("split_by_size", { doc, order, maxBytes }),
+  /** Crops and/or resizes pages (one undo step); returns their new sizes. */
+  pageSize: (
+    doc: number,
+    ops: { page: number; crop: [number, number, number, number]; size?: [number, number] }[],
+    opts: { fit: number; anchor: [number, number]; remove: boolean; fill: number; color: [number, number, number] },
+  ) => invoke<[number, number][]>("page_size", { doc, ops, opts }),
+  contentBox: (doc: number, page: number) => invoke<[number, number, number, number] | null>("content_box", { doc, page }),
+  pageSizesOf: (doc: number, pages: number[]) => invoke<[number, number][]>("page_sizes_of", { doc, pages }),
+  existingFiles: (paths: string[]) => invoke<string[]>("existing_files", { paths }),
+  peekFile: (path: string, password?: string) => invoke<Peek>("peek_file", { path, password: password ?? null }),
   pageLabel: (doc: number, page: number) => invoke<string>("page_label", { doc, page }),
   pageLabels: (doc: number) => invoke<string[] | null>("page_labels", { doc }),
   outline: (doc: number) => invoke<OutlineItem[]>("outline", { doc }),

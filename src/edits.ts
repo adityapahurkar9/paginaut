@@ -54,15 +54,33 @@ export function move(e: Edits, views: number[], to: number): Edits {
   return { order: [...before, ...moving, ...after], rot: e.rot };
 }
 
-/** Undo/redo history of snapshots. */
 /** A history entry for an edit the engine undoes itself (form fields, annotations). */
 export const DOC_STEP = "doc" as const;
-type Entry = Edits | typeof DOC_STEP;
+/**
+ * An engine step that also changed the page list (pages inserted): undoing it
+ * undoes the engine step and goes back to these page edits.
+ */
+export interface DocWithEdits {
+  doc: Edits;
+  /** Pages whose size the step changed (their sizes are fetched again after undo/redo). */
+  resized?: number[];
+}
+type Entry = Edits | typeof DOC_STEP | DocWithEdits;
+
+export const withDoc = (e: Entry): e is DocWithEdits => typeof e === "object" && "doc" in e;
+
+/** Pages in the document itself (including pages inserted but not saved yet). */
+export const sourceCount = (e: Edits) => e.rot.length;
+
+/** Undo/redo history of snapshots. */
 
 /**
  * One undo history for everything: page edits are snapshots kept here,
  * form and annotation edits are steps in the engine's journal (DOC_STEP).
  */
+/** What takes an entry's place on the other stack once it's been applied. */
+const counterpart = (e: Entry, cur: Edits): Entry => (e === DOC_STEP ? DOC_STEP : withDoc(e) ? { doc: cur, resized: e.resized } : cur);
+
 export class History {
   private undoStack: Entry[] = [];
   private redoStack: Entry[] = [];
@@ -73,17 +91,17 @@ export class History {
     if (this.undoStack.length > this.limit) this.undoStack.shift();
     this.redoStack = [];
   }
-  /** The entry to go back to: page edits, or DOC_STEP (ask the engine to undo). */
+  /** The entry to go back to: page edits, DOC_STEP (ask the engine to undo), or both. */
   undo(cur: Edits): Entry | null {
     const prev = this.undoStack.pop();
     if (!prev) return null;
-    this.redoStack.push(prev === DOC_STEP ? DOC_STEP : cur);
+    this.redoStack.push(counterpart(prev, cur));
     return prev;
   }
   redo(cur: Edits): Entry | null {
     const next = this.redoStack.pop();
     if (!next) return null;
-    this.undoStack.push(next === DOC_STEP ? DOC_STEP : cur);
+    this.undoStack.push(counterpart(next, cur));
     return next;
   }
   clear() {

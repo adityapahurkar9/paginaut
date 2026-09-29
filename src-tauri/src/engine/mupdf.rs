@@ -169,6 +169,21 @@ impl Drop for Cookie {
 
 // ---------------------------------------------------------------- Document
 
+/// How pages are resized (see fo_pdf_page_size).
+#[derive(serde::Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub struct PageSizeOptions {
+    /// 0 fit, 1 fill, 2 actual size.
+    pub fit: u8,
+    /// Where the content sits on a new page size: 0, 0.5 or 1 across and down.
+    pub anchor: [f32; 2],
+    /// Delete what's outside the crop box (otherwise it's only hidden).
+    pub remove: bool,
+    /// New space: 0 nothing, 1 colour, 2 edges stretched out.
+    pub fill: u8,
+    pub color: [f32; 3],
+}
+
 pub struct Document(*mut fo_doc, Kind);
 unsafe impl Send for Document {}
 
@@ -180,6 +195,18 @@ impl Document {
     /// Opens with this thread's private context (see module docs).
     pub fn open_private(path: &str) -> Result<Self> {
         Self::open_kind(path, Kind::Private)
+    }
+
+    /// A new, empty PDF in memory (shared context).
+    pub fn new_pdf() -> Result<Self> {
+        with_ctx(|c| {
+            let d = unsafe { fo_pdf_new(c) };
+            if d.is_null() {
+                Err(last_error(c))
+            } else {
+                Ok(Document(d, Kind::Shared))
+            }
+        })
     }
 
     fn open_kind(path: &str, kind: Kind) -> Result<Self> {
@@ -260,12 +287,13 @@ impl Document {
         })
     }
 
-    /// Applies rotations (per original page) and a new page order to a PDF in memory.
-    pub fn apply_page_edits(&self, rot: &[i32], order: &[usize]) -> Result<()> {
+    /// Applies rotations (per original page) and a new page order to a PDF in
+    /// memory. Pages from `file_pages` on were added since the file was opened.
+    pub fn apply_page_edits(&self, rot: &[i32], order: &[usize], file_pages: usize) -> Result<()> {
         let order: Vec<c_int> = order.iter().map(|&x| x as c_int).collect();
         with_kind(self.1, |c| {
             let rc = unsafe {
-                fo_pdf_apply_page_edits(c, self.0, rot.as_ptr(), rot.len() as c_int, order.as_ptr(), order.len() as c_int)
+                fo_pdf_apply_page_edits(c, self.0, rot.as_ptr(), rot.len() as c_int, order.as_ptr(), order.len() as c_int, file_pages as c_int)
             };
             if rc == 0 { Ok(()) } else { Err(last_error(c)) }
         })
@@ -302,11 +330,13 @@ impl Document {
         })
     }
 
-    /// Undoes (or redoes) one edit. Ok(false) when there was nothing to undo.
-    pub fn undo(&self, redo: bool) -> Result<bool> {
+    /// Undoes (or redoes) one edit: None when there was nothing to undo, else
+    /// whether that step added, removed or resized pages.
+    pub fn undo(&self, redo: bool) -> Result<Option<bool>> {
         with_kind(self.1, |c| match unsafe { fo_pdf_undo(c, self.0, redo as c_int) } {
             n if n < 0 => Err(last_error(c)),
-            n => Ok(n == 1),
+            0 => Ok(None),
+            n => Ok(Some(n == 2)),
         })
     }
 
@@ -337,6 +367,59 @@ impl Document {
 
     pub fn end_op(&self) {
         with_kind(self.1, |c| unsafe { fo_pdf_end_op(c, self.0) })
+    }
+
+    /// Undoes everything since begin_op, leaving no undo step.
+    pub fn abandon_op(&self) {
+        with_kind(self.1, |c| unsafe { fo_pdf_abandon_op(c, self.0) })
+    }
+
+    /// Appends pages of `src` (any format; changed in memory, so open it just
+    /// for this) to the end of this PDF, inside the current operation. `fit`
+    /// scales pages of other formats (pictures…) onto pages of that size.
+    pub fn insert_pages(&self, src: &Document, pages: &[usize], fit: Option<[f32; 2]>) -> Result<usize> {
+        if self.1 != src.1 {
+            return Err("documents from different contexts".into());
+        }
+        let pages: Vec<c_int> = pages.iter().map(|&p| p as c_int).collect();
+        let fit = fit.unwrap_or([0.0, 0.0]);
+        with_kind(self.1, |c| {
+            let n = unsafe { fo_pdf_insert_pages(c, self.0, src.0, pages.as_ptr(), pages.len() as c_int, fit.as_ptr()) };
+            if n < 0 { Err(last_error(c)) } else { Ok(n as usize) }
+        })
+    }
+
+    /// Where parts of about `max_bytes` start, for pages in `order` (indices into it).
+    pub fn split_by_size(&self, order: &[usize], max_bytes: f64) -> Result<Vec<usize>> {
+        let order: Vec<c_int> = order.iter().map(|&p| p as c_int).collect();
+        let mut starts = vec![0 as c_int; order.len().max(1)];
+        with_kind(self.1, |c| {
+            let n = unsafe { fo_pdf_split_by_size(c, self.0, order.as_ptr(), order.len() as c_int, max_bytes, starts.as_mut_ptr()) };
+            if n < 0 {
+                Err(last_error(c))
+            } else {
+                Ok(starts[..n as usize].iter().map(|&s| s as usize).collect())
+            }
+        })
+    }
+
+    /// Adds a bookmark `title` pointing at page `base`, with `src`'s own bookmarks
+    /// under it for the copied pages (`pages[k]` of src is now page base + k).
+    pub fn outline_group(&self, src: &Document, title: &str, base: usize, pages: &[usize]) -> Result<()> {
+        let title = CString::new(title.replace('\0', "")).map_err(|e| e.to_string())?;
+        let pages: Vec<c_int> = pages.iter().map(|&p| p as c_int).collect();
+        with_kind(self.1, |c| {
+            let rc = unsafe { fo_pdf_outline_group(c, self.0, src.0, title.as_ptr(), base as c_int, pages.as_ptr(), pages.len() as c_int) };
+            if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
+    /// Appends `count` empty pages of w×h points, inside the current operation.
+    pub fn insert_blank(&self, w: f32, h: f32, count: usize) -> Result<usize> {
+        with_kind(self.1, |c| {
+            let n = unsafe { fo_pdf_insert_blank(c, self.0, w, h, count as c_int) };
+            if n < 0 { Err(last_error(c)) } else { Ok(n as usize) }
+        })
     }
 
     pub fn doc_annots_json(&self) -> Result<String> {
@@ -619,6 +702,27 @@ impl Page {
             } else {
                 Err(last_error(c))
             }
+        })
+    }
+
+    /// The box around everything drawn (relative to the page's top-left), None if blank.
+    pub fn content_box(&self) -> Result<Option<[f32; 4]>> {
+        let mut out = [0f32; 4];
+        with_kind(self.1, |c| match unsafe { fo_page_content_box(c, self.0, out.as_mut_ptr()) } {
+            n if n < 0 => Err(last_error(c)),
+            0 => Ok(None),
+            _ => Ok(Some(out)),
+        })
+    }
+
+    /// Crops and/or resizes the page (see fo_pdf_page_size), inside the current operation.
+    pub fn page_size(&self, crop: [f32; 4], size: Option<[f32; 2]>, o: &PageSizeOptions) -> Result<()> {
+        let size = size.unwrap_or([0.0, 0.0]);
+        with_kind(self.1, |c| {
+            let rc = unsafe {
+                fo_pdf_page_size(c, self.0, crop.as_ptr(), size.as_ptr(), o.fit as c_int, o.anchor[0], o.anchor[1], o.remove as c_int, o.fill as c_int, o.color.as_ptr())
+            };
+            if rc == 0 { Ok(()) } else { Err(last_error(c)) }
         })
     }
 

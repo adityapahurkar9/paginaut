@@ -83,6 +83,8 @@ pub struct Doc {
     /// Page content was changed in memory (recognised text): background jobs must
     /// read this document, not private copies of the file on disk. Cleared on saving.
     content_edited: AtomicBool,
+    /// Pages in the file on disk; pages from index on were added in memory.
+    file_pages: AtomicUsize,
 }
 
 /// Where a background job reads pages from: a private copy of the file (fast,
@@ -170,6 +172,56 @@ pub struct DocInfo {
     pub file_size: u64,
     /// Width/height of page 0 in points, after its own rotation.
     pub first_size: [f32; 2],
+}
+
+/// A file to take pages from (all of them unless `pages` lists some, 0-based).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsertSource {
+    pub path: String,
+    #[serde(default)]
+    pub pages: Option<Vec<usize>>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+/// A quick look at a file before taking pages from it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Peek {
+    pub pages: usize,
+    pub is_pdf: bool,
+    /// It needs a password (none given, or the one given is wrong).
+    pub locked: bool,
+}
+
+/// One page to crop or resize: the part to keep (relative to its top-left) and,
+/// if it changes size, the new size (as the page is shown without extra rotation).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageSizeOp {
+    pub page: usize,
+    pub crop: [f32; 4],
+    #[serde(default)]
+    pub size: Option<[f32; 2]>,
+}
+
+/// One file to write: these pages (document indices, in order) at `path`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Part {
+    pub pages: Vec<usize>,
+    pub path: String,
+}
+
+/// Pages added at the end of a document: indices first..first + count.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Inserted {
+    pub first: usize,
+    pub count: usize,
+    /// Width and height of each new page, in points.
+    pub sizes: Vec<[f32; 2]>,
 }
 
 #[derive(Serialize)]
@@ -380,12 +432,104 @@ impl Doc {
     }
 
     pub fn undo(&self, redo: bool) -> Result<FormChange, String> {
-        let inner = self.inner.lock();
-        let done = inner.doc.undo(redo)?;
-        if done {
+        let mut inner = self.inner.lock();
+        let step = inner.doc.undo(redo)?;
+        if let Some(layout) = step {
+            if layout {
+                // Pages were added, removed or resized: what's known about them is stale.
+                self.resync_pages(&mut inner)?;
+                inner.pages.clear();
+                self.bounds.write().iter_mut().for_each(|b| *b = None);
+            }
             self.edited();
         }
-        Ok(FormChange { accepted: done, changed: inner.doc.has_changes() })
+        Ok(FormChange { accepted: step.is_some(), changed: inner.doc.has_changes() })
+    }
+
+    /// Picks up a changed page count (pages inserted, or that undone).
+    fn resync_pages(&self, inner: &mut DocInner) -> Result<(), String> {
+        let n = inner.doc.page_count()?;
+        if n != self.page_count() {
+            inner.pages.clear();
+            self.bounds.write().resize(n, None);
+            self.page_count.store(n, Ordering::Release);
+        }
+        Ok(())
+    }
+
+    // ------------------------------------------------------------ page size
+
+    /// The box around everything drawn on a page (relative to its top-left), None if blank.
+    pub fn content_box(&self, index: usize) -> Result<Option<[f32; 4]>, String> {
+        self.check(index)?;
+        let mut inner = self.inner.lock();
+        let page = self.page(&mut inner, index)?;
+        page.content_box()
+    }
+
+    /// Crops and/or resizes pages as one undo step. Returns their new sizes.
+    pub fn page_size(&self, ops: &[PageSizeOp], opts: &mupdf::PageSizeOptions) -> Result<Vec<[f32; 2]>, String> {
+        let mut inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Err("Only PDF pages can be cropped or resized. Save this file as a PDF first (Save as).".into());
+        }
+        for op in ops {
+            self.check(op.page)?;
+        }
+        inner.doc.begin_op("Page size");
+        let res = (|| -> Result<(), String> {
+            for op in ops {
+                let page = self.page(&mut inner, op.page)?;
+                page.page_size(op.crop, op.size, opts)?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = res {
+            inner.doc.abandon_op();
+            inner.pages.clear();
+            return Err(e);
+        }
+        inner.doc.end_op();
+        // Pages know their size from when they were loaded.
+        inner.pages.clear();
+        drop(inner);
+        {
+            let mut b = self.bounds.write();
+            for op in ops {
+                if let Some(slot) = b.get_mut(op.page) {
+                    *slot = None;
+                }
+            }
+        }
+        self.content_edited.store(true, Ordering::Release);
+        self.edited();
+        ops.iter().map(|op| self.bounds(op.page).map(|b| [b[2] - b[0], b[3] - b[1]])).collect()
+    }
+
+    // ------------------------------------------------------------ inserting pages
+
+    /// Adds pages at the end of the document as one undo step: pages of other
+    /// files, or blank pages. The app puts them in place through the page order.
+    fn insert(&self, name: &str, add: impl FnOnce(&Document) -> Result<(), String>) -> Result<Inserted, String> {
+        let mut inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Err("Pages can only be added to a PDF. Save this file as a PDF first (Save as).".into());
+        }
+        let first = self.page_count();
+        inner.doc.begin_op(name);
+        if let Err(e) = add(&inner.doc) {
+            inner.doc.abandon_op();
+            return Err(e);
+        }
+        inner.doc.end_op();
+        self.resync_pages(&mut inner)?;
+        drop(inner);
+        // Background jobs (search, Read mode) must read these pages from memory.
+        self.content_edited.store(true, Ordering::Release);
+        self.edited();
+        let count = self.page_count().saturating_sub(first);
+        let sizes = (first..first + count).map(|i| self.bounds(i).map(|b| [b[2] - b[0], b[3] - b[1]])).collect::<Result<_, _>>()?;
+        Ok(Inserted { first, count, sizes })
     }
 
     pub fn reset_form(&self) -> Result<FormChange, String> {
@@ -535,6 +679,7 @@ impl Doc {
         }
         let n = inner.doc.page_count()?;
         self.page_count.store(n, Ordering::Relaxed);
+        self.file_pages.store(n, Ordering::Relaxed);
         *self.bounds.write() = vec![None; n];
         let file = std::fs::metadata(self.path()).map(|m| m.len()).unwrap_or(0);
         let per_page = (file / n.max(1) as u64).max(1);
@@ -618,6 +763,7 @@ impl Engine {
             bg_gen: AtomicU64::new(0),
             edit_rev: AtomicU64::new(0),
             content_edited: AtomicBool::new(false),
+            file_pages: AtomicUsize::new(0),
         });
         let locked = d.inner.lock().doc.needs_password();
         if !locked {
@@ -685,8 +831,11 @@ impl Engine {
             d.texts.lock().clear();
             let res = (|| -> Result<(), String> {
                 if inner.doc.is_pdf() {
-                    inner.doc.apply_page_edits(&rot, &order)?;
-                    if in_place && inner.doc.can_save_incrementally() {
+                    // Pages added in memory and then removed again would still be
+                    // appended to the file; a full rewrite leaves them out.
+                    let unused = (d.file_pages.load(Ordering::Relaxed)..d.page_count()).any(|i| !order.contains(&i));
+                    inner.doc.apply_page_edits(&rot, &order, d.file_pages.load(Ordering::Relaxed))?;
+                    if in_place && inner.doc.can_save_incrementally() && !unused {
                         inner.doc.save_pdf(&cur, true)
                     } else if in_place {
                         inner.doc.save_pdf(&tmp, false)?;
@@ -800,6 +949,151 @@ impl Engine {
         Ok(d.info())
     }
 
+    /// Adds the pages of other files (PDFs, pictures, any format MuPDF opens) at
+    /// the end of the document, as one undo step. A file that needs a password
+    /// fails with "PASSWORD:<path>" (or "WRONG_PASSWORD:<path>").
+    pub fn insert_pages(&self, id: DocId, sources: Vec<InsertSource>, fit: Option<[f32; 2]>) -> Result<Inserted, String> {
+        let d = self.doc(id)?;
+        let docs = open_sources(&sources)?;
+        d.insert("Insert pages", |doc| {
+            for (src, pages) in &docs {
+                doc.insert_pages(src, pages, fit)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Combines files into a new PDF at `target`: their pages in order and (with
+    /// `bookmarks`) a bookmark per file holding that file's own bookmarks. Errors
+    /// as for insert_pages. Returns the page count.
+    pub fn merge(&self, sources: Vec<InsertSource>, fit: Option<[f32; 2]>, bookmarks: bool, target: &str) -> Result<usize, String> {
+        let docs = open_sources(&sources)?;
+        let out = Document::new_pdf()?;
+        let mut base = 0;
+        for ((src, pages), s) in docs.iter().zip(&sources) {
+            let n = out.insert_pages(src, pages, fit)?;
+            if bookmarks && n > 0 {
+                let name = file_name(&s.path);
+                out.outline_group(src, name.rsplit_once('.').map_or(name, |(stem, _)| stem), base, pages)?;
+            }
+            base += n;
+        }
+        if base == 0 {
+            return Err("There are no pages to combine.".into());
+        }
+        // Written beside the target first, so a failure never leaves half a file.
+        let tmp = format!("{target}.paginaut-tmp");
+        let res = out.save_pdf(&tmp, false).and_then(|_| std::fs::rename(&tmp, target).or_else(|_| copy_with_retry(&tmp, target)).map_err(|e| e.to_string()));
+        let _ = std::fs::remove_file(&tmp);
+        res.map(|_| base)
+    }
+
+    /// Copies pages of another open document (as they are in memory, unsaved
+    /// changes included) to the end of this one, as one undo step.
+    pub fn insert_from_open(&self, id: DocId, from: DocId, pages: Vec<usize>) -> Result<Inserted, String> {
+        let s = self.doc(from)?;
+        let password = s.password.lock().clone();
+        let copy = {
+            let inner = s.inner.lock();
+            if inner.doc.is_pdf() && inner.doc.has_changes() {
+                let tmp = temp_path(from, "copy");
+                inner.doc.save_copy(&tmp)?;
+                Some(tmp)
+            } else {
+                None
+            }
+        };
+        let path = copy.clone().unwrap_or_else(|| s.path());
+        let res = self.insert_pages(id, vec![InsertSource { path, pages: Some(pages), password }], None);
+        if let Some(tmp) = copy {
+            let _ = std::fs::remove_file(tmp);
+        }
+        res
+    }
+
+    /// Writes pages to new PDFs (extract, split), each with the page rotations
+    /// `rot` (per document page). The document is taken as it is in memory, so
+    /// unsaved changes are included; it's left as it is. Returns each file's size.
+    pub fn save_parts(&self, id: DocId, parts: Vec<Part>, rot: Vec<i32>) -> Result<Vec<u64>, String> {
+        let d = self.doc(id)?;
+        let write = |path: &str, f: &dyn Fn(&str) -> Result<(), String>| -> Result<u64, String> {
+            // Beside the target first, so a failure never leaves half a file.
+            let tmp = format!("{path}.paginaut-tmp");
+            let res = f(&tmp).and_then(|_| std::fs::rename(&tmp, path).or_else(|_| copy_with_retry(&tmp, path)).map_err(|e| e.to_string()));
+            let _ = std::fs::remove_file(&tmp);
+            res?;
+            Ok(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
+        };
+        if !d.inner.lock().doc.is_pdf() {
+            // Other formats are drawn into new PDFs.
+            return parts.iter().map(|p| write(&p.path, &|out| d.inner.lock().doc.convert_to_pdf(out, &p.pages, &rot))).collect();
+        }
+        // Unsaved changes are written to a temporary copy; otherwise the file itself is read.
+        let temp = {
+            let inner = d.inner.lock();
+            if inner.doc.has_changes() {
+                let t = temp_path(id, "parts");
+                inner.doc.save_copy(&t)?;
+                Some(t)
+            } else {
+                None
+            }
+        };
+        let copy = temp.clone().unwrap_or_else(|| d.path());
+        let file_pages = d.file_pages.load(Ordering::Relaxed);
+        let res = parts
+            .iter()
+            .map(|p| {
+                write(&p.path, &|out| {
+                    let doc = Document::open(&copy)?;
+                    if doc.needs_password() {
+                        if let Some(pw) = d.password.lock().as_deref() {
+                            doc.authenticate(pw);
+                        }
+                    }
+                    doc.apply_page_edits(&rot, &p.pages, file_pages)?;
+                    doc.save_pdf(out, false)
+                })
+            })
+            .collect();
+        if let Some(t) = temp {
+            let _ = std::fs::remove_file(t);
+        }
+        res
+    }
+
+    /// Groups pages (document indices, in order) into parts of about `max_bytes`.
+    pub fn split_by_size(&self, id: DocId, order: Vec<usize>, max_bytes: f64) -> Result<Vec<Vec<usize>>, String> {
+        let d = self.doc(id)?;
+        let inner = d.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Err("Only PDFs can be split by size.".into());
+        }
+        let starts = inner.doc.split_by_size(&order, max_bytes)?;
+        Ok(starts.iter().enumerate().map(|(i, &s)| order[s..starts.get(i + 1).copied().unwrap_or(order.len())].to_vec()).collect())
+    }
+
+    /// Page count and kind of a file, without keeping it open.
+    pub fn peek(&self, path: &str, password: Option<&str>) -> Result<Peek, String> {
+        let d = Document::open(path).map_err(|e| format!("Couldn't open {}: {e}", file_name(path)))?;
+        let is_pdf = d.is_pdf();
+        if d.needs_password() && !password.is_some_and(|pw| d.authenticate(pw)) {
+            return Ok(Peek { pages: 0, is_pdf, locked: true });
+        }
+        if d.is_reflowable() {
+            d.layout(REFLOW.0, REFLOW.1, REFLOW.2)?;
+        }
+        Ok(Peek { pages: d.page_count()?, is_pdf, locked: false })
+    }
+
+    /// Adds `count` empty pages of w×h points at the end, as one undo step.
+    pub fn insert_blank(&self, id: DocId, w: f32, h: f32, count: usize) -> Result<Inserted, String> {
+        if !((1.0..=14400.0).contains(&w) && (1.0..=14400.0).contains(&h)) || count == 0 || count > 1000 {
+            return Err("bad page size or count".into());
+        }
+        self.doc(id)?.insert("Insert blank page", |doc| doc.insert_blank(w, h, count).map(|_| ()))
+    }
+
     /// The document's signature fields (JSON, see fo_sigs_json).
     pub fn sigs_json(&self, id: DocId) -> Result<String, String> {
         let d = self.doc(id)?;
@@ -829,7 +1123,7 @@ impl Engine {
                     copy.authenticate(pw);
                 }
             }
-            copy.apply_page_edits(&rot, &order)?;
+            copy.apply_page_edits(&rot, &order, d.file_pages.load(Ordering::Relaxed))?;
             copy.bake(annots)?;
             copy.save_pdf(&target, false)
         })();
@@ -1031,6 +1325,47 @@ impl Engine {
             move |complete, _, error| finished(complete, error),
         )
     }
+}
+
+/// Opens every file pages will be taken from and checks the pages asked for,
+/// before anything is changed.
+fn open_sources(sources: &[InsertSource]) -> Result<Vec<(Document, Vec<usize>)>, String> {
+    let mut docs = Vec::with_capacity(sources.len());
+    for s in sources {
+        let src = Document::open(&s.path).map_err(|e| format!("Couldn't open {}: {e}", file_name(&s.path)))?;
+        if src.needs_password() {
+            match s.password.as_deref() {
+                None => return Err(format!("PASSWORD:{}", s.path)),
+                Some(pw) if !src.authenticate(pw) => return Err(format!("WRONG_PASSWORD:{}", s.path)),
+                _ => {}
+            }
+        }
+        if src.is_reflowable() {
+            src.layout(REFLOW.0, REFLOW.1, REFLOW.2)?;
+        }
+        let n = src.page_count()?;
+        let pages = match &s.pages {
+            Some(p) => {
+                if let Some(bad) = p.iter().find(|&&i| i >= n) {
+                    return Err(format!("{} has no page {} (it has {n})", file_name(&s.path), bad + 1));
+                }
+                p.clone()
+            }
+            None => (0..n).collect(),
+        };
+        docs.push((src, pages));
+    }
+    Ok(docs)
+}
+
+/// A file in the temp folder for a copy of a document.
+fn temp_path(id: DocId, what: &str) -> String {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    std::env::temp_dir().join(format!("paginaut-{what}-{id}-{nanos}.pdf")).to_string_lossy().into_owned()
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 fn same_file(a: &str, b: &str) -> bool {

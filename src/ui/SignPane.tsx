@@ -2,7 +2,7 @@
 // marks, signing with a certificate (DSC token), and the signatures a document has.
 import { useEffect, useRef } from "preact/hooks";
 import type { ComponentChild } from "preact";
-import { CalendarDays, Check, FileLock2, Plus, TypeOutline, UserRound, X } from "lucide-preact";
+import { CalendarDays, Check, FileLock2, Plus, Strikethrough, TypeOutline, UserRound, X } from "lucide-preact";
 import { annotTool, selectedAnnot, type AnnotTool } from "../annots";
 import { bookScreen } from "../modes";
 import * as P from "../pages";
@@ -137,6 +137,7 @@ const MARKS: [AnnotTool, string, ComponentChild][] = [
   ["stamp:check", "Tick", <Check size={16} />],
   ["stamp:cross", "Cross", <X size={16} />],
   ["stamp:dot", "Dot", <span class="dot-ic" />],
+  ["fs-strike", "Strike", <Strikethrough size={16} />],
   ["stamp:date", "Date", <CalendarDays size={16} />],
   ["stamp:name", "Name", <UserRound size={16} />],
 ];

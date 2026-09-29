@@ -8,7 +8,7 @@ import type { ComponentChild } from "preact";
 import {
   BookOpen, ChevronDown, ChevronsRight, ChevronUp, Columns2, Combine, Expand, File, FileOutput, FolderOpen, FormInput, Hand, Highlighter, Info, Keyboard,
   Minus, Moon, MousePointer2, MoveHorizontal, PanelLeft, PanelRight, Plus, Redo2, RefreshCw, RotateCcw, RotateCw, Save, ScanText, ScrollText,
-  Search, Signature, SquareSplitHorizontal, Sun, SunMoon, Trash2, Type, Undo2, Wrench, Underline, Strikethrough, SquareDashed,
+  Search, Signature, SquareSplitHorizontal, Sun, SunMoon, Trash2, FilePlus2, LayoutGrid, Type, Undo2, Wrench, Underline, Strikethrough, SquareDashed,
   PenLine, StickyNote, TypeOutline, Square, Circle, Slash, MoveUpRight, Stamp, MessagesSquare, Check, X, CalendarDays, UserRound,
   FileLock2, ShieldCheck,
 } from "lucide-preact";
@@ -22,6 +22,9 @@ import { startLayoutEdit } from "./LayoutPanel";
 import { loadSigs, newSig, openSignPane, pickSig, sigs, sigsOf, type SigKind } from "../sign";
 import { startSigning } from "../dsc";
 import { recognize, removeRecognized } from "../ocr";
+import { extractPages, insertBlankPage, startInsert, startMerge, startSplit } from "./PagesUI";
+import { toggleGrid } from "./PageGrid";
+import { startPageSize } from "../pagesize";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -37,6 +40,11 @@ function openMenu(e: MouseEvent, items: MenuItem[], align: "left" | "right" | "u
     align === "up"
       ? { x: r.left + r.width / 2 - width / 2, y: 0, bottom: window.innerHeight - r.top + 4, items, width }
       : { x: align === "left" ? r.left : r.right - width, y: r.bottom + 4, items, width };
+}
+
+/** A menu at the pointer (right-click); opens upwards in the lower part of the window. */
+export function openMenuAt(x: number, y: number, items: MenuItem[], width = 220) {
+  menu.value = y > window.innerHeight * 0.55 ? { x, y: 0, bottom: window.innerHeight - y, items, width } : { x, y, items, width };
 }
 
 // ---------------------------------------------------------------- File menu
@@ -284,6 +292,7 @@ function ViewTools({ tab }: { tab: Tab | null }) {
       {MODES.map(([mode, label, icon, title]) => (
         <TB key={mode} icon={I(icon, 17)} label={label} title={title} on={!!tab && viewModeOf(tab) === mode} disabled={!tab} onClick={() => tab && void setViewMode(tab, mode)} />
       ))}
+      <TB icon={I(LayoutGrid, 17)} label="Page grid" title="All pages as big thumbnails, to organize them (Ctrl+Shift+G)" on={!!tab?.grid.value} disabled={!tab} onClick={() => tab && toggleGrid(tab)} />
       <div class="sep" />
       {vm === "double" && (
         <TB icon={I(SquareSplitHorizontal, 17)} label="Cover on its own" title="Show the first page alone, like the cover of a printed book" on={s.coverSeparate} onClick={() => setCoverSeparate(!s.coverSeparate)} />
@@ -326,7 +335,7 @@ export function formItems(tab: Tab | null): MenuItem[] {
 const TOOL_BTNS: [AnnotTool, string, typeof Save, string][] = [
   ["highlight", "Highlight", Highlighter, "Highlight text (on scans: drag over the area) — H"],
   ["underline", "Underline", Underline, "Underline text"],
-  ["strike", "Strike", Strikethrough, "Strike through text"],
+  ["strike", "Strike", Strikethrough, "Strike through text (on scans: drag a line)"],
   ["area", "Area", SquareDashed, "Highlight an area"],
   ["pen", "Pen", PenLine, "Draw freehand"],
   ["note", "Note", StickyNote, "Add a sticky note"],
@@ -351,6 +360,7 @@ function CommentTools({ tab }: { tab: Tab | null }) {
       { label: "✓  Tick", run: () => pick("stamp:check") },
       { label: "✗  Cross", run: () => pick("stamp:cross") },
       { label: "●  Dot", run: () => pick("stamp:dot") },
+      { label: "—  Strike line", run: () => pick("fs-strike") },
       { label: "Today's date", run: () => pick("stamp:date") },
       { label: "My name", run: () => pick("stamp:name") },
       { head: "Stamps" },
@@ -436,6 +446,7 @@ function SignTools({ tab }: { tab: Tab | null }) {
       <IB icon={I(Check)} label="Tick" on={tool === "stamp:check"} disabled={!tab} onClick={() => pick("stamp:check")} />
       <IB icon={I(X)} label="Cross" on={tool === "stamp:cross"} disabled={!tab} onClick={() => pick("stamp:cross")} />
       <IB icon={<span class="dot-ic" />} label="Dot" on={tool === "stamp:dot"} disabled={!tab} onClick={() => pick("stamp:dot")} />
+      <IB icon={I(Strikethrough)} label="Strike" title="Strike out: drag a straight line across anything (scans too)" on={tool === "fs-strike"} disabled={!tab} onClick={() => pick("fs-strike")} />
       <IB icon={I(CalendarDays)} label="Today's date" on={tool === "stamp:date"} disabled={!tab} onClick={() => pick("stamp:date")} />
       <IB icon={I(UserRound)} label="My name" on={tool === "stamp:name"} disabled={!tab} onClick={() => pick("stamp:name")} />
       <div class="sep" />
@@ -463,6 +474,10 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
       <TB icon={I(RotateCcw, 17)} label="Rotate" title="Rotate page left (Shift+R) — or hover a page" disabled={!tab} onClick={() => tab && P.rotatePages(tab, -90)} />
       <IB icon={I(RotateCw)} label="Rotate right" title="Rotate page right (R)" disabled={!tab} onClick={() => tab && P.rotatePages(tab, 90)} />
       <TB icon={I(Trash2, 17)} label="Delete" title="Delete page (Del)" disabled={!tab} onClick={() => tab && P.deletePages(tab)} />
+      <TB icon={I(FilePlus2, 17)} label="Insert" menu disabled={!tab?.info.value?.isPdf} onClick={(e) => openMenu(e, [
+        { label: "Pages from a file…", run: () => tab && void startInsert(tab) },
+        { label: "Blank page", run: () => tab && void insertBlankPage(tab) },
+      ], "left", 200)} />
       <div class="sep" />
       <TB icon={I(FormInput, 17)} label="Forms" menu onClick={(e) => openMenu(e, formItems(tab), "left", 270)} />
       <TB icon={I(Highlighter, 17)} label="Comment" title="Highlight, draw, add notes and text (Comment tab)" onClick={() => updateSettings({ ribbon: "comment" })} />
@@ -472,9 +487,18 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { label: "Remove recognized text", disabled: !tab?.info.value?.isPdf, run: () => tab && void removeRecognized(tab) },
       ], "left", 240)} />
       <TB icon={I(Combine, 17)} label="Organize" menu onClick={(e) => openMenu(e, [
-        soon("Merge", 6), soon("Split", 6), soon("Compress", 6), soon("Crop", 6), soon("Page numbers", 6), soon("Watermark", 6),
-        soon("Protect / unlock", 6), soon("Redact", 6), soon("Compare", 6), soon("Repair", 6),
-      ])} />
+        { label: "Page grid", hint: "Ctrl+Shift+G", check: !!tab?.grid.value, disabled: !tab, run: () => tab && toggleGrid(tab) },
+        { sep: true },
+        { label: "Merge files…", run: () => void startMerge(tab) },
+        { label: "Split into files…", disabled: !tab, run: () => tab && startSplit(tab) },
+        { label: "Save selected pages as a new PDF…", disabled: !tab, run: () => tab && void extractPages(tab) },
+        { sep: true },
+        { label: "Crop and resize pages…", disabled: !tab?.info.value?.isPdf, run: () => tab && startPageSize(tab) },
+        { sep: true },
+        soon("Page numbers", 6.2), soon("Watermark", 6.2),
+        soon("Protect / unlock", 6.2), soon("Compress", 6.2), soon("Repair", 6.2), soon("Extract pictures and tables", 6.2),
+        soon("Edit PDF", 6.3), soon("Redact", 6.5), soon("Compare", 7.5),
+      ], "left", 280)} />
       <TB icon={I(RefreshCw, 17)} label="Convert" menu onClick={(e) => openMenu(e, [
         { head: "From PDF" }, soon("Word", 7), soon("Excel", 7), soon("PowerPoint", 7), soon("Images (JPG, PNG, TIFF)", 7), soon("Text", 7),
         { head: "To PDF" }, soon("Word, Excel, PowerPoint", 7), soon("Images", 7), soon("Web page (HTML)", 7),

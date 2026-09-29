@@ -1,5 +1,6 @@
 // App state: tabs, settings, recent files. Signals drive the Preact UI;
 // the Viewer itself is imperative and lives on its tab.
+import type { PageSizeSettings } from "./pagesize";
 import { batch, computed, effect, signal, type Signal } from "@preact/signals";
 import { api, type DocInfo, type OutlineItem } from "./api";
 import type { FitMode, LayoutMode, ViewState, Viewer } from "./render/Viewer";
@@ -32,6 +33,10 @@ export interface Settings {
   sidebarOpen: boolean;
   sidebarWidth: number;
   sidebarTab: "pages" | "outline" | "comments";
+  /** Smallest width of a page in the page grid, px. */
+  gridSize: number;
+  /** The Page size tool's last choices. */
+  pageSize?: Partial<PageSizeSettings>;
   /** The Sign pane on the right (signatures, Fill & Sign, certificates). */
   signPane: boolean;
   /** Save rotations automatically (PDFs only, when nothing else changed). */
@@ -66,7 +71,7 @@ export const REFLOW_DEFAULTS: ReflowSettings = { font: "sitka", size: 19, spacin
 
 export const settings = signal<Settings>(
   {
-    theme: "system", night: false, sidebarOpen: true, sidebarWidth: 232, sidebarTab: "pages", autoSaveRotations: false,
+    theme: "system", night: false, sidebarOpen: true, sidebarWidth: 232, sidebarTab: "pages", gridSize: 190, autoSaveRotations: false,
     ribbon: "home", coverSeparate: false, highlightFields: true, signPane: false,
     annot: { colors: { hl: "#ffd400", pen: "#e8453c", shape: "#e8453c", text: "#1c1c1c", note: "#ffd400" }, width: 1.5, fontSize: 12 }, reflow: REFLOW_DEFAULTS,
     dsc: { reason: "I approve this document", location: "", showDate: true, lock: false, newFile: true, place: "box", cert: "" },
@@ -145,6 +150,8 @@ export class Tab {
   /** Unsaved page edits (order, rotation); null until the document is ready. */
   edits = signal<Edits | null>(null);
   history = new History();
+  /** The page grid (big thumbnails for organizing) is showing instead of the pages. */
+  grid = signal(false);
   /** Bumped whenever history changes, so undo/redo buttons refresh. */
   historyVersion = signal(0);
   /** Pages selected in the thumbnails (display indices). */

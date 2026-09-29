@@ -1,5 +1,6 @@
-import { FileText, FolderOpen, X } from "lucide-preact";
+import { Combine, FileText, FolderOpen, X } from "lucide-preact";
 import * as A from "../actions";
+import { startMerge } from "./PagesUI";
 import { forgetFile, openFiles, recent } from "../store";
 
 function ago(ms: number) {
@@ -27,6 +28,9 @@ export function Home() {
           <span>Drop files anywhere in this window, or</span>
           <button class="btn pri" onClick={A.openDialog} style={{ height: 34, padding: "0 16px" }}>
             <FolderOpen size={16} /> Choose files <kbd style={{ background: "transparent", color: "inherit", borderColor: "currentColor", opacity: 0.7 }}>Ctrl+O</kbd>
+          </button>
+          <button class="btn ghost" onClick={() => void startMerge(null)}>
+            <Combine size={15} /> Merge files into one PDF…
           </button>
         </div>
         {list.length > 0 && (

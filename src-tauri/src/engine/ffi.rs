@@ -91,10 +91,17 @@ extern "C" {
     pub fn fo_text_search_json(c: *mut fo_ctx, t: *mut fo_text, bounds: *const c_float, needle: *const c_char) -> *mut c_char;
     pub fn fo_text_match_json(c: *mut fo_ctx, t: *mut fo_text, bounds: *const c_float, needle: *const c_char, flags: c_int, snippets: c_int) -> *mut c_char;
 
-    pub fn fo_pdf_apply_page_edits(c: *mut fo_ctx, d: *mut fo_doc, rot: *const c_int, npages: c_int, order: *const c_int, count: c_int) -> c_int;
+    pub fn fo_pdf_apply_page_edits(c: *mut fo_ctx, d: *mut fo_doc, rot: *const c_int, npages: c_int, order: *const c_int, count: c_int, file_pages: c_int) -> c_int;
     pub fn fo_pdf_can_save_incrementally(c: *mut fo_ctx, d: *mut fo_doc) -> c_int;
     pub fn fo_pdf_save(c: *mut fo_ctx, d: *mut fo_doc, path: *const c_char, incremental: c_int) -> c_int;
     pub fn fo_convert_to_pdf(c: *mut fo_ctx, d: *mut fo_doc, path: *const c_char, order: *const c_int, count: c_int, rot: *const c_int) -> c_int;
+    pub fn fo_pdf_insert_pages(c: *mut fo_ctx, d: *mut fo_doc, src: *mut fo_doc, pages: *const c_int, count: c_int, fit: *const c_float) -> c_int;
+    pub fn fo_pdf_new(c: *mut fo_ctx) -> *mut fo_doc;
+    pub fn fo_page_content_box(c: *mut fo_ctx, p: *mut fo_page, out: *mut c_float) -> c_int;
+    pub fn fo_pdf_page_size(c: *mut fo_ctx, p: *mut fo_page, crop: *const c_float, size: *const c_float, fit: c_int, ax: c_float, ay: c_float, remove: c_int, fill: c_int, rgb: *const c_float) -> c_int;
+    pub fn fo_pdf_split_by_size(c: *mut fo_ctx, d: *mut fo_doc, order: *const c_int, count: c_int, max_bytes: f64, starts: *mut c_int) -> c_int;
+    pub fn fo_pdf_outline_group(c: *mut fo_ctx, d: *mut fo_doc, src: *mut fo_doc, title: *const c_char, base: c_int, pages: *const c_int, count: c_int) -> c_int;
+    pub fn fo_pdf_insert_blank(c: *mut fo_ctx, d: *mut fo_doc, w: c_float, h: c_float, count: c_int) -> c_int;
 
     pub fn fo_image_rects_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
     pub fn fo_reflow_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
@@ -112,6 +119,7 @@ extern "C" {
     pub fn fo_doc_annots_json(c: *mut fo_ctx, d: *mut fo_doc) -> *mut c_char;
     pub fn fo_pdf_begin_op(c: *mut fo_ctx, d: *mut fo_doc, name: *const c_char);
     pub fn fo_pdf_end_op(c: *mut fo_ctx, d: *mut fo_doc);
+    pub fn fo_pdf_abandon_op(c: *mut fo_ctx, d: *mut fo_doc);
     pub fn fo_annot_create(c: *mut fo_ctx, p: *mut fo_page, kind: *const c_char, author: *const c_char) -> c_int;
     pub fn fo_annot_delete(c: *mut fo_ctx, p: *mut fo_page, num: c_int) -> c_int;
     pub fn fo_annot_update(c: *mut fo_ctx, p: *mut fo_page, num: c_int) -> c_int;

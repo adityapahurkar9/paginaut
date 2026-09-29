@@ -6,9 +6,106 @@ import { ChevronDown, ChevronRight } from "lucide-preact";
 import { api, type OutlineItem } from "../api";
 import { renderer, renderKey, type Want } from "../render/RenderManager";
 import { LO_SCALE, paint } from "../render/Viewer";
-import { activeTab, settings, updateSettings, type Tab } from "../store";
+import { signal } from "@preact/signals";
+import { activeKey, activeTab, settings, showToast, tabs, updateSettings, type Tab } from "../store";
 import { specs } from "../edits";
 import * as P from "../pages";
+import { openMenuAt } from "./Toolbar";
+import { extractPages, insertBlankPage, startInsert } from "./PagesUI";
+import { startPageSize } from "../pagesize";
+
+// ---------------------------------------------------------------- dragging pages
+
+/**
+ * Thumbnails being dragged: within their document (to reorder) or onto another
+ * open document (to copy them there). Hovering over another document's tab
+ * switches to it, so the pages can be dropped among its thumbnails.
+ */
+export const pageDrag = signal<{ from: Tab; views: number[]; x: number; y: number; target: Tab | null; gap: number; hover: Tab | null; into: HTMLElement | null } | null>(null);
+
+/** Each shown set of thumbnails (sidebar, page grid): the gap a point is at (null if outside) and its scroller. */
+type DropTarget = { tab: Tab; gapAt: (x: number, y: number) => number | null; scroller: HTMLElement };
+const dropTargets = new Set<DropTarget>();
+
+function startPageDrag(from: Tab, views: number[], e: PointerEvent, onReorderClickGuard: () => void) {
+  let autoTimer = 0;
+  let switchTimer = 0;
+  let switchTo: Tab | null = null;
+  const update = (ev: PointerEvent) => {
+    const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest("[data-tab]") as HTMLElement | null;
+    const hover = el ? (tabs.value.find((t) => t.key === el.dataset.tab) ?? null) : null;
+    // Hovering over another tab for a moment opens it.
+    if (hover !== switchTo) {
+      clearTimeout(switchTimer);
+      switchTo = hover;
+      if (hover && hover !== activeTab.value) switchTimer = window.setTimeout(() => (activeKey.value = hover.key), 550);
+    }
+    const act = activeTab.value;
+    let t: DropTarget | undefined;
+    let gap: number | null = null;
+    for (const d of dropTargets) {
+      if (d.tab !== act) continue;
+      gap = d.gapAt(ev.clientX, ev.clientY);
+      if (gap !== null) {
+        t = d;
+        break;
+      }
+    }
+    pageDrag.value = { from, views, x: ev.clientX, y: ev.clientY, target: gap === null ? null : act, gap: gap ?? 0, hover, into: t?.scroller ?? null };
+    // Scroll the strip when dragging near its edges.
+    clearInterval(autoTimer);
+    if (t && gap !== null) {
+      const b = t.scroller.getBoundingClientRect();
+      const dir = ev.clientY < b.top + 36 ? -1 : ev.clientY > b.bottom - 36 ? 1 : 0;
+      if (dir) autoTimer = window.setInterval(() => (t.scroller.scrollTop += dir * 14), 16);
+    }
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", update);
+    window.removeEventListener("pointerup", up);
+    clearInterval(autoTimer);
+    clearTimeout(switchTimer);
+    const d = pageDrag.value;
+    pageDrag.value = null;
+    onReorderClickGuard();
+    if (!d) return;
+    if (d.target === from) P.movePages(from, views, d.gap);
+    else if (d.target) void copyPages(from, views, d.target, d.gap);
+    else if (d.hover && d.hover !== from) void copyPages(from, views, d.hover, d.hover.edits.value?.order.length ?? 0);
+  };
+  update(e);
+  window.addEventListener("pointermove", update);
+  window.addEventListener("pointerup", up);
+}
+
+/** Copies pages (display indices of `from`) into `to` at a gap, as shown in `from` (rotations too). */
+async function copyPages(from: Tab, views: number[], to: Tab, at: number) {
+  const e = from.edits.value;
+  const info = from.info.value;
+  if (!e || !info) return;
+  if (!to.info.value?.isPdf) return showToast(`Pages can only be added to a PDF. Save ${to.name} as a PDF first (Save as).`, 4500);
+  const pages = views.map((v) => e.order[v]);
+  try {
+    const r = await P.insertPages(to, at, { fromDoc: info.docId, pages, rot: pages.map((p) => e.rot[p] ?? 0) });
+    activeKey.value = to.key;
+    showToast(`Copied ${r.count === 1 ? "1 page" : `${r.count} pages`} from ${from.name} · Ctrl+Z to undo`, 3500);
+  } catch (err) {
+    showToast(`Couldn't copy the pages: ${err}`, 5000);
+  }
+}
+
+/** The page being dragged, following the pointer (in every view, so it survives switching tabs). */
+export function PageDragGhost() {
+  const d = pageDrag.value;
+  if (!d) return null;
+  const what = d.views.length === 1 ? `Page ${d.views[0] + 1}` : `${d.views.length} pages`;
+  const into = d.target && d.target !== d.from ? d.target : !d.target && d.hover && d.hover !== d.from ? d.hover : null;
+  return (
+    <div class="drag-ghost" style={{ left: d.x + 12, top: d.y + 12 }}>
+      {into ? `${what} · copy to ${into.name}` : what}
+    </div>
+  );
+}
 
 const MIN_W = 160;
 const MAX_W = 520;
@@ -73,7 +170,12 @@ export function Sidebar() {
 const PAD = 8;
 const LABEL = 22;
 
-function Thumbnails({ tab, width, visible }: { tab: Tab; width: number; visible: boolean }) {
+/**
+ * Page thumbnails: the sidebar strip, or the page grid (bigger cells, `cell`
+ * px wide at least). Click to select (Ctrl/Shift for more), drag to reorder or
+ * into another document, right-click for page actions; `onOpen` on double-click.
+ */
+export function Thumbnails({ tab, width, visible, cell = 108, maxBox = 360, where = "thumbs", onOpen }: { tab: Tab; width: number; visible: boolean; cell?: number; maxBox?: number; where?: string; onOpen?: (view: number) => void }) {
   const scroller = useRef<HTMLDivElement>(null);
   const grid = useRef<HTMLDivElement>(null);
   const [scroll, setScroll] = useState({ top: 0, height: 600 });
@@ -81,13 +183,14 @@ function Thumbnails({ tab, width, visible }: { tab: Tab; width: number; visible:
   const userScrolled = useRef(0);
   const anchor = useRef(0);
   const suppressClick = useRef(false);
-  const [drag, setDrag] = useState<{ views: number[]; gap: number; x: number; y: number } | null>(null);
+  const pd = pageDrag.value;
+  const drag = pd && pd.into && pd.into === scroller.current ? pd : null;
   const info = tab.info.value!;
   const sizes = tab.sizes.value;
   const edits = tab.edits.value;
   const current = tab.page.value;
   const sel = tab.pageSel.value;
-  const group = `thumbs:${info.docId}`;
+  const group = `${where}:${info.docId}`;
   const pages = useMemo(
     () => (edits ? specs(edits, sizes ?? Array.from({ length: info.pageCount }, () => info.firstSize)) : []),
     [edits, sizes],
@@ -96,9 +199,9 @@ function Thumbnails({ tab, width, visible }: { tab: Tab; width: number; visible:
 
   // Grid geometry. Columns step up as the panel widens; within a step, thumbnails grow with it.
   const inner = width - PAD * 2;
-  const cols = Math.max(1, Math.floor((inner + 10) / 108));
+  const cols = Math.max(1, Math.floor((inner + 10) / cell));
   const cellW = inner / cols;
-  const boxW = Math.max(60, Math.min(cellW - 14, 360));
+  const boxW = Math.max(60, Math.min(cellW - 14, maxBox));
   const boxH = boxW * 1.3;
   const rowH = boxH + LABEL + 12;
   const rows = Math.ceil(count / cols);
@@ -207,37 +310,68 @@ function Thumbnails({ tab, width, visible }: { tab: Tab; width: number; visible:
     return Math.max(0, Math.min(count, row * cols + col + (right ? 1 : 0)));
   };
 
+  // Where dragged pages would land here (from this document or another one).
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const target: DropTarget = {
+      tab,
+      scroller: el,
+      gapAt: (x, y) => {
+        const b = el.getBoundingClientRect();
+        return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom && el.offsetParent ? gapAt(x, y) : null;
+      },
+    };
+    dropTargets.add(target);
+    return () => void dropTargets.delete(target);
+  });
+
   const startDrag = (i: number, e: PointerEvent) => {
     if (e.button !== 0) return;
     const sx = e.clientX, sy = e.clientY;
-    let views: number[] | null = null;
-    let autoTimer = 0;
-    const move = (ev: PointerEvent) => {
-      if (!views) {
-        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
-        views = sel.has(i) ? [...sel].sort((a, b) => a - b) : [i];
-        if (!sel.has(i)) tab.pageSel.value = new Set([i]);
-      }
-      setDrag({ views, gap: gapAt(ev.clientX, ev.clientY), x: ev.clientX, y: ev.clientY });
-      // Scroll the strip when dragging near its edges.
-      const el = scroller.current!;
-      const b = el.getBoundingClientRect();
-      const dir = ev.clientY < b.top + 36 ? -1 : ev.clientY > b.bottom - 36 ? 1 : 0;
-      clearInterval(autoTimer);
-      if (dir) autoTimer = window.setInterval(() => (el.scrollTop += dir * 14), 16);
-    };
-    const up = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      clearInterval(autoTimer);
-      if (views) {
+    const wait = (ev: PointerEvent) => {
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
+      stop();
+      const views = sel.has(i) ? [...sel].sort((a, b) => a - b) : [i];
+      if (!sel.has(i)) tab.pageSel.value = new Set([i]);
+      startPageDrag(tab, views, ev, () => {
+        // The click that ends a drag is ignored; it only reaches the thumbnail when released on it.
         suppressClick.current = true;
-        setDrag(null);
-        P.movePages(tab, views, gapAt(ev.clientX, ev.clientY));
-      }
+        setTimeout(() => (suppressClick.current = false), 0);
+      });
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    const stop = () => {
+      window.removeEventListener("pointermove", wait);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", wait);
+    window.addEventListener("pointerup", stop);
+  };
+
+  /** Right-click: page actions for this page, or the selection it's part of. */
+  const pageMenu = (i: number, e: MouseEvent) => {
+    e.preventDefault();
+    if (!sel.has(i)) tab.pageSel.value = new Set([i]);
+    A.goToPage(i);
+    const k = sel.has(i) ? sel.size : 1;
+    const many = k > 1;
+    const isPdf = !!tab.info.value?.isPdf;
+    openMenuAt(
+      e.clientX,
+      e.clientY,
+      [
+        { label: "Rotate right", hint: "R", run: () => P.rotatePages(tab, 90) },
+        { label: "Rotate left", hint: "Shift+R", run: () => P.rotatePages(tab, -90) },
+        { label: many ? `Delete ${k} pages` : "Delete page", hint: "Del", run: () => P.deletePages(tab) },
+        { sep: true },
+        { label: many ? `Save ${k} pages as a new PDF…` : "Save page as a new PDF…", run: () => void extractPages(tab) },
+        { label: many ? `Crop or resize ${k} pages…` : "Crop or resize…", disabled: !isPdf, run: () => startPageSize(tab) },
+        { sep: true },
+        { label: "Insert pages from a file…", disabled: !isPdf, run: () => void startInsert(tab) },
+        { label: "Insert blank page after", disabled: !isPdf, run: () => void insertBlankPage(tab) },
+      ],
+      240,
+    );
   };
 
   const cells = [];
@@ -247,13 +381,15 @@ function Thumbnails({ tab, width, visible }: { tab: Tab; width: number; visible:
       if (i >= count) break;
       const spec = pages[i];
       const b = fitBox(i);
-      const dragged = drag?.views.includes(i);
+      const dragged = pd?.from === tab && pd.views.includes(i);
       cells.push(
         <button
           key={`${i}:${spec.src}:${spec.rot}`}
           class={`thumb ${i === current ? "on" : ""} ${sel.has(i) ? "sel" : ""} ${dragged ? "dragged" : ""}`}
           style={{ left: PAD + c * cellW, top: r * rowH + 6, width: cellW }}
           onPointerDown={(e) => startDrag(i, e)}
+          onContextMenu={(e) => pageMenu(i, e)}
+          onDblClick={onOpen && (() => onOpen(i))}
           onClick={(e) => {
             if (suppressClick.current) {
               suppressClick.current = false;
@@ -297,11 +433,6 @@ function Thumbnails({ tab, width, visible }: { tab: Tab; width: number; visible:
         {cells}
         {marker}
       </div>
-      {drag && (
-        <div class="drag-ghost" style={{ left: drag.x + 12, top: drag.y + 12 }}>
-          {drag.views.length === 1 ? `Page ${drag.views[0] + 1}` : `${drag.views.length} pages`}
-        </div>
-      )}
     </div>
   );
 }

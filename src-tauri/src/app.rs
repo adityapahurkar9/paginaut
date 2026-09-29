@@ -1,6 +1,6 @@
 //! Tauri glue: commands, the `paginaut://` pixel protocol, and app state.
 
-use crate::engine::{DocId, DocInfo, Engine, RenderReq, SearchOptions};
+use crate::engine::{DocId, DocInfo, Engine, InsertSource, Inserted, Part, Peek, RenderReq, SearchOptions};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -50,6 +50,86 @@ pub async fn save_document(
 ) -> Res<DocInfo> {
     let engine = state.engine.clone();
     blocking(move || engine.save(doc, order, rot, target)).await
+}
+
+/// Adds pages of other files at the end of the document (one undo step).
+#[tauri::command]
+pub async fn insert_pages(state: State<'_, AppState>, doc: DocId, sources: Vec<InsertSource>, fit: Option<[f32; 2]>) -> Res<Inserted> {
+    let engine = state.engine.clone();
+    blocking(move || engine.insert_pages(doc, sources, fit)).await
+}
+
+/// Combines files into a new PDF at `target` (see Engine::merge). Returns its page count.
+#[tauri::command]
+pub async fn merge_files(state: State<'_, AppState>, sources: Vec<InsertSource>, fit: Option<[f32; 2]>, bookmarks: bool, target: String) -> Res<usize> {
+    let engine = state.engine.clone();
+    blocking(move || engine.merge(sources, fit, bookmarks, &target)).await
+}
+
+/// Crops and/or resizes pages (one undo step). Returns their new sizes.
+#[tauri::command]
+pub async fn page_size(state: State<'_, AppState>, doc: DocId, ops: Vec<crate::engine::PageSizeOp>, opts: crate::engine::mupdf::PageSizeOptions) -> Res<Vec<[f32; 2]>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.page_size(&ops, &opts)).await
+}
+
+/// The box around everything drawn on a page (relative to its top-left), None if blank.
+#[tauri::command]
+pub async fn content_box(state: State<'_, AppState>, doc: DocId, page: usize) -> Res<Option<[f32; 4]>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.content_box(page)).await
+}
+
+/// Sizes of some pages (after they changed).
+#[tauri::command]
+pub async fn page_sizes_of(state: State<'_, AppState>, doc: DocId, pages: Vec<usize>) -> Res<Vec<[f32; 2]>> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        let d = engine.doc(doc)?;
+        pages.iter().map(|&p| d.bounds(p).map(|b| [b[2] - b[0], b[3] - b[1]])).collect()
+    })
+    .await
+}
+
+/// Copies pages of another open document to the end of this one (one undo step).
+#[tauri::command]
+pub async fn insert_from_open(state: State<'_, AppState>, doc: DocId, from: DocId, pages: Vec<usize>) -> Res<Inserted> {
+    let engine = state.engine.clone();
+    blocking(move || engine.insert_from_open(doc, from, pages)).await
+}
+
+/// Writes pages to new PDFs (extract, split). Returns each file's size.
+#[tauri::command]
+pub async fn save_parts(state: State<'_, AppState>, doc: DocId, parts: Vec<Part>, rot: Vec<i32>) -> Res<Vec<u64>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.save_parts(doc, parts, rot)).await
+}
+
+/// Groups pages into parts of about `max_bytes` each.
+#[tauri::command]
+pub async fn split_by_size(state: State<'_, AppState>, doc: DocId, order: Vec<usize>, max_bytes: f64) -> Res<Vec<Vec<usize>>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.split_by_size(doc, order, max_bytes)).await
+}
+
+/// Which of these files exist already.
+#[tauri::command]
+pub fn existing_files(paths: Vec<String>) -> Vec<String> {
+    paths.into_iter().filter(|p| std::path::Path::new(p).exists()).collect()
+}
+
+/// Page count and kind of a file (before inserting its pages).
+#[tauri::command]
+pub async fn peek_file(state: State<'_, AppState>, path: String, password: Option<String>) -> Res<Peek> {
+    let engine = state.engine.clone();
+    blocking(move || engine.peek(&path, password.as_deref())).await
+}
+
+/// Adds empty pages at the end of the document (one undo step).
+#[tauri::command]
+pub async fn insert_blank(state: State<'_, AppState>, doc: DocId, w: f32, h: f32, count: usize) -> Res<Inserted> {
+    let engine = state.engine.clone();
+    blocking(move || engine.insert_blank(doc, w, h, count)).await
 }
 
 #[tauri::command]

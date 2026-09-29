@@ -18,7 +18,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ["Full screen", "F11"], ["Sidebar", "F4"], ["Dark pages", "Ctrl+Shift+N"], ["Light / dark theme", "Ctrl+Shift+D"],
   ]],
   ["Pages", [
-    ["Rotate right / left", "R / Shift+R"], ["Delete page", "Delete"], ["Undo / redo", "Ctrl+Z / Ctrl+Y"],
+    ["Rotate right / left", "R / Shift+R"], ["Delete page", "Delete"], ["Page grid (organize pages)", "Ctrl+Shift+G"], ["Undo / redo", "Ctrl+Z / Ctrl+Y"],
     ["Select several (thumbnails)", "Ctrl+click, Shift+click"],
   ]],
   ["Search and text", [
