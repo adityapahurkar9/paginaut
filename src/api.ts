@@ -75,6 +75,23 @@ export interface Picture {
   id: string;
 }
 
+/** A paragraph as the text editor sees it: box, lines [x0, y0, x1, y1, baseline], size, baseline to
+ *  baseline (lead), colour, bold, italic, serif, monospace, alignment (l, r, c, j), font name, text. */
+export interface Paragraph {
+  r: [number, number, number, number];
+  l: [number, number, number, number, number][];
+  s: number;
+  lead: number;
+  c: string;
+  b: number;
+  i: number;
+  serif: number;
+  mono: number;
+  a: "l" | "r" | "c" | "j";
+  font: string;
+  t: string;
+}
+
 /** A table read from a page: where (relative to the page origin), its column and row lines,
  *  and its cells as [row, column, rows spanned, columns spanned, text]. */
 export interface Table {
@@ -293,6 +310,9 @@ export const api = {
   areaSave: (doc: number, page: number, area: [number, number, number, number], rot: number, kind: "png" | "svg" | "pdf", dpi: number, path: string) =>
     invoke<void>("area_save", { doc, page, area, rot, kind, dpi, path }),
   areaText: (doc: number, page: number, area: [number, number, number, number]) => invoke<string>("area_text", { doc, page, area }),
+  paragraphs: (doc: number, page: number) => invoke<Paragraph[]>("paragraphs", { doc, page }),
+  /** Replaces a paragraph's text (one undo step in the engine). */
+  editText: (doc: number, page: number, edit: { para: Paragraph; text: string }) => invoke<void>("edit_text", { doc, page, edit }),
   tables: (doc: number, page: number) => invoke<Table[]>("tables", { doc, page }),
   /** The table in `area`; with two or more column lines, exactly those columns. */
   tableIn: (doc: number, page: number, area: [number, number, number, number], cols: number[]) => invoke<Table | null>("table_in", { doc, page, area, cols }),

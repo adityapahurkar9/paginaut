@@ -152,6 +152,8 @@ pub fn run() {
             app::area_text,
             app::attachments,
             app::tables,
+            app::paragraphs,
+            app::edit_text,
             app::table_in,
             app::table_save,
             app::attachment_save,

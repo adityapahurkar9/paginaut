@@ -259,6 +259,31 @@ pub struct Attachment {
     pub desc: String,
 }
 
+/// A paragraph as the text editor sees it: box, lines ([x0, y0, x1, y1, baseline]), size, baseline
+/// to baseline, colour, bold, italic, serif, monospace, alignment (l, r, c, j), font name and text.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Paragraph {
+    pub r: [f32; 4],
+    pub l: Vec<[f32; 5]>,
+    pub s: f32,
+    pub lead: f32,
+    pub c: String,
+    pub b: i32,
+    pub i: i32,
+    pub serif: i32,
+    pub mono: i32,
+    pub a: String,
+    pub font: String,
+    pub t: String,
+}
+
+/// A paragraph's new text, with the paragraph as it was found (the text goes from its lines).
+#[derive(Deserialize)]
+pub struct TextEdit {
+    pub para: Paragraph,
+    pub text: String,
+}
+
 /// What "Save all pictures" did.
 #[derive(Serialize)]
 pub struct SavedPictures {
@@ -691,6 +716,62 @@ impl Doc {
             "svg" => self.list(index, 1)?.area_image(&b, &area, rot, 72.0, true),
             _ => self.list(index, 1)?.area_image(&b, &area, rot, dpi.clamp(36.0, 1200.0), false),
         }
+    }
+
+    /// Paragraphs of text on page `index` (its own content, not comments or form fields).
+    pub fn paragraphs(&self, index: usize) -> Result<Vec<Paragraph>, String> {
+        let b = self.bounds(index)?;
+        serde_json::from_str(&self.list(index, 0)?.paragraphs_json(&b)?).map_err(|e| e.to_string())
+    }
+
+    /// Replaces a paragraph's text on page `index` (one undo step), laid out in its box with its
+    /// size, spacing, colour and alignment, in its own font where that has the letters.
+    pub fn edit_text(&self, index: usize, e: &TextEdit) -> Result<(), String> {
+        let p = &e.para;
+        let esc: String = e.text.trim_end().chars().fold(String::new(), |mut o, ch| {
+            match ch {
+                '&' => o.push_str("&amp;"),
+                '<' => o.push_str("&lt;"),
+                '>' => o.push_str("&gt;"),
+                '\n' => o.push_str("<br/>"),
+                '\r' => {}
+                _ => o.push(ch),
+            }
+            o
+        });
+        let html = if esc.trim().is_empty() { String::new() } else { format!("<p>{esc}</p>") };
+        let align = match p.a.as_str() {
+            "r" => "right",
+            "c" => "center",
+            "j" => "justify",
+            _ => "left",
+        };
+        let family = if p.mono != 0 { "monospace" } else if p.serif != 0 { "serif" } else { "sans-serif" };
+        let color = if p.c.len() == 7 && p.c.starts_with('#') && p.c[1..].chars().all(|c| c.is_ascii_hexdigit()) { p.c.as_str() } else { "#000000" };
+        let size = p.s.clamp(1.0, 500.0);
+        let css = format!(
+            "p{{margin:0;font-size:{size}pt;line-height:{}pt;color:{color};text-align:{align};font-family:{family};font-weight:{};font-style:{}}}",
+            p.lead.clamp(size * 0.8, size * 4.0),
+            if p.b != 0 { "bold" } else { "normal" },
+            if p.i != 0 { "italic" } else { "normal" },
+        );
+        let lines: Vec<[f32; 4]> = p.l.iter().map(|l| [l[0], l[1], l[2], l[3]]).collect();
+        let first = p.l.first().ok_or("That paragraph has no lines.")?;
+        // A little room on the right, so a line that just fitted still does.
+        let width = (p.r[2] - p.r[0]) + size * 0.3;
+        let probe = [(first[0] + first[2]) / 2.0, (first[1] + first[3]) / 2.0];
+        let inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Err("Only PDFs can be edited. Save this file as a PDF first (Save as).".into());
+        }
+        drop(inner);
+        {
+            let mut inner = self.inner.lock();
+            let page = self.page(&mut inner, index)?;
+            page.edit_text(&lines, probe, &html, &css, p.r[0], first[4], width)?;
+        }
+        self.edited();
+        Ok(())
     }
 
     /// Tables found on page `index`.

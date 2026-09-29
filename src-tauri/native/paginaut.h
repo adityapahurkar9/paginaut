@@ -175,6 +175,14 @@ int fo_pdf_area_pdf(fo_ctx *c, fo_page *p, const float area[4], int rot, unsigne
  * column lines `cols` (page coordinates relative to the origin, left and right edges included) if given. */
 char *fo_tables_json(fo_ctx *c, fo_list *l, const float bounds[4]);
 char *fo_table_in_json(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4], const float *cols, int ncols);
+/* Paragraphs on a page (for editing): JSON [{"r","l":[[x0,y0,x1,y1,baseline]],"s" (size),"lead" (baseline
+ * to baseline),"c":"#rrggbb","b","i","serif","mono","a":"l|r|c|j","font","t" (text)}], relative to the page origin. */
+char *fo_paragraphs_json(fo_ctx *c, fo_list *l, const float bounds[4]);
+/* Replaces a paragraph's text (one undo step): the text in the `lines` boxes goes (text only), and
+ * `html` styled by `css` is laid out `width` wide with its first baseline at (x, baseline), in the
+ * font of the letter nearest `probe` where it has the letters. Page coordinates relative to the origin. */
+int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const float probe[2], const char *html, const char *css,
+	float x, float baseline, float width);
 /* A new, empty PDF in memory. */
 fo_doc *fo_pdf_new(fo_ctx *c);
 /* Adds a bookmark titled `title` at the end of d's outline, pointing at page

@@ -470,6 +470,19 @@ pub async fn area_text(state: State<'_, AppState>, doc: DocId, page: usize, area
 }
 
 #[tauri::command]
+pub async fn paragraphs(state: State<'_, AppState>, doc: DocId, page: usize) -> Res<Vec<crate::engine::Paragraph>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.paragraphs(page)).await
+}
+
+/// Replaces a paragraph's text (one undo step).
+#[tauri::command]
+pub async fn edit_text(state: State<'_, AppState>, doc: DocId, page: usize, edit: crate::engine::TextEdit) -> Res<()> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.edit_text(page, &edit)).await
+}
+
+#[tauri::command]
 pub async fn tables(state: State<'_, AppState>, doc: DocId, page: usize) -> Res<Vec<crate::engine::table::Table>> {
     let engine = state.engine.clone();
     blocking(move || engine.doc(doc)?.tables(page)).await

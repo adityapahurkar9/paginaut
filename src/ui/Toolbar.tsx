@@ -10,7 +10,7 @@ import {
   Minus, Moon, MousePointer2, MoveHorizontal, PanelLeft, PanelRight, Plus, Redo2, RefreshCw, RotateCcw, RotateCw, Save, ScanText, ScrollText,
   Search, Signature, SquareSplitHorizontal, Sun, SunMoon, Trash2, FilePlus2, LayoutGrid, Type, Undo2, Wrench, Underline, Strikethrough, SquareDashed,
   PenLine, StickyNote, TypeOutline, Square, Circle, Slash, MoveUpRight, Stamp, MessagesSquare, Check, X, CalendarDays, UserRound,
-  FileLock2, ShieldCheck,
+  FileLock2, ShieldCheck, TextCursorInput,
 } from "lucide-preact";
 import * as A from "../actions";
 import * as P from "../pages";
@@ -29,6 +29,7 @@ import { startHeaders, startWatermark } from "./StampUI";
 import { startLabels, startProperties } from "./MetaUI";
 import { startSecure } from "./SecureUI";
 import { openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
+import { textEdit, toggleTextEdit } from "../textedit";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -484,6 +485,7 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { label: "Pages from a file…", run: () => tab && void startInsert(tab) },
         { label: "Blank page", run: () => tab && void insertBlankPage(tab) },
       ], "left", 200)} />
+      <TB icon={I(TextCursorInput, 17)} label="Edit text" title="Click a paragraph on the page to change its words (Esc to stop)" on={!!tab && textEdit.value === tab} disabled={!tab?.info.value?.isPdf} onClick={() => tab && toggleTextEdit(tab)} />
       <div class="sep" />
       <TB icon={I(FormInput, 17)} label="Forms" menu onClick={(e) => openMenu(e, formItems(tab), "left", 270)} />
       <TB icon={I(Highlighter, 17)} label="Comment" title="Highlight, draw, add notes and text (Comment tab)" onClick={() => updateSettings({ ribbon: "comment" })} />
@@ -517,7 +519,8 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { label: `Attached files${tab?.attachments.value?.length ? ` (${tab.attachments.value.length})` : ""}`, disabled: !tab?.attachments.value?.length, run: showAttachments },
         { label: "Table on this page to Excel / CSV…", disabled: !tab, run: () => tab && void openPageTable(tab) },
         { sep: true },
-        soon("Edit PDF", 6.3), soon("Redact", 6.5), soon("Compare", 7.5),
+        { label: "Edit text", check: !!tab && textEdit.value === tab, disabled: !tab?.info.value?.isPdf, run: () => tab && toggleTextEdit(tab) },
+        soon("Redact", 6.5), soon("Compare", 7.5),
       ], "left", 280)} />
       <TB icon={I(RefreshCw, 17)} label="Convert" menu onClick={(e) => openMenu(e, [
         { head: "From PDF" }, soon("Word", 7), soon("Excel", 7), soon("PowerPoint", 7), soon("Images (JPG, PNG, TIFF)", 7), soon("Text", 7),

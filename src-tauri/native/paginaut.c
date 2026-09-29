@@ -3069,6 +3069,24 @@ void fo_stamp_drop(fo_ctx *c, fo_stamp *st)
 	fz_free(CTX, st);
 }
 
+/* A story laid out edge to edge: MuPDF's own style sheet gives the body a 1em margin. */
+static fz_story *new_story(fz_context *ctx, fz_buffer *html, const char *css, fz_archive *arch)
+{
+	fz_story *story = NULL;
+	char *full = fz_malloc(ctx, strlen(css) + 32);
+	fz_try(ctx)
+	{
+		strcpy(full, "body{margin:0;padding:0}");
+		strcat(full, css);
+		story = fz_new_story(ctx, html, full, 12, arch);
+	}
+	fz_always(ctx)
+		fz_free(ctx, full);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return story;
+}
+
 static fz_matrix to_matrix(const float m[6])
 {
 	return fz_make_matrix(m[0], m[1], m[2], m[3], m[4], m[5]);
@@ -3089,7 +3107,7 @@ int fo_stamp_text(fo_ctx *c, fo_stamp *st, const char *html, const char *css, fl
 		float hgt;
 		fz_matrix ctm;
 		buf = fz_new_buffer_from_copied_data(CTX, (const unsigned char *)html, strlen(html));
-		story = fz_new_story(CTX, buf, css, 12, NULL);
+		story = new_story(CTX, buf, css, NULL);
 		fz_place_story(CTX, story, fz_make_rect(0, 0, width, 100000), &filled);
 		hgt = filled.y1 - filled.y0;
 		ctm = fz_concat(fz_translate(0, -hgt * valign / 2.0f), to_matrix(m));
@@ -3304,6 +3322,461 @@ int fo_stamp_end(fo_ctx *c, fo_stamp *st, const char *kind, int behind)
 	}
 	fz_catch(CTX)
 	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+
+/* ---------------------------------------------------------------- editing text */
+
+static fz_stext_page *paragraphs_of(fz_context *ctx, fz_display_list *l)
+{
+	fz_stext_options opts;
+	fz_init_stext_options(ctx, &opts);
+	opts.flags |= FZ_STEXT_PARAGRAPH_BREAK;
+	return fz_new_stext_page_from_display_list(ctx, l, &opts);
+}
+
+/* A paragraph's text: its lines joined by spaces; a word broken at a line's end ("exam-" "ple") joined again. */
+static void paragraph_text(fz_context *ctx, fz_buffer *out, fz_stext_block *b)
+{
+	for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
+	{
+		fz_stext_char *ch, *last = NULL;
+		if (!line->first_char)
+			continue;
+		if (out->len)
+		{
+			/* After a hyphen and before a small letter: the same word. */
+			int hyphen = out->data[out->len - 1] == '-';
+			int lower = line->first_char->c >= 'a' && line->first_char->c <= 'z';
+			if (hyphen && lower)
+				out->len--;
+			else if (out->data[out->len - 1] != ' ')
+				fz_append_byte(ctx, out, ' ');
+		}
+		for (ch = line->first_char; ch; ch = ch->next)
+			last = ch;
+		for (ch = line->first_char; ch; ch = ch->next)
+			if (!(ch == last && ch->c == ' '))
+				fz_append_rune(ctx, out, ch->c);
+	}
+}
+
+/* How a paragraph's lines line up: l(eft), r(ight), c(entre) or j(ustified). */
+static char paragraph_align(fz_stext_block *b)
+{
+	float l0 = 1e9f, l1 = -1e9f, r0 = 1e9f, r1 = -1e9f, c0 = 1e9f, c1 = -1e9f, rj0 = 1e9f, rj1 = -1e9f;
+	int n = 0;
+	for (fz_stext_line *line = b->u.t.first_line; line; line = line->next, n++)
+	{
+		fz_rect r = line->bbox;
+		float c = (r.x0 + r.x1) / 2;
+		l0 = fz_min(l0, r.x0), l1 = fz_max(l1, r.x0);
+		r0 = fz_min(r0, r.x1), r1 = fz_max(r1, r.x1);
+		c0 = fz_min(c0, c), c1 = fz_max(c1, c);
+		if (line->next)
+			rj0 = fz_min(rj0, r.x1), rj1 = fz_max(rj1, r.x1);
+	}
+	if (n < 2)
+		return 'l';
+	if (l1 - l0 < 2 && n >= 3 && rj1 - rj0 < 2)
+		return 'j';
+	if (l1 - l0 < 2)
+		return 'l';
+	if (r1 - r0 < 2)
+		return 'r';
+	if (c1 - c0 < 3)
+		return 'c';
+	return 'l';
+}
+
+static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz_stext_block *b, const float o[4], int *n)
+{
+	for (; b; b = b->next)
+	{
+		fz_stext_char *first = NULL;
+		float lead = 0;
+		int lines = 0;
+		if (b->type == FZ_STEXT_BLOCK_STRUCT && b->u.s.down)
+		{
+			paragraphs_json(ctx, buf, text, b->u.s.down->first_block, o, n);
+			continue;
+		}
+		if (b->type != FZ_STEXT_BLOCK_TEXT || !b->u.t.first_line)
+			continue;
+		for (fz_stext_line *line = b->u.t.first_line; line && !first; line = line->next)
+			for (fz_stext_char *ch = line->first_char; ch && !first; ch = ch->next)
+				if (ch->c != ' ')
+					first = ch;
+		if (!first)
+			continue;
+		fz_clear_buffer(ctx, text);
+		paragraph_text(ctx, text, b);
+		fz_terminate_buffer(ctx, text);
+		if ((*n)++)
+			fz_append_byte(ctx, buf, ',');
+		fz_append_string(ctx, buf, "{\"r\":");
+		put_bbox(ctx, buf, b->bbox, o);
+		fz_append_string(ctx, buf, ",\"l\":[");
+		{
+			float prev = 0;
+			for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
+			{
+				float base = line->first_char ? line->first_char->origin.y : line->bbox.y1;
+				if (lines)
+					lead += base - prev;
+				prev = base;
+				fz_append_printf(ctx, buf, "%s[%.2f,%.2f,%.2f,%.2f,%.2f]", lines++ ? "," : "",
+					line->bbox.x0 - o[0], line->bbox.y0 - o[1], line->bbox.x1 - o[0], line->bbox.y1 - o[1], base - o[1]);
+			}
+		}
+		fz_append_printf(ctx, buf, "],\"s\":%.2f,\"lead\":%.2f,\"c\":\"#%06x\",\"b\":%d,\"i\":%d,\"serif\":%d,\"mono\":%d,\"a\":\"%c\",\"font\":",
+			first->size, lines > 1 ? lead / (lines - 1) : first->size * 1.2f, first->argb & 0xffffff,
+			fz_font_is_bold(ctx, first->font), fz_font_is_italic(ctx, first->font),
+			fz_font_is_serif(ctx, first->font), fz_font_is_monospaced(ctx, first->font), paragraph_align(b));
+		json_str(ctx, buf, fz_font_name(ctx, first->font));
+		fz_append_string(ctx, buf, ",\"t\":");
+		json_str(ctx, buf, fz_string_from_buffer(ctx, text));
+		fz_append_byte(ctx, buf, '}');
+	}
+}
+
+char *fo_paragraphs_json(fo_ctx *c, fo_list *l, const float b[4])
+{
+	fz_stext_page *t = NULL;
+	fz_buffer *buf = NULL, *text = NULL;
+	char *s = NULL;
+	fz_var(t);
+	fz_var(buf);
+	fz_var(text);
+	fz_try(CTX)
+	{
+		int n = 0;
+		t = paragraphs_of(CTX, (fz_display_list *)l);
+		buf = fz_new_buffer(CTX, 4096);
+		text = fz_new_buffer(CTX, 256);
+		fz_append_byte(CTX, buf, '[');
+		paragraphs_json(CTX, buf, text, t->first_block, b, &n);
+		fz_append_byte(CTX, buf, ']');
+		s = buffer_to_string(CTX, buf);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_stext_page(CTX, t);
+		fz_drop_buffer(CTX, buf);
+		fz_drop_buffer(CTX, text);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
+/* The font of the letter nearest to p (page coordinates), kept; NULL if none. */
+static fz_font *font_at(fz_context *ctx, fz_stext_block *b, fz_point p, float *best)
+{
+	fz_font *found = NULL;
+	for (; b; b = b->next)
+	{
+		if (b->type == FZ_STEXT_BLOCK_STRUCT && b->u.s.down)
+		{
+			fz_font *f = font_at(ctx, b->u.s.down->first_block, p, best);
+			if (f)
+			{
+				fz_drop_font(ctx, found);
+				found = f;
+			}
+			continue;
+		}
+		if (b->type != FZ_STEXT_BLOCK_TEXT)
+			continue;
+		for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
+			for (fz_stext_char *ch = line->first_char; ch; ch = ch->next)
+			{
+				fz_rect r = fz_rect_from_quad(ch->quad);
+				float dx = fz_max(0, fz_max(r.x0 - p.x, p.x - r.x1)), dy = fz_max(0, fz_max(r.y0 - p.y, p.y - r.y1));
+				float d = dx * dx + dy * dy;
+				if (ch->c != ' ' && d < *best)
+				{
+					*best = d;
+					fz_drop_font(ctx, found);
+					found = fz_keep_font(ctx, ch->font);
+				}
+			}
+	}
+	return found;
+}
+
+/* Removes the text (only) within rects: pdf_redact_page with pictures and drawings left alone.
+ * Redaction marks already on the page aren't applied (they're hidden from it meanwhile). */
+static void remove_text_in(fz_context *ctx, pdf_page *page, const fz_rect *rects, int n)
+{
+	pdf_redact_options opts = { 0, PDF_REDACT_IMAGE_NONE, PDF_REDACT_LINE_ART_NONE, PDF_REDACT_TEXT_REMOVE };
+	pdf_obj *annots = pdf_dict_get(ctx, page->obj, PDF_NAME(Annots));
+	for (int i = 0; i < pdf_array_len(ctx, annots); i++)
+	{
+		pdf_obj *o = pdf_array_get(ctx, annots, i);
+		if (pdf_name_eq(ctx, pdf_dict_get(ctx, o, PDF_NAME(Subtype)), PDF_NAME(Redact)))
+			pdf_dict_puts_drop(ctx, o, "Subtype", pdf_new_name(ctx, "PaginautKeepRedact"));
+	}
+	fz_try(ctx)
+	{
+		for (int i = 0; i < n; i++)
+		{
+			pdf_annot *r = pdf_create_annot(ctx, page, PDF_ANNOT_REDACT);
+			pdf_set_annot_rect(ctx, r, rects[i]);
+			pdf_drop_annot(ctx, r);
+		}
+		if (n)
+			pdf_redact_page(ctx, page->doc, page, &opts);
+	}
+	fz_always(ctx)
+	{
+		annots = pdf_dict_get(ctx, page->obj, PDF_NAME(Annots));
+		for (int i = 0; i < pdf_array_len(ctx, annots); i++)
+		{
+			pdf_obj *o = pdf_array_get(ctx, annots, i);
+			if (!strcmp(pdf_to_name(ctx, pdf_dict_get(ctx, o, PDF_NAME(Subtype))), "PaginautKeepRedact"))
+				pdf_dict_put(ctx, o, PDF_NAME(Subtype), PDF_NAME(Redact));
+		}
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* Draws `list` on the page (page coordinates relative to its origin, y down) as new
+ * page content on top: a form object named Pgn<prefix>n, placed by a small stream at
+ * the end; the page's own content is wrapped in q … Q once so its state can't move it. */
+static void add_page_drawing(fz_context *ctx, pdf_page *page, fz_display_list *list, fz_matrix m, const char *prefix)
+{
+	pdf_document *doc = page->doc;
+	fz_rect b = fz_bound_page(ctx, &page->super);
+	float w = b.x1 - b.x0, h = b.y1 - b.y0;
+	fz_device *dev = NULL;
+	pdf_obj *res = NULL, *xobj = NULL, *pre = NULL, *post = NULL;
+	fz_buffer *contents = NULL, *cmd = NULL;
+	fz_var(dev);
+	fz_var(res);
+	fz_var(xobj);
+	fz_var(pre);
+	fz_var(post);
+	fz_var(contents);
+	fz_var(cmd);
+	fz_try(ctx)
+	{
+		pdf_obj *pobj = page->obj, *pres, *xobjs, *arr, *cont;
+		fz_matrix ctm, place;
+		char name[64];
+		int k = 1;
+		dev = pdf_page_write(ctx, doc, fz_make_rect(0, 0, w, h), &res, &contents);
+		fz_run_display_list(ctx, list, dev, m, fz_infinite_rect, NULL);
+		fz_close_device(ctx, dev);
+		xobj = pdf_new_xobject(ctx, doc, fz_make_rect(0, 0, w, h), fz_identity, res, contents);
+		pres = page_own_resources(ctx, doc, pobj);
+		xobjs = pdf_dict_get(ctx, pres, PDF_NAME(XObject));
+		if (!xobjs)
+			xobjs = pdf_dict_put_dict(ctx, pres, PDF_NAME(XObject), 1);
+		do
+			fz_snprintf(name, sizeof name, "Pgn%s%d", prefix, k++);
+		while (pdf_dict_gets(ctx, xobjs, name));
+		pdf_dict_puts(ctx, xobjs, name, xobj);
+		pdf_page_transform(ctx, page, NULL, &ctm);
+		place = fz_concat(fz_make_matrix(1, 0, 0, -1, 0, h), fz_invert_matrix(ctm));
+
+		cont = pdf_dict_get(ctx, pobj, PDF_NAME(Contents));
+		if (pdf_is_array(ctx, cont))
+			arr = cont;
+		else
+		{
+			arr = pdf_new_array(ctx, doc, 3);
+			if (cont)
+				pdf_array_push(ctx, arr, cont);
+			pdf_dict_put_drop(ctx, pobj, PDF_NAME(Contents), arr);
+		}
+		{
+			int wrapped = 0;
+			for (int i = 0; i < pdf_array_len(ctx, arr) && !wrapped; i++)
+				wrapped = pdf_dict_gets(ctx, pdf_array_get(ctx, arr, i), "PaginautWrap") != NULL;
+			if (!wrapped)
+			{
+				fz_buffer *q = NULL;
+				pdf_obj *d1 = NULL, *d2 = NULL;
+				fz_var(q);
+				fz_var(d1);
+				fz_var(d2);
+				fz_try(ctx)
+				{
+					d1 = pdf_new_dict(ctx, doc, 1);
+					d2 = pdf_new_dict(ctx, doc, 1);
+					pdf_dict_puts_drop(ctx, d1, "PaginautWrap", PDF_TRUE);
+					pdf_dict_puts_drop(ctx, d2, "PaginautWrap", PDF_TRUE);
+					q = fz_new_buffer_from_copied_data(ctx, (const unsigned char *)"q\n", 2);
+					pre = pdf_add_stream(ctx, doc, q, d1, 0);
+					pdf_array_insert(ctx, arr, pre, 0);
+					fz_clear_buffer(ctx, q);
+					fz_append_string(ctx, q, "Q\n");
+					post = pdf_add_stream(ctx, doc, q, d2, 0);
+					pdf_array_push(ctx, arr, post);
+					pdf_drop_obj(ctx, post);
+					post = NULL;
+				}
+				fz_always(ctx)
+				{
+					fz_drop_buffer(ctx, q);
+					pdf_drop_obj(ctx, d1);
+					pdf_drop_obj(ctx, d2);
+				}
+				fz_catch(ctx)
+					fz_rethrow(ctx);
+			}
+		}
+		cmd = fz_new_buffer(ctx, 128);
+		fz_append_printf(ctx, cmd, "q %g %g %g %g %g %g cm /%s Do Q\n", place.a, place.b, place.c, place.d, place.e, place.f, name);
+		post = pdf_add_stream(ctx, doc, cmd, NULL, 0);
+		pdf_array_push(ctx, arr, post);
+	}
+	fz_always(ctx)
+	{
+		fz_drop_device(ctx, dev);
+		pdf_drop_obj(ctx, res);
+		pdf_drop_obj(ctx, xobj);
+		pdf_drop_obj(ctx, pre);
+		pdf_drop_obj(ctx, post);
+		fz_drop_buffer(ctx, contents);
+		fz_drop_buffer(ctx, cmd);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* The first letter's baseline and left edge in a display list (y down). */
+static int first_origin(fz_context *ctx, fz_display_list *list, fz_point *at)
+{
+	fz_stext_page *t = NULL;
+	int found = 0;
+	fz_var(t);
+	fz_try(ctx)
+	{
+		t = fz_new_stext_page_from_display_list(ctx, list, NULL);
+		for (fz_stext_block *b = t->first_block; b && !found; b = b->next)
+			if (b->type == FZ_STEXT_BLOCK_TEXT)
+				for (fz_stext_line *line = b->u.t.first_line; line && !found; line = line->next)
+					if (line->first_char)
+					{
+						at->x = line->bbox.x0;
+						at->y = line->first_char->origin.y;
+						found = 1;
+					}
+	}
+	fz_always(ctx)
+		fz_drop_stext_page(ctx, t);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return found;
+}
+
+int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const float probe[2], const char *html, const char *css,
+	float x, float baseline, float width)
+{
+	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
+	fz_stext_page *t = NULL;
+	fz_font *orig = NULL;
+	fz_archive *arch = NULL;
+	fz_buffer *hbuf = NULL;
+	fz_story *story = NULL;
+	fz_display_list *list = NULL;
+	fz_device *dev = NULL;
+	fz_rect *rects = NULL;
+	char *fullcss = NULL;
+	int began = 0;
+	if (!page)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF page");
+		return -1;
+	}
+	fz_var(t);
+	fz_var(orig);
+	fz_var(arch);
+	fz_var(hbuf);
+	fz_var(story);
+	fz_var(list);
+	fz_var(dev);
+	fz_var(rects);
+	fz_var(fullcss);
+	fz_var(began);
+	fz_try(CTX)
+	{
+		fz_rect filled;
+		fz_point at;
+		float best = 1e12f;
+		size_t cl;
+
+		/* The paragraph's own font, if the new text can be set in it (the HTML engine falls
+		 * back letter by letter to a close font for anything it lacks). */
+		t = fz_new_stext_page_from_page(CTX, (fz_page *)p, NULL);
+		orig = font_at(CTX, t->first_block, fz_make_point(probe[0], probe[1]), &best);
+		cl = strlen(css) + 256;
+		fullcss = fz_malloc(CTX, cl);
+		if (orig && orig->buffer && !orig->t3procs)
+		{
+			arch = fz_new_tree_archive(CTX, NULL);
+			fz_tree_archive_add_buffer(CTX, arch, "original.font", orig->buffer);
+			fz_snprintf(fullcss, cl, "@font-face{font-family:PgnOriginal;src:url(original.font)}%sp{font-family:PgnOriginal,%s;font-weight:normal;font-style:normal}",
+				css, fz_font_is_monospaced(CTX, orig) ? "monospace" : fz_font_is_serif(CTX, orig) ? "serif" : "sans-serif");
+		}
+		else
+			fz_strlcpy(fullcss, css, cl);
+
+		/* Laid out first, to line its first baseline up with the old one. */
+		hbuf = fz_new_buffer_from_copied_data(CTX, (const unsigned char *)html, strlen(html));
+		story = new_story(CTX, hbuf, fullcss, arch);
+		fz_place_story(CTX, story, fz_make_rect(0, 0, width, 100000), &filled);
+		list = fz_new_display_list(CTX, fz_make_rect(0, 0, width, filled.y1));
+		dev = fz_new_list_device(CTX, list);
+		fz_draw_story(CTX, story, dev, fz_identity);
+		fz_close_device(CTX, dev);
+		fz_drop_device(CTX, dev);
+		dev = NULL;
+		if (!first_origin(CTX, list, &at))
+			at = fz_make_point(0, 0);
+
+		pdf_begin_operation(CTX, page->doc, "Edit text");
+		began = 1;
+		/* The old text goes: each line's middle band, so letters of the lines above and below stay. */
+		rects = fz_malloc(CTX, (nlines ? nlines : 1) * sizeof(fz_rect));
+		for (int i = 0; i < nlines; i++)
+		{
+			const float *l = lines + 4 * i;
+			float hgt = l[3] - l[1];
+			rects[i] = fz_make_rect(l[0] - 0.5f, l[1] + hgt * 0.3f, l[2] + 0.5f, l[3] - hgt * 0.3f);
+		}
+		remove_text_in(CTX, page, rects, nlines);
+		if (html[0])
+			add_page_drawing(CTX, page, list, fz_translate(x, baseline - at.y), "Edit");
+		pdf_end_operation(CTX, page->doc);
+		began = 0;
+	}
+	fz_always(CTX)
+	{
+		fz_drop_device(CTX, dev);
+		fz_drop_display_list(CTX, list);
+		fz_drop_story(CTX, story);
+		fz_drop_buffer(CTX, hbuf);
+		fz_drop_archive(CTX, arch);
+		fz_drop_font(CTX, orig);
+		fz_drop_stext_page(CTX, t);
+		fz_free(CTX, rects);
+		fz_free(CTX, fullcss);
+	}
+	fz_catch(CTX)
+	{
+		if (began)
+			pdf_abandon_operation(CTX, page->doc);
 		FAIL();
 		return -1;
 	}

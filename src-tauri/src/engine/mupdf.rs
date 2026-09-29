@@ -717,6 +717,17 @@ fn take_bytes(c: *mut fo_ctx, p: *mut u8, len: usize) -> Vec<u8> {
 }
 
 impl Page {
+    /// Replaces a paragraph's text (see fo_edit_text); coordinates relative to the page origin.
+    #[allow(clippy::too_many_arguments)]
+    pub fn edit_text(&self, lines: &[[f32; 4]], probe: [f32; 2], html: &str, css: &str, x: f32, baseline: f32, width: f32) -> Result<()> {
+        let flat: Vec<f32> = lines.iter().flatten().copied().collect();
+        let (h, s) = (CString::new(html).map_err(|e| e.to_string())?, CString::new(css).map_err(|e| e.to_string())?);
+        with_kind(self.1, |c| {
+            let rc = unsafe { fo_edit_text(c, self.0, flat.as_ptr(), lines.len() as c_int, probe.as_ptr(), h.as_ptr(), s.as_ptr(), x, baseline, width) };
+            if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
     /// This page as a one-page PDF showing only `area` (page coordinates), turned by `rot`.
     pub fn area_pdf(&self, area: &[f32; 4], rot: i32) -> Result<Vec<u8>> {
         with_kind(self.1, |c| {
@@ -1049,6 +1060,11 @@ impl List {
                 _ => Err(last_error(c)),
             }
         })
+    }
+
+    /// Paragraphs on the page as JSON (see fo_paragraphs_json).
+    pub fn paragraphs_json(&self, bounds: &[f32; 4]) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_paragraphs_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c)))
     }
 
     /// Tables on the page as JSON (see fo_tables_json).
