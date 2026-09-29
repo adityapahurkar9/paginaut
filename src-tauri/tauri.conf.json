@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Folio",
+  "productName": "Paginaut",
   "version": "0.4.0",
-  "identifier": "app.folio.reader",
+  "identifier": "app.paginaut.reader",
   "build": {
     "frontendDist": "../dist",
     "beforeBuildCommand": "node build.mjs --prod",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Folio",
+        "title": "Paginaut",
         "width": 1280,
         "height": 860,
         "minWidth": 560,
@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: http://folio.localhost folio:; connect-src 'self' ipc: http://ipc.localhost http://folio.localhost folio:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: http://paginaut.localhost paginaut:; connect-src 'self' ipc: http://ipc.localhost http://paginaut.localhost paginaut:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:"
     }
   },
   "bundle": {

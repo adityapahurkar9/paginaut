@@ -1,5 +1,5 @@
 //! Search scaling benchmark: cargo run --release --example search_bench -- <file> <needle> [workers...]
-use folio_lib::engine::Engine;
+use paginaut_lib::engine::Engine;
 use std::sync::mpsc;
 use std::time::Instant;
 

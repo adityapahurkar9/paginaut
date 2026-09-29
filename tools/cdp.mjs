@@ -1,5 +1,5 @@
-// Dev helper: drives a running Folio window over the Chrome DevTools Protocol.
-// Start Folio with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333, then:
+// Dev helper: drives a running Paginaut window over the Chrome DevTools Protocol.
+// Start Paginaut with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333, then:
 //   node tools/cdp.mjs eval "<js expression>"   evaluate (awaits promises), print JSON result
 //   node tools/cdp.mjs shot out.png             screenshot of the window contents
 //   node tools/cdp.mjs logs [ms]                print console messages/errors for a while

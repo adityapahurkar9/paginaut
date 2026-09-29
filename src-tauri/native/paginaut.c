@@ -1,4 +1,4 @@
-#include "folio.h"
+#include "paginaut.h"
 #include <mupdf/fitz.h>
 #include <mupdf/pdf.h>
 #include <stdio.h>

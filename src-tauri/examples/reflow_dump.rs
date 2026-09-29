@@ -1,6 +1,6 @@
 //! Reflow extraction check: cargo run --release --example reflow_dump -- <file> <out-dir> [pages...]
 //! Times extracting every page, and writes the JSON of the listed pages to <out-dir>/p<N>.json.
-use folio_lib::engine::Engine;
+use paginaut_lib::engine::Engine;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 

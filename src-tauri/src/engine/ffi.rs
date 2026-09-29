@@ -1,4 +1,4 @@
-//! Raw bindings to `native/folio.c`. Everything here is `unsafe`; the safe
+//! Raw bindings to `native/paginaut.c`. Everything here is `unsafe`; the safe
 //! layer lives in `engine::mupdf`.
 #![allow(non_camel_case_types)]
 

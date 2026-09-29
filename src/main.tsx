@@ -22,7 +22,7 @@ render(<App />, document.getElementById("app")!);
 api.userName().then(setAuthor).catch(() => {});
 
 // Diagnostics hook for tools/cdp.mjs.
-(window as unknown as { folio: unknown }).folio = { openFiles, tabs, activeTab, renderer, actions: A, pages: P };
+(window as unknown as { paginaut: unknown }).paginaut = { openFiles, tabs, activeTab, renderer, actions: A, pages: P };
 
 // Show the window once the first frame is painted (no white flash).
 requestAnimationFrame(() => requestAnimationFrame(() => getCurrentWindow().show()));

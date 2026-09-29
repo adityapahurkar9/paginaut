@@ -221,7 +221,7 @@ function commands(): Item[] {
     c("Next tab", A.nextTab, "Ctrl+Tab"),
     c("Close tab", A.closeActive, "Ctrl+W", () => !!activeTab.value),
     c("Keyboard shortcuts", () => (helpPanel.value = "shortcuts"), "F1"),
-    c("About Folio", () => (helpPanel.value = "about"), ""),
+    c("About Paginaut", () => (helpPanel.value = "about"), ""),
   ];
 }
 

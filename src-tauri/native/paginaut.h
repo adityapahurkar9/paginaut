@@ -1,4 +1,4 @@
-/* Folio's thin C layer over MuPDF.
+/* Paginaut's thin C layer over MuPDF.
  *
  * Rust never touches MuPDF structs directly: everything goes through these
  * functions, which wrap MuPDF's setjmp-based exceptions in fz_try/fz_catch
@@ -11,8 +11,8 @@
  *   - display lists are immutable once built and can be rendered by any
  *     thread in parallel.
  */
-#ifndef FOLIO_H
-#define FOLIO_H
+#ifndef PAGINAUT_H
+#define PAGINAUT_H
 
 #include <stddef.h>
 

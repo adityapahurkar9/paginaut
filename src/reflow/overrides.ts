@@ -4,7 +4,7 @@ import type { ItemKind, LayoutOverrides, PageOverride } from "./model";
 import type { Box } from "./model";
 import type { Tab } from "../store";
 
-const storageKey = (path: string) => `folio.layout.${path.toLowerCase()}`;
+const storageKey = (path: string) => `paginaut.layout.${path.toLowerCase()}`;
 const bySignal = new WeakMap<Tab, { path: string; ov: Signal<LayoutOverrides> }>();
 
 /** The tab's corrections (a signal: Read/Book rebuild when it changes). */

@@ -1,6 +1,6 @@
 # Checks whether minimizing a window animates: captures the window's screen area
 # rapidly while minimizing and counts frames that are neither "window" nor "desktop".
-#   powershell -File tools/minimize-anim.ps1 -Exe <path> [-Title Folio] [-Via showwindow|syscommand]
+#   powershell -File tools/minimize-anim.ps1 -Exe <path> [-Title Paginaut] [-Via showwindow|syscommand]
 param([string]$Exe, [string]$Title = "", [string]$Via = "showwindow")
 Add-Type -AssemblyName System.Drawing
 Add-Type @"

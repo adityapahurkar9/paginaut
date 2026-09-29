@@ -1,7 +1,7 @@
 # Samples total private memory of an app's whole process tree over time.
-#   powershell -File tools/memwatch.ps1 -App folio  -Seconds 60 [-Interval 0.5] [-Out file.csv]
-#   powershell -File tools/memwatch.ps1 -App chrome -Match folio-chrome-bench -Seconds 60
-param([string]$App = "folio", [string]$Match = "", [double]$Seconds = 60, [double]$Interval = 0.5, [string]$Out = "")
+#   powershell -File tools/memwatch.ps1 -App paginaut  -Seconds 60 [-Interval 0.5] [-Out file.csv]
+#   powershell -File tools/memwatch.ps1 -App chrome -Match paginaut-chrome-bench -Seconds 60
+param([string]$App = "paginaut", [string]$Match = "", [double]$Seconds = 60, [double]$Interval = 0.5, [string]$Out = "")
 
 function Get-TreeIds {
   $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine

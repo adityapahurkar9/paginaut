@@ -1,4 +1,4 @@
-//! Tauri glue: commands, the `folio://` pixel protocol, and app state.
+//! Tauri glue: commands, the `paginaut://` pixel protocol, and app state.
 
 use crate::engine::{DocId, DocInfo, Engine, RenderReq, SearchOptions};
 use parking_lot::Mutex;
@@ -390,12 +390,12 @@ pub async fn certs() -> Res<Vec<crate::dsc::CertSummary>> {
     .await
 }
 
-/// Developers only: with FOLIO_TEST_CERT set, a throwaway certificate held in
+/// Developers only: with PAGINAUT_TEST_CERT set, a throwaway certificate held in
 /// memory is offered, to try signing without a token.
 fn test_cert() -> Res<Option<crate::dsc::Cert>> {
     #[cfg(windows)]
-    if std::env::var_os("FOLIO_TEST_CERT").is_some() {
-        return crate::dsc::test_cert("Folio Test Signer").map(Some);
+    if std::env::var_os("PAGINAUT_TEST_CERT").is_some() {
+        return crate::dsc::test_cert("Paginaut Test Signer").map(Some);
     }
     Ok(None)
 }
@@ -547,7 +547,7 @@ pub async fn signed_version(state: State<'_, AppState>, doc: DocId, i: usize) ->
             return Err("The signature's byte range doesn't fit the file.".into());
         }
         let stem = std::path::Path::new(&path).file_stem().and_then(|x| x.to_str()).unwrap_or("document").to_string();
-        let dir = std::env::temp_dir().join("Folio");
+        let dir = std::env::temp_dir().join("Paginaut");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let name = s["name"].as_str().unwrap_or("signature").replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
         let out = dir.join(format!("{stem} (as signed - {name}).pdf"));
@@ -684,7 +684,7 @@ pub fn forward_files(app: &tauri::AppHandle, files: Vec<String>) {
     }
 }
 
-// ---------------------------------------------------------------- folio:// protocol
+// ---------------------------------------------------------------- paginaut:// protocol
 
 fn query(uri: &str) -> HashMap<String, String> {
     uri.split_once('?')
@@ -707,7 +707,7 @@ fn respond(responder: UriSchemeResponder, status: StatusCode, body: Vec<u8>) {
     responder.respond(resp);
 }
 
-/// `folio://localhost/render?d=<doc>&p=<page>&s=<scale>&r=<rot>&e=<extras>&c=x0,y0,x1,y1&id=<rid>&q=<prio>`
+/// `paginaut://localhost/render?d=<doc>&p=<page>&s=<scale>&r=<rot>&e=<extras>&c=x0,y0,x1,y1&id=<rid>&q=<prio>`
 /// Responds with 8-byte header (width, height LE) + RGBA pixels; 204 if cancelled.
 pub fn protocol<R: tauri::Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
     let state = ctx.app_handle().state::<AppState>();

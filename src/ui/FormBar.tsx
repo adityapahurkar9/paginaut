@@ -22,7 +22,7 @@ export function FormBar({ tab }: { tab: Tab }) {
     return (
       <div class="formbar warn">
         <FormInput size={16} />
-        <span>This is a dynamic (XFA) form. Folio can show it but not fill it in; it needs Adobe Reader.</span>
+        <span>This is a dynamic (XFA) form. Paginaut can show it but not fill it in; it needs Adobe Reader.</span>
         <button class="ib sm" aria-label="Dismiss" onClick={close}>
           <X size={14} />
         </button>

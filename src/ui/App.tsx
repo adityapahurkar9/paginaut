@@ -85,7 +85,7 @@ function TitleBar() {
           <path d="M14 2v6h6" fill="none" stroke="var(--chrome)" stroke-width="1.6" stroke-linejoin="round" />
           <path d="M8.5 13h7M8.5 16.5h5" stroke="var(--on-acc)" stroke-width="1.6" stroke-linecap="round" />
         </svg>
-        <span data-tauri-drag-region>Folio</span>
+        <span data-tauri-drag-region>Paginaut</span>
       </div>
       <div class="tabs">
         {tabs.value.map((t) => (
@@ -282,7 +282,7 @@ function StatusBar() {
       <div class="sb-side end">
         {busy && <span class="busy-dot" title="Rendering" />}
         {sys && (
-          <span class="muted" title={`Memory used by Folio (all its processes) · ${sys.cpus} logical processors, ${sys.workers} render threads · ${fmtBytes(renderer.cache.size)} page cache`}>
+          <span class="muted" title={`Memory used by Paginaut (all its processes) · ${sys.cpus} logical processors, ${sys.workers} render threads · ${fmtBytes(renderer.cache.size)} page cache`}>
             {fmtBytes(sys.processMemory)} · {sys.workers} threads
           </span>
         )}

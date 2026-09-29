@@ -1,6 +1,6 @@
 // Evaluated in the app via tools/cdp.mjs: scroll test at a given speed (px per frame).
 (async (step, frames) => {
-  const v = window.folio.activeTab.value.viewer; const el = v.el;
+  const v = window.paginaut.activeTab.value.viewer; const el = v.el;
   el.scrollTop = 0; await new Promise(r => setTimeout(r, 400));
   const times = []; let last = performance.now(); let blank = 0, lowOnly = 0, checks = 0;
   for (let i = 0; i < frames; i++) {

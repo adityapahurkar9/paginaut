@@ -43,7 +43,7 @@ export function HelpDialogs() {
   if (!p) return null;
   return (
     <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && (helpPanel.value = null)}>
-      <div class={`dialog help ${p}`} role="dialog" aria-label={p === "about" ? "About Folio" : "Keyboard shortcuts"}>
+      <div class={`dialog help ${p}`} role="dialog" aria-label={p === "about" ? "About Paginaut" : "Keyboard shortcuts"}>
         <button class="ib sm close" aria-label="Close" onClick={() => (helpPanel.value = null)}>
           <X size={16} />
         </button>
@@ -81,7 +81,7 @@ function About() {
   }, []);
   return (
     <>
-      <h2>Folio {version}</h2>
+      <h2>Paginaut {version}</h2>
       <span class="muted">A fast reader and editor for PDFs, e-books, comics and images.</span>
       <div class="about-rows">
         <div><span>Engine</span><span>MuPDF 1.28.5 (native, multi-threaded)</span></div>

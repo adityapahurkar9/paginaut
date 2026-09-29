@@ -3,12 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Folio</title>
+    <title>Paginaut</title>
     <link rel="stylesheet" href="styles.css" />
     <script>
+      // The app was called Folio up to 0.4.0: carry its saved settings, recent files,
+      // reading positions and layout fixes over to the new names (once).
+      try {
+        // Snapshot the keys first: adding and removing keys reorders localStorage.key(i).
+        var keys = [];
+        for (var i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+        for (var j = 0; j < keys.length; j++) {
+          var k = keys[j];
+          if (k && k.indexOf("folio.") === 0) {
+            var nk = "paginaut." + k.slice(6);
+            if (localStorage.getItem(nk) === null) localStorage.setItem(nk, localStorage.getItem(k));
+            localStorage.removeItem(k);
+          }
+        }
+      } catch (e) {}
       // Apply the saved theme before first paint so there's no flash.
       try {
-        var t = JSON.parse(localStorage.getItem("folio.settings") || "{}").theme || "system";
+        var t = JSON.parse(localStorage.getItem("paginaut.settings") || "{}").theme || "system";
         if (t === "system") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
         document.documentElement.dataset.theme = t;
       } catch (e) {}

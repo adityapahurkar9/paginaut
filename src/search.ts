@@ -14,7 +14,7 @@ export interface SearchOpts {
 
 function loadOpts(): SearchOpts {
   try {
-    return { matchCase: false, wholeWord: false, regex: false, ...JSON.parse(localStorage.getItem("folio.searchOpts") || "{}") };
+    return { matchCase: false, wholeWord: false, regex: false, ...JSON.parse(localStorage.getItem("paginaut.searchOpts") || "{}") };
   } catch {
     return { matchCase: false, wholeWord: false, regex: false };
   }
@@ -23,7 +23,7 @@ export const searchOpts = signal<SearchOpts>(loadOpts());
 export function setSearchOpts(patch: Partial<SearchOpts>) {
   searchOpts.value = { ...searchOpts.value, ...patch };
   try {
-    localStorage.setItem("folio.searchOpts", JSON.stringify(searchOpts.value));
+    localStorage.setItem("paginaut.searchOpts", JSON.stringify(searchOpts.value));
   } catch {
     /* not persisted */
   }

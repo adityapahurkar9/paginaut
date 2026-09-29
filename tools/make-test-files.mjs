@@ -87,13 +87,13 @@ function zip(entries) {
 // ---------------------------------------------------------------- EPUB
 {
   const chapter = (n) => `<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter ${n}</title></head><body><h1>Chapter ${n}</h1>${
-    Array.from({ length: 12 }, (_, i) => `<p>This is paragraph ${i + 1} of chapter ${n}. Reflowable books are laid out to a page size by Folio, so text wraps like an e-reader. हिंदी पाठ भी सही दिखना चाहिए।</p>`).join("")
+    Array.from({ length: 12 }, (_, i) => `<p>This is paragraph ${i + 1} of chapter ${n}. Reflowable books are laid out to a page size by Paginaut, so text wraps like an e-reader. हिंदी पाठ भी सही दिखना चाहिए।</p>`).join("")
   }</body></html>`;
   const files = [
     { name: "mimetype", data: "application/epub+zip", store: true },
     { name: "META-INF/container.xml", data: `<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>` },
-    { name: "OEBPS/content.opf", data: `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Test Book</dc:title><dc:identifier id="id">folio-test</dc:identifier><dc:language>en</dc:language></metadata><manifest>${[1, 2, 3].map((n) => `<item id="c${n}" href="c${n}.xhtml" media-type="application/xhtml+xml"/>`).join("")}<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest><spine toc="ncx">${[1, 2, 3].map((n) => `<itemref idref="c${n}"/>`).join("")}</spine></package>` },
-    { name: "OEBPS/toc.ncx", data: `<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="folio-test"/></head><docTitle><text>Test Book</text></docTitle><navMap>${[1, 2, 3].map((n) => `<navPoint id="n${n}" playOrder="${n}"><navLabel><text>Chapter ${n}</text></navLabel><content src="c${n}.xhtml"/></navPoint>`).join("")}</navMap></ncx>` },
+    { name: "OEBPS/content.opf", data: `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Test Book</dc:title><dc:identifier id="id">paginaut-test</dc:identifier><dc:language>en</dc:language></metadata><manifest>${[1, 2, 3].map((n) => `<item id="c${n}" href="c${n}.xhtml" media-type="application/xhtml+xml"/>`).join("")}<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest><spine toc="ncx">${[1, 2, 3].map((n) => `<itemref idref="c${n}"/>`).join("")}</spine></package>` },
+    { name: "OEBPS/toc.ncx", data: `<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="paginaut-test"/></head><docTitle><text>Test Book</text></docTitle><navMap>${[1, 2, 3].map((n) => `<navPoint id="n${n}" playOrder="${n}"><navLabel><text>Chapter ${n}</text></navLabel><content src="c${n}.xhtml"/></navPoint>`).join("")}</navMap></ncx>` },
     ...[1, 2, 3].map((n) => ({ name: `OEBPS/c${n}.xhtml`, data: chapter(n) })),
   ];
   fs.writeFileSync(`${out}/book.epub`, zip(files));

@@ -1,6 +1,6 @@
-# Watch-it-yourself check of Folio's minimize animation.
-# Opens Folio, then minimizes it twice:
-#   1) the way Folio's own minimize button does it,
+# Watch-it-yourself check of Paginaut's minimize animation.
+# Opens Paginaut, then minimizes it twice:
+#   1) the way Paginaut's own minimize button does it,
 #   2) the standard Windows way (like the taskbar / Win+Down).
 Add-Type @"
 using System; using System.Text; using System.Runtime.InteropServices;
@@ -12,16 +12,16 @@ public static class D {
  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
  public static IntPtr Find(int pid) { IntPtr f = IntPtr.Zero; EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p);
-   var t = new StringBuilder(64); GetWindowText(h, t, 64); if (p == pid && t.ToString() == "Folio") { f = h; return false; } return true; }, IntPtr.Zero); return f; } }
+   var t = new StringBuilder(64); GetWindowText(h, t, 64); if (p == pid && t.ToString() == "Paginaut") { f = h; return false; } return true; }, IntPtr.Zero); return f; } }
 "@
 $root = Split-Path $PSScriptRoot -Parent
-Get-Process folio -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process paginaut -ErrorAction SilentlyContinue | Stop-Process -Force
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9333"
-$p = Start-Process (Join-Path $root "src-tauri\target\release\folio.exe") -PassThru
+$p = Start-Process (Join-Path $root "src-tauri\target\release\paginaut.exe") -PassThru
 $h = [IntPtr]::Zero; for ($i = 0; $i -lt 100 -and $h -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 100; $h = [D]::Find($p.Id) }
 Start-Sleep -Seconds 2
 
-Write-Host "Test 1 in 3 s: Folio's own minimize button. Watch the window..."
+Write-Host "Test 1 in 3 s: Paginaut's own minimize button. Watch the window..."
 Start-Sleep -Seconds 3
 node (Join-Path $root "tools\cdp.mjs") eval "window.__TAURI_INTERNALS__.invoke('plugin:window|minimize', { label: 'main' }).then(() => 'ok')" | Out-Null
 Start-Sleep -Seconds 2

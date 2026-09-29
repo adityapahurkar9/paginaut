@@ -67,7 +67,7 @@ field(`/FT /Tx /T (pin) /Ff 16777216 /MaxLen 6 ${DA}`, pin);
 field(`/FT /Tx /T (comments) /Ff 4096 ${DA}`, row("Comments", 70));
 field(`/FT /Sig /T (signature)`, row("Signature", 50));
 
-let stream = "BT /Helv 20 Tf 72 745 Td (Folio test form) Tj ET\n";
+let stream = "BT /Helv 20 Tf 72 745 Td (Paginaut test form) Tj ET\n";
 for (const [text, ty, tx] of labels) stream += `BT /Helv 11 Tf ${tx ?? 72} ${ty} Td ${pdfStr(text)} Tj ET\n`;
 objs[content - 1] = `<< /Length ${stream.length} >>\nstream\n${stream}endstream`;
 objs[page - 1] = `<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 612 792] /Contents ${content} 0 R /Resources << /Font << /Helv ${helv} 0 R >> >> /Annots [${annots.map((a) => `${a} 0 R`).join(" ")}] >>`;

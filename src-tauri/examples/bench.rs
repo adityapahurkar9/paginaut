@@ -1,6 +1,6 @@
 //! Engine benchmark without the UI:
 //!   cargo run --release --example bench -- <file.pdf> [workers] [dpi]
-use folio_lib::engine::{Engine, RenderReq};
+use paginaut_lib::engine::{Engine, RenderReq};
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -27,7 +27,7 @@ fn main() {
     let t3 = Instant::now();
     for p in 0..n {
         let tx = tx.clone();
-        let req = RenderReq { page: p, scale: dpi / 72.0, rotate: 0, clip: None, extras: true };
+        let req = RenderReq { page: p, scale: dpi / 72.0, rotate: 0, clip: None, extras: 1 };
         engine.render(info.doc_id, req, 0, 0, move |r| {
             tx.send(r.map(|o| o.map(|x| (x.width, x.height)))).unwrap();
         });
@@ -53,7 +53,7 @@ fn main() {
     let one = |p: usize| {
         let (tx, rx) = mpsc::channel();
         let t = Instant::now();
-        let req = RenderReq { page: p, scale: 1.5 * 96.0 / 72.0, rotate: 0, clip: None, extras: true };
+        let req = RenderReq { page: p, scale: 1.5 * 96.0 / 72.0, rotate: 0, clip: None, extras: 1 };
         engine.render(info.doc_id, req, 0, 100, move |r| tx.send(r.is_ok()).unwrap());
         rx.recv().unwrap();
         t.elapsed()

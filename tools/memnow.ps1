@@ -1,6 +1,6 @@
-# One-shot memory reading of Folio's whole process tree: "<private MB> <working set MB>".
+# One-shot memory reading of Paginaut's whole process tree: "<private MB> <working set MB>".
 $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name
-$root = $all | Where-Object { $_.Name -eq "folio.exe" } | Select-Object -First 1
+$root = $all | Where-Object { $_.Name -eq "paginaut.exe" } | Select-Object -First 1
 if (-not $root) { "0 0"; exit }
 $ids = @($root.ProcessId); $changed = $true
 while ($changed) { $changed = $false; foreach ($p in $all) { if ($ids -contains $p.ParentProcessId -and -not ($ids -contains $p.ProcessId)) { $ids += $p.ProcessId; $changed = $true } } }

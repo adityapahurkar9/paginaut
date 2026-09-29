@@ -26,12 +26,12 @@ fn main() {
     }
 
     cc::Build::new()
-        .file("native/folio.c")
+        .file("native/paginaut.c")
         .include(mupdf.join("include"))
         .define("NDEBUG", None)
         .opt_level(2)
         .warnings(false)
-        .compile("folio_native");
+        .compile("paginaut_native");
 
     println!("cargo:rustc-link-search=native={}", libdir.display());
     for lib in MUPDF_LIBS {
@@ -42,8 +42,8 @@ fn main() {
     }
     // The frontend is embedded at compile time; rebuild when it changes.
     println!("cargo:rerun-if-changed=../dist");
-    println!("cargo:rerun-if-changed=native/folio.c");
-    println!("cargo:rerun-if-changed=native/folio.h");
+    println!("cargo:rerun-if-changed=native/paginaut.c");
+    println!("cargo:rerun-if-changed=native/paginaut.h");
     println!("cargo:rerun-if-changed={}", libdir.join("libmupdf.lib").display());
 
     tauri_build::build();

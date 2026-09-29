@@ -179,7 +179,7 @@ let nextId = 1;
 export const newId = () => nextId++;
 
 /** Base URL of the custom pixel protocol (Windows serves custom schemes over http://<scheme>.localhost). */
-const RENDER_BASE = navigator.userAgent.includes("Windows") ? "http://folio.localhost/render" : "folio://localhost/render";
+const RENDER_BASE = navigator.userAgent.includes("Windows") ? "http://paginaut.localhost/render" : "paginaut://localhost/render";
 
 export interface RenderParams {
   doc: number;

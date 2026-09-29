@@ -1,4 +1,4 @@
-# Folio roadmap
+# Paginaut roadmap
 
 ## Phase 1: Viewer core (done)
 Native MuPDF engine with a worker pool, virtual scrolling, previews then sharp renders, tiles at deep zoom,
@@ -78,7 +78,7 @@ Later (after OCR, Phase 5):
 ## Phase 3: Form filling (done)
 - [x] Engine: fields listed per page (text, checkbox, radio, dropdown, list, signature), values set through MuPDF so
       the form's own scripts run: number/date formatting, validation (bad values are refused), calculated fields
-- [x] Pages render without their fillable fields and Folio draws them as real inputs in place (like Chrome): instant
+- [x] Pages render without their fillable fields and Paginaut draws them as real inputs in place (like Chrome): instant
       typing, no flicker. Multi-line, password, comb (one character per box), editable dropdowns, required fields
 - [x] Formatted display ("Rs 37.50") with the plain value while editing; Tab moves between fields
 - [x] Undo/redo: one history for page edits and form edits (form steps live in MuPDF's journal; drawing pages and
@@ -123,7 +123,7 @@ DSC digital signatures (built; needs a check with a real token):
 - [x] Certificates from the Windows store (your token's driver puts them there): only ones that can sign; ones apps make
       for themselves (self-signed, or not for documents) hidden behind "show other certificates"; token or PC shown;
       expired ones listed but not usable; Refresh after plugging in a token
-- [x] Signing goes through Windows' own crypto, so the token asks for its PIN in its own window (Folio never sees it).
+- [x] Signing goes through Windows' own crypto, so the token asks for its PIN in its own window (Paginaut never sees it).
       CMS detached signature, SHA-256 (SHA-1 only if an old token can't do SHA-256), full certificate chain,
       signing time and signing-certificate-v2 attributes; reason, location and signer name recorded in the signature
 - [x] Sign with a certificate (Sign pane › Digital signature, or click a form's empty signature field): reason (common ones or
@@ -136,7 +136,7 @@ DSC digital signatures (built; needs a check with a real token):
 - [x] Open signed version: the document exactly as a signature signed it, in a new tab
 - [x] Tested with a throwaway certificate held in memory (engine test and in the app): sign, second signer, comment
       after signing, a changed byte (caught), open signed version. Developers can offer that certificate in the app by
-      starting it with FOLIO_TEST_CERT=1; normal starts never show it
+      starting it with PAGINAUT_TEST_CERT=1; normal starts never show it
 - [ ] Check with your DSC token: sign, PIN in the token's window, open the result in Adobe Reader
 - [ ] Later: trusted timestamp (needs internet), revocation check (needs internet), .pfx certificate files
 
@@ -145,7 +145,11 @@ Also from testing:
       in Read mode, whatever the zoom
 - [x] The + next to the tabs opens a Home tab (recent files, open) instead of the Open dialog; Ctrl+T too. A file
       opened from it takes its place
-## 0.4.0: layout and memory
+## 0.4.0: new name, layout and memory
+- [x] Renamed from Folio to Paginaut ("Folio" is taken by several PDF apps, including a Windows one on the Microsoft
+      Store). New identifier `app.paginaut.reader`, `paginaut.exe`, `paginaut://` protocol, PAGINAUT_* developer
+      variables. The first start copies saved signatures and settings (recent files, reading positions, layout
+      fixes) over from Folio; an old Folio install is left alone until it's uninstalled
 - [x] Page box, zoom and the view modes (Single / Double / Read / Book) moved to the middle of the status bar;
       the zoom menu opens upwards. Find stays at the right end of the toolbar
 - [x] Narrow windows (side by side with another app): toolbar buttons that don't fit go behind a » button, whose
@@ -168,7 +172,7 @@ Also from testing:
 - [ ] Settings → Office conversion: shows detected engines, preference order (Auto or a fixed pick),
       "Download LibreOffice (~300 MB)". Each conversion dialog can override the engine for that file.
 - [ ] LibreOffice pack: official TDF installer, verified against its published checksum, unpacked into
-      Folio's own folder (no system install, no admin rights)
+      Paginaut's own folder (no system install, no admin rights)
 
 ## Phase 8: Packaging, updates and signing
 - [ ] GitHub repository (the user has an account) hosting source, releases and update files

@@ -88,7 +88,7 @@ impl Pool {
             .map(|i| {
                 let s = shared.clone();
                 std::thread::Builder::new()
-                    .name(format!("folio-worker-{i}"))
+                    .name(format!("paginaut-worker-{i}"))
                     .stack_size(8 << 20)
                     .spawn(move || worker(s))
                     .expect("spawn worker")

@@ -68,13 +68,13 @@ export const settings = signal<Settings>(
     ribbon: "home", coverSeparate: false, highlightFields: true, signPane: false,
     annot: { colors: { hl: "#ffd400", pen: "#e8453c", shape: "#e8453c", text: "#1c1c1c", note: "#ffd400" }, width: 1.5, fontSize: 12 }, reflow: REFLOW_DEFAULTS,
     dsc: { reason: "I approve this document", location: "", showDate: true, lock: false, newFile: true, place: "box", cert: "" },
-    ...load("folio.settings", {} as Partial<Settings>),
+    ...load("paginaut.settings", {} as Partial<Settings>),
   },
 );
 
 export function updateSettings(patch: Partial<Settings>) {
   settings.value = { ...settings.value, ...patch };
-  save("folio.settings", settings.value);
+  save("paginaut.settings", settings.value);
 }
 
 const systemDark = matchMedia("(prefers-color-scheme: dark)");
@@ -96,10 +96,10 @@ export interface RecentFile {
   pages?: number;
 }
 
-export const recent = signal<RecentFile[]>(load("folio.recent", { list: [] as RecentFile[] }).list);
+export const recent = signal<RecentFile[]>(load("paginaut.recent", { list: [] as RecentFile[] }).list);
 
 function saveRecent() {
-  save("folio.recent", { list: recent.value });
+  save("paginaut.recent", { list: recent.value });
 }
 
 export function rememberFile(path: string, patch: Partial<RecentFile>) {

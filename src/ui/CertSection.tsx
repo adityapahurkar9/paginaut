@@ -172,7 +172,7 @@ export function CertSection({ tab }: { tab: Tab | null }) {
         {field || place === "invisible" ? "Sign" : "Sign: draw the box next"}
       </button>
       {!isPdf && <p class="muted">Open a PDF to sign it.</p>}
-      {chosen?.hardware && <p class="muted">Your token asks for its PIN in its own window. Folio never sees it.</p>}
+      {chosen?.hardware && <p class="muted">Your token asks for its PIN in its own window. Paginaut never sees it.</p>}
     </div>
   );
 }

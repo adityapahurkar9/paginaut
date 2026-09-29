@@ -1,6 +1,6 @@
 //! Form filling check: cargo run --example form_test -- <form.pdf> <scratch-dir>
 //! Fills fields, checks the calculated total, toggles, undoes, saves and reopens.
-use folio_lib::engine::Engine;
+use paginaut_lib::engine::Engine;
 use serde_json::Value;
 
 fn field<'a>(ws: &'a [Value], name: &str) -> &'a Value {
@@ -18,7 +18,7 @@ fn main() {
     let d = engine.doc(info.doc_id).unwrap();
     let fi = d.forms_init().unwrap();
     println!("fields: {} xfa: {}", fi.fields, fi.xfa);
-    let ws = |d: &folio_lib::engine::Doc| -> Vec<Value> { serde_json::from_str(&d.widgets_json(0).unwrap()).unwrap() };
+    let ws = |d: &paginaut_lib::engine::Doc| -> Vec<Value> { serde_json::from_str(&d.widgets_json(0).unwrap()).unwrap() };
     let w = ws(&d);
     for x in &w {
         println!("  {:10} {:9} v={:?} on={} ff={} fs={} r={}", x["name"].as_str().unwrap(), x["t"].as_str().unwrap(), x["v"], x["on"], x["ff"], x["fs"], x["r"]);

@@ -84,7 +84,7 @@ pub struct Doc {
 /// What happens to private document copies once a background job finishes.
 /// Default `now`: each copy caches whatever pages its thread touched, so kept
 /// copies grow toward one full document each; reopening costs only ~45 ms per
-/// search. FOLIO_PRIVATE_POLICY=keep|now|idle overrides it for benchmarking.
+/// search. PAGINAUT_PRIVATE_POLICY=keep|now|idle overrides it for benchmarking.
 #[derive(Clone, Copy, Debug)]
 enum PrivatePolicy {
     Keep,
@@ -92,13 +92,13 @@ enum PrivatePolicy {
     Idle(u64),
 }
 
-/// Threads a single search may use (FOLIO_SEARCH_THREADS overrides; default 8).
+/// Threads a single search may use (PAGINAUT_SEARCH_THREADS overrides; default 8).
 fn search_threads() -> usize {
-    std::env::var("FOLIO_SEARCH_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(8)
+    std::env::var("PAGINAUT_SEARCH_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(8)
 }
 
 fn private_policy() -> PrivatePolicy {
-    match std::env::var("FOLIO_PRIVATE_POLICY").as_deref() {
+    match std::env::var("PAGINAUT_PRIVATE_POLICY").as_deref() {
         Ok("keep") => PrivatePolicy::Keep,
         Ok("idle") => PrivatePolicy::Idle(30),
         _ => PrivatePolicy::Now,
@@ -644,7 +644,7 @@ impl Engine {
         let cur = d.path();
         let out = target.unwrap_or_else(|| cur.clone());
         let in_place = same_file(&out, &cur);
-        let tmp = format!("{cur}.folio-tmp");
+        let tmp = format!("{cur}.paginaut-tmp");
         {
             let mut inner = d.inner.lock();
             inner.pages.clear();
@@ -786,7 +786,7 @@ impl Engine {
     /// is left as it is.
     pub fn save_flattened(&self, id: DocId, target: String, order: Vec<usize>, rot: Vec<i32>, annots: bool) -> Result<(), String> {
         let d = self.doc(id)?;
-        let tmp = format!("{target}.folio-tmp");
+        let tmp = format!("{target}.paginaut-tmp");
         d.inner.lock().doc.save_copy(&tmp)?;
         let res = (|| -> Result<(), String> {
             let copy = Document::open(&tmp)?;

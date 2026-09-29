@@ -1,6 +1,6 @@
 // Evaluated in the app: open a file and time the first preview / first sharp page.
 (async (path) => {
-  const f = window.folio;
+  const f = window.paginaut;
   const t0 = performance.now();
   f.openFiles([path]);
   const until = async (fn, ms = 20000) => { const s = performance.now(); while (!fn()) { if (performance.now() - s > ms) return false; await new Promise(r => setTimeout(r, 3)); } return true; };

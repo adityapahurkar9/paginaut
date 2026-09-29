@@ -483,7 +483,7 @@ function HelpTools() {
   return (
     <>
       <TB icon={I(Keyboard, 17)} label="Keyboard shortcuts" title="Keyboard shortcuts (F1)" onClick={() => (helpPanel.value = "shortcuts")} />
-      <TB icon={I(Info, 17)} label="About Folio" onClick={() => (helpPanel.value = "about")} />
+      <TB icon={I(Info, 17)} label="About Paginaut" onClick={() => (helpPanel.value = "about")} />
       <TB icon={I(RefreshCw, 17)} label="Check for updates" title="Coming in a later version (checks the GitHub releases)" disabled onClick={() => {}} />
     </>
   );

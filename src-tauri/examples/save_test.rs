@@ -1,6 +1,6 @@
 //! Save engine test: cargo run --release --example save_test -- <testfiles dir> <temp dir>
 //! Works on copies; never touches the originals.
-use folio_lib::engine::Engine;
+use paginaut_lib::engine::Engine;
 use std::time::Instant;
 
 fn main() {
@@ -53,7 +53,7 @@ fn main() {
     if let Ok(i) = res {
         engine.close(i.doc_id);
     }
-    check("no temp file left", !std::path::Path::new(&format!("{b}.folio-tmp")).exists(), String::new());
+    check("no temp file left", !std::path::Path::new(&format!("{b}.paginaut-tmp")).exists(), String::new());
 
     // 3. Save as: new file, deleted pages really gone (smaller file).
     let info = engine.open(&format!("{src_dir}/text-1000.pdf")).unwrap();

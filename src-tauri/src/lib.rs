@@ -60,7 +60,46 @@ fn memory_level(win: tauri::WebviewWindow, low: bool) {
     let _ = (win, low);
 }
 
+/// The app was called Folio (data under `app.folio.reader`) up to 0.4.0. On the first
+/// start under the new name, copy over what the user kept: saved signatures (encrypted
+/// for the Windows account, so they move as they are) and the page's local storage
+/// (settings, recent files, reading positions, layout fixes; the page renames its keys).
+/// Copied rather than moved, so an old install keeps working until it's uninstalled.
+/// Runs before WebView2 starts, so its storage isn't in use yet.
+#[cfg(windows)]
+fn migrate_from_folio() {
+    use std::{fs, io, path::Path, path::PathBuf};
+    fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
+        fs::create_dir_all(to)?;
+        for e in fs::read_dir(from)? {
+            let e = e?;
+            let dest = to.join(e.file_name());
+            if e.file_type()?.is_dir() { copy_dir(&e.path(), &dest)? } else { fs::copy(e.path(), dest).map(|_| ())? }
+        }
+        Ok(())
+    }
+    const OLD: &str = "app.folio.reader";
+    const NEW: &str = "app.paginaut.reader";
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    if let Some(roaming) = env("APPDATA") {
+        let (from, to) = (roaming.join(OLD).join("signatures.dat"), roaming.join(NEW).join("signatures.dat"));
+        if from.is_file() && !to.exists() && fs::create_dir_all(roaming.join(NEW)).is_ok() {
+            let _ = fs::copy(&from, &to);
+        }
+    }
+    if let Some(local) = env("LOCALAPPDATA") {
+        let storage = Path::new("EBWebView").join("Default").join("Local Storage");
+        let (from, to) = (local.join(OLD).join(&storage), local.join(NEW).join(&storage));
+        if from.is_dir() && !to.exists() && copy_dir(&from, &to).is_err() {
+            // A half copy would hide the old settings for good; start clean instead.
+            let _ = fs::remove_dir_all(&to);
+        }
+    }
+}
+
 pub fn run() {
+    #[cfg(windows)]
+    migrate_from_folio();
     let engine = engine::Engine::new(worker_count(), store_bytes()).expect("MuPDF failed to start");
     let args: Vec<String> = std::env::args().collect();
     let launch = app::files_from_args(&args, None);
@@ -73,7 +112,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { engine, launch_files: Mutex::new(launch), started: std::time::Instant::now() })
-        .register_asynchronous_uri_scheme_protocol("folio", app::protocol)
+        .register_asynchronous_uri_scheme_protocol("paginaut", app::protocol)
         .invoke_handler(tauri::generate_handler![
             app::open_document,
             app::unlock_document,
@@ -125,5 +164,5 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running Folio");
+        .expect("error while running Paginaut");
 }

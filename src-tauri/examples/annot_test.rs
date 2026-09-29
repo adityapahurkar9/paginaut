@@ -1,6 +1,6 @@
 //! Annotation check: cargo run --example annot_test -- <file.pdf> <scratch-dir>
 //! Adds each kind of annotation, changes and deletes some, undoes, saves and reopens.
-use folio_lib::engine::{mupdf::AnnotEdit, Engine};
+use paginaut_lib::engine::{mupdf::AnnotEdit, Engine};
 use serde_json::Value;
 
 fn main() {
@@ -18,7 +18,7 @@ fn main() {
     let mk = |kind: &str, e: AnnotEdit| d.annot_edit(0, None, Some(kind), e, false, "Tester").map(|(n, _)| n);
     let hl = mk("Highlight", AnnotEdit { quads: Some(vec![72.0, 40.0, 300.0, 40.0, 72.0, 60.0, 300.0, 60.0]), color: yellow.clone(), ..Default::default() });
     let ink = mk("Ink", AnnotEdit { ink: Some(vec![vec![80.0, 600.0, 120.0, 620.0, 160.0, 600.0, 200.0, 640.0]]), color: red.clone(), border: Some(2.0), ..Default::default() });
-    let ft = mk("FreeText", AnnotEdit { rect: Some([300.0, 600.0, 520.0, 630.0]), font: Some(("Helv".into(), 12.0, vec![0.0, 0.0, 0.8])), contents: Some("Hello from Folio".into()), ..Default::default() });
+    let ft = mk("FreeText", AnnotEdit { rect: Some([300.0, 600.0, 520.0, 630.0]), font: Some(("Helv".into(), 12.0, vec![0.0, 0.0, 0.8])), contents: Some("Hello from Paginaut".into()), ..Default::default() });
     let sq = mk("Square", AnnotEdit { rect: Some([80.0, 660.0, 200.0, 720.0]), color: red.clone(), border: Some(1.5), ..Default::default() });
     let ln = mk("Line", AnnotEdit { line: Some([250.0, 700.0, 400.0, 740.0]), line_endings: Some([0, 4]), color: red.clone(), border: Some(2.0), ..Default::default() });
     let st = mk("Stamp", AnnotEdit { rect: Some([420.0, 660.0, 560.0, 710.0]), icon: Some("Approved".into()), ..Default::default() });
@@ -32,7 +32,7 @@ fn main() {
     d.annot_edit(0, Some(sq.clone().unwrap()), None, AnnotEdit { color: Some(vec![0.0, 0.4, 1.0]), ..Default::default() }, false, "").unwrap();
     d.annot_edit(0, Some(note.clone().unwrap()), None, AnnotEdit { rect: Some([500.0, 100.0, 520.0, 120.0]), ..Default::default() }, false, "").unwrap();
     d.annot_edit(0, Some(ln.clone().unwrap()), None, AnnotEdit::default(), true, "").unwrap();
-    let count = |d: &folio_lib::engine::Doc| serde_json::from_str::<Vec<Value>>(&d.annots_json(0).unwrap()).unwrap().len();
+    let count = |d: &paginaut_lib::engine::Doc| serde_json::from_str::<Vec<Value>>(&d.annots_json(0).unwrap()).unwrap().len();
     println!("after delete: {}", count(&d));
     d.undo(false).unwrap();
     println!("after undo (line back): {}", count(&d));

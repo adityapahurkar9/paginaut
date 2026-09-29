@@ -1,7 +1,7 @@
 //! Digital signatures with certificates from the Windows certificate store: the
 //! store is where a DSC token's driver puts its certificates (Adobe finds them
 //! there too). Signing goes through Windows' own crypto, so the token's driver
-//! asks for its PIN in its own window; Folio never sees it.
+//! asks for its PIN in its own window; Paginaut never sees it.
 //!
 //! The signature is a CMS (PKCS #7) SignedData, detached, SHA-256, with the
 //! certificate chain and the signing-certificate-v2 attribute (as PAdES wants).
@@ -434,7 +434,7 @@ mod imp {
             let bits = 2048u32.to_le_bytes();
             NCryptSetProperty(key.into(), NCRYPT_LENGTH_PROPERTY, &bits, NCRYPT_FLAGS(0)).map_err(step("key length"))?;
             NCryptFinalizeKey(key, NCRYPT_FLAGS(0)).map_err(step("finalize key"))?;
-            let x500: Vec<u16> = format!("CN={name}, O=Folio test, C=IN").encode_utf16().chain(Some(0)).collect();
+            let x500: Vec<u16> = format!("CN={name}, O=Paginaut test, C=IN").encode_utf16().chain(Some(0)).collect();
             let mut len = 0u32;
             CertStrToNameW(ENC, windows::core::PCWSTR(x500.as_ptr()), CERT_X500_NAME_STR, None, None, &mut len, None).map_err(|e| e.message())?;
             let mut subject = vec![0u8; len as usize];
