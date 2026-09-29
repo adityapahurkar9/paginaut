@@ -3525,6 +3525,266 @@ int fo_set_metadata(fo_ctx *c, fo_doc *d, const char *key, const char *value)
 	return 0;
 }
 
+/* ---------------------------------------------------------------- protect, compress, repair */
+
+/* Collects the pages under `node` that can be read, noting what they inherit
+ * (resources, media box, crop box, rotation) from the nodes above. Visited objects
+ * are marked (and listed in `seen`, to unmark), which stops at cycles; `bad`
+ * counts entries that aren't pages. */
+static void collect_pages(fz_context *ctx, pdf_document *doc, pdf_obj *node, pdf_obj *inherit, pdf_obj *out, pdf_obj *seen, int depth, int *bad)
+{
+	static pdf_obj *const keys[4] = { PDF_NAME(Resources), PDF_NAME(MediaBox), PDF_NAME(CropBox), PDF_NAME(Rotate) };
+	pdf_obj *kids = pdf_dict_get(ctx, node, PDF_NAME(Kids));
+	pdf_obj *mine = NULL;
+	int i, n;
+	if (depth > 64 || pdf_mark_obj(ctx, node))
+	{
+		(*bad)++;
+		return;
+	}
+	pdf_array_push(ctx, seen, node);
+	fz_var(mine);
+	fz_try(ctx)
+	{
+		mine = pdf_copy_dict(ctx, inherit);
+		for (i = 0; i < 4; i++)
+		{
+			pdf_obj *v = pdf_dict_get(ctx, node, keys[i]);
+			if (v)
+				pdf_dict_put(ctx, mine, keys[i], v);
+		}
+		n = pdf_array_len(ctx, kids);
+		for (i = 0; i < n; i++)
+		{
+			pdf_obj *kid = pdf_array_get(ctx, kids, i);
+			if (!pdf_is_dict(ctx, kid))
+				(*bad)++;
+			else if (pdf_is_array(ctx, pdf_dict_get(ctx, kid, PDF_NAME(Kids))))
+				collect_pages(ctx, doc, kid, mine, out, seen, depth + 1, bad);
+			else if (pdf_name_eq(ctx, pdf_dict_get(ctx, kid, PDF_NAME(Type)), PDF_NAME(Page)) || pdf_dict_get(ctx, kid, PDF_NAME(Contents)))
+			{
+				if (pdf_mark_obj(ctx, kid))
+				{
+					(*bad)++;
+					continue;
+				}
+				pdf_array_push(ctx, seen, kid);
+				for (int k = 0; k < 4; k++)
+					if (!pdf_dict_get(ctx, kid, keys[k]) && pdf_dict_get(ctx, mine, keys[k]))
+						pdf_dict_put(ctx, kid, keys[k], pdf_dict_get(ctx, mine, keys[k]));
+				pdf_array_push(ctx, out, kid);
+			}
+			else
+				(*bad)++;
+		}
+	}
+	fz_always(ctx)
+		pdf_drop_obj(ctx, mine);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+int fo_pdf_fix_page_tree(fo_ctx *c, fo_doc *d)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_obj *pages = NULL, *seen = NULL, *inherit = NULL;
+	int bad = 0, dropped = 0;
+	if (!pdf || !pdf_was_repaired(CTX, pdf))
+		return 0;
+	fz_var(pages);
+	fz_var(seen);
+	fz_var(inherit);
+	fz_try(CTX)
+	{
+		pdf_obj *root = pdf_dict_getp(CTX, pdf_trailer(CTX, pdf), "Root/Pages");
+		int count = pdf_dict_get_int(CTX, root, PDF_NAME(Count));
+		pages = pdf_new_array(CTX, pdf, 64);
+		seen = pdf_new_array(CTX, pdf, 64);
+		inherit = pdf_new_dict(CTX, pdf, 4);
+		collect_pages(CTX, pdf, root, inherit, pages, seen, 0, &bad);
+		if ((bad || pdf_array_len(CTX, pages) != count) && pdf_array_len(CTX, pages) > 0)
+		{
+			/* One flat list of the pages that can be read, each with what it inherited. */
+			int n = pdf_array_len(CTX, pages);
+			pdf_begin_operation(CTX, pdf, "Repair page tree");
+			fz_try(CTX)
+			{
+				for (int i = 0; i < n; i++)
+					pdf_dict_put(CTX, pdf_array_get(CTX, pages, i), PDF_NAME(Parent), root);
+				pdf_dict_put(CTX, root, PDF_NAME(Kids), pages);
+				pdf_dict_put_int(CTX, root, PDF_NAME(Count), n);
+				pdf_dict_del(CTX, root, PDF_NAME(Parent));
+			}
+			fz_always(CTX)
+				pdf_end_operation(CTX, pdf);
+			fz_catch(CTX)
+				fz_rethrow(CTX);
+			dropped = count > n ? count - n : 0;
+		}
+	}
+	fz_always(CTX)
+	{
+		for (int i = 0; i < pdf_array_len(CTX, seen); i++)
+			pdf_unmark_obj(CTX, pdf_array_get(CTX, seen, i));
+		pdf_drop_obj(CTX, pages);
+		pdf_drop_obj(CTX, seen);
+		pdf_drop_obj(CTX, inherit);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return dropped;
+}
+
+char *fo_pdf_security_json(fo_ctx *c, fo_doc *d, const char *password)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	fz_buffer *b = NULL;
+	char *s = NULL;
+	fz_var(b);
+	fz_try(CTX)
+	{
+		int owner = 1, opens = 0, perms = -1, bits = 0;
+		const char *method = "";
+		if (pdf && pdf->crypt)
+		{
+			/* pdf_needs_password tries the empty password, which drops the keys when
+			 * that's wrong; authenticating again with the one it was opened with (or
+			 * none) puts them back, and says whether that one is the owner's. */
+			opens = pdf_needs_password(CTX, pdf);
+			owner = (pdf_authenticate_password(CTX, pdf, password ? password : "") & 4) != 0;
+			perms = pdf_crypt_permissions(CTX, pdf->crypt);
+			method = pdf_crypt_method(CTX, pdf->crypt);
+			bits = pdf_crypt_length(CTX, pdf->crypt);
+		}
+		b = fz_new_buffer(CTX, 128);
+		fz_append_string(CTX, b, "{\"method\":");
+		json_str(CTX, b, method);
+		fz_append_printf(CTX, b, ",\"bits\":%d,\"perms\":%d,\"owner\":%s,\"opens\":%s,\"repaired\":%s}", bits, perms,
+			owner ? "true" : "false", opens ? "true" : "false", pdf && pdf_was_repaired(CTX, pdf) ? "true" : "false");
+		s = buffer_to_string(CTX, b);
+	}
+	fz_always(CTX)
+		fz_drop_buffer(CTX, b);
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
+int fo_pdf_check_owner(fo_ctx *c, fo_doc *d, const char *candidate, const char *current)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	int ok = 0;
+	if (!pdf || !pdf->crypt)
+		return 1;
+	fz_try(CTX)
+	{
+		ok = (pdf_authenticate_password(CTX, pdf, candidate) & 4) != 0;
+		/* A wrong one leaves the document without its keys: authenticate it again. */
+		if (!ok)
+			pdf_authenticate_password(CTX, pdf, current ? current : "");
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return ok;
+}
+
+int fo_pdf_rewrite_images(fo_ctx *c, fo_doc *d, int dpi, int quality, int lossless_too)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_image_rewriter_options o;
+	char q[8];
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	memset(&o, 0, sizeof o);
+	snprintf(q, sizeof q, "%d", quality);
+	/* Pictures shown finer than 1.5x the target are brought down to it; photos
+	 * (and, for the smallest size, lossless pictures too) are saved as JPEG. */
+	o.color_lossy_image_subsample_method = o.gray_lossy_image_subsample_method = FZ_SUBSAMPLE_BICUBIC;
+	o.color_lossless_image_subsample_method = o.gray_lossless_image_subsample_method = FZ_SUBSAMPLE_BICUBIC;
+	o.color_lossy_image_subsample_threshold = o.gray_lossy_image_subsample_threshold = dpi * 3 / 2;
+	o.color_lossy_image_subsample_to = o.gray_lossy_image_subsample_to = dpi;
+	o.color_lossless_image_subsample_threshold = o.gray_lossless_image_subsample_threshold = dpi * 3 / 2;
+	o.color_lossless_image_subsample_to = o.gray_lossless_image_subsample_to = dpi;
+	o.color_lossy_image_recompress_method = o.gray_lossy_image_recompress_method = FZ_RECOMPRESS_JPEG;
+	o.color_lossy_image_recompress_quality = o.gray_lossy_image_recompress_quality = q;
+	o.color_lossless_image_recompress_method = o.gray_lossless_image_recompress_method = lossless_too ? FZ_RECOMPRESS_JPEG : FZ_RECOMPRESS_SAME;
+	o.color_lossless_image_recompress_quality = o.gray_lossless_image_recompress_quality = lossless_too ? q : NULL;
+	/* Black-and-white scans stay sharp: only very fine ones are brought down, to twice the target. */
+	o.bitonal_image_subsample_method = FZ_SUBSAMPLE_AVERAGE;
+	o.bitonal_image_subsample_threshold = dpi * 3;
+	o.bitonal_image_subsample_to = dpi * 2;
+	o.bitonal_image_recompress_method = FZ_RECOMPRESS_SAME;
+	o.recompress_when = FZ_RECOMPRESS_WHEN_SMALLER;
+	pdf_begin_operation(CTX, pdf, "Compress pictures");
+	fz_try(CTX)
+		pdf_rewrite_images(CTX, pdf, &o);
+	fz_always(CTX)
+		pdf_end_operation(CTX, pdf);
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+int fo_pdf_save_with(fo_ctx *c, fo_doc *d, const char *path, int encrypt, int permissions, const char *owner, const char *user, int compact)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_write_options opts = pdf_default_write_options;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	opts.do_compress = 1;
+	opts.do_compress_images = 1;
+	opts.do_compress_fonts = 1;
+	opts.do_garbage = compact ? 3 : 1;
+	if (compact)
+	{
+		opts.do_use_objstms = 1;
+		opts.compression_effort = 100;
+	}
+	if (encrypt == 0)
+		opts.do_encrypt = PDF_ENCRYPT_NONE;
+	else if (encrypt == 1)
+	{
+		opts.do_encrypt = PDF_ENCRYPT_AES_256;
+		opts.permissions = permissions;
+		fz_strlcpy(opts.opwd_utf8, owner ? owner : "", sizeof opts.opwd_utf8);
+		fz_strlcpy(opts.upwd_utf8, user ? user : "", sizeof opts.upwd_utf8);
+	}
+	fz_try(CTX)
+	{
+		char *p = os_path(CTX, path);
+		fz_try(CTX)
+			pdf_save_document(CTX, pdf, p, &opts);
+		fz_always(CTX)
+			fz_free(CTX, p);
+		fz_catch(CTX)
+			fz_rethrow(CTX);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
 /* ---------------------------------------------------------------- text */
 
 fo_text *fo_text_new(fo_ctx *c, fo_list *l)

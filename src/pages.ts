@@ -2,7 +2,7 @@
 // tab's Edits snapshot; the viewer and thumbnails redraw from it instantly
 // and nothing touches the file until the user saves.
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { api, type DocInfo, type Inserted, type InsertSource } from "./api";
+import { api, type DocInfo, type Inserted, type InsertSource, type SaveOptions } from "./api";
 import * as E from "./edits";
 import { formsChanged, initForms } from "./forms";
 import { baseName, rememberFile, setSaveHook, settings, showToast, type Tab } from "./store";
@@ -280,11 +280,40 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
     const view = tab.viewer?.viewState();
     const saved = await api.save(info.docId, e.order, e.rot, target);
     await adoptSaved(tab, saved, view?.page);
-    showToast(`Saved ${baseName(saved.path)} · ${Math.round(performance.now() - t0)} ms`);
+    const lost = e.order.length - saved.pageCount;
+    showToast(
+      lost > 0
+        ? `Saved ${baseName(saved.path)}. The file was damaged: ${lost} ${lost === 1 ? "page" : "pages"} couldn't be read and ${lost === 1 ? "was" : "were"} left out.`
+        : `Saved ${baseName(saved.path)} · ${Math.round(performance.now() - t0)} ms`,
+      lost > 0 ? 9000 : undefined,
+    );
     return true;
   } catch (err) {
     showToast(`Couldn't save: ${err}`, 5000);
     return false;
+  } finally {
+    tab.saving.value = false;
+  }
+}
+
+/**
+ * Saves with new protection, compression or a clean rewrite: to `target`, or in place when null.
+ * The tab follows the saved file, as with Save as. Returns the saved file, or null (message shown).
+ */
+export async function saveWithOptions(tab: Tab, opts: SaveOptions, target: string | null): Promise<DocInfo | null> {
+  if (!(await beforeSave(tab))) return null;
+  const info = tab.info.value;
+  const e = tab.edits.value;
+  if (!info || !e || tab.saving.value) return null;
+  tab.saving.value = true;
+  try {
+    const view = tab.viewer?.viewState();
+    const saved = await api.saveWith(info.docId, e.order, e.rot, target, opts);
+    await adoptSaved(tab, saved, view?.page);
+    return saved;
+  } catch (err) {
+    showToast(`Couldn't save: ${err}`, 6000);
+    return null;
   } finally {
     tab.saving.value = false;
   }

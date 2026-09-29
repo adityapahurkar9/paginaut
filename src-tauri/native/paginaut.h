@@ -142,6 +142,20 @@ char *fo_pdf_page_label_ranges_json(fo_ctx *c, fo_doc *d);
 int fo_pdf_set_page_labels(fo_ctx *c, fo_doc *d, const int *starts, const char *styles, const char *prefixes, const int *firsts, int count);
 /* Sets a metadata entry ("info:Title"…); an empty value removes it. */
 int fo_set_metadata(fo_ctx *c, fo_doc *d, const char *key, const char *value);
+/* Protection as JSON: {"method","bits","perms","owner" (opened with the owner's password,
+ * or none is set),"opens" (needs a password to open),"repaired"}. `password`: the one it was opened with. */
+char *fo_pdf_security_json(fo_ctx *c, fo_doc *d, const char *password);
+/* 1 if `candidate` is the owner (permissions) password; otherwise re-authenticates with `current`. */
+int fo_pdf_check_owner(fo_ctx *c, fo_doc *d, const char *candidate, const char *current);
+/* A file repaired on opening: rebuilds its page tree from the pages that can be read
+ * (writing it as it was can leave a tree other apps, and MuPDF, can't open). Returns how
+ * many pages were left out; 0 when the file wasn't repaired or its tree is sound. */
+int fo_pdf_fix_page_tree(fo_ctx *c, fo_doc *d);
+/* Brings pictures down to `dpi` and saves photos as JPEG at `quality` (lossless ones too if asked). */
+int fo_pdf_rewrite_images(fo_ctx *c, fo_doc *d, int dpi, int quality, int lossless_too);
+/* Full rewrite. encrypt: -1 keep, 0 remove, 1 AES-256 with these passwords and permissions;
+ * compact: de-duplicate and pack objects as tightly as possible. */
+int fo_pdf_save_with(fo_ctx *c, fo_doc *d, const char *path, int encrypt, int permissions, const char *owner, const char *user, int compact);
 /* A new, empty PDF in memory. */
 fo_doc *fo_pdf_new(fo_ctx *c);
 /* Adds a bookmark titled `title` at the end of d's outline, pointing at page

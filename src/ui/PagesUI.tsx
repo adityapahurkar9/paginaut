@@ -37,7 +37,7 @@ declare const process: { env: { NODE_ENV: string } };
  * Development builds: tools/cdp.mjs sets window.paginautTest.pick (files) and
  * .save (a path) to answer the file dialogs, which can't be driven from there.
  */
-const testHook = (): { pick?: string[]; save?: string } | null =>
+export const testHook = (): { pick?: string[]; save?: string } | null =>
   process.env.NODE_ENV !== "production" ? ((window as unknown as { paginautTest?: { pick?: string[]; save?: string } }).paginautTest ?? null) : null;
 
 async function peekAll(paths: string[]): Promise<FileEntry[]> {

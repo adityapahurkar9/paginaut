@@ -63,6 +63,24 @@ export interface LabelRange {
   n: number;
 }
 
+/** A PDF's protection: method "AES"/"RC4" (with bits) or "" when none; perms: PDF permission bits;
+ *  owner: its protection can be changed (opened with the permissions password, or it has none). */
+export interface Security {
+  method: string;
+  bits: number;
+  perms: number;
+  owner: boolean;
+  opens: boolean;
+  repaired: boolean;
+}
+
+/** Beyond a plain save: new protection, compression (0 lossless, 1 smaller, 2 smallest), or a clean rewrite. */
+export interface SaveOptions {
+  protect?: { remove?: boolean; user?: string; owner?: string; perms?: number };
+  compress?: 0 | 1 | 2;
+  rewrite?: boolean;
+}
+
 export interface Properties {
   title: string;
   author: string;
@@ -228,6 +246,11 @@ export const api = {
   properties: (doc: number) => invoke<Properties>("properties", { doc }),
   /** Sets title, author, subject and keywords (one undo step). */
   setProperties: (doc: number, props: Properties) => invoke<void>("set_properties", { doc, props }),
+  saveWith: (doc: number, order: number[], rot: number[], target: string | null, opts: SaveOptions) =>
+    invoke<DocInfo>("save_with", { doc, order, rot, target, opts }),
+  security: (doc: number) => invoke<Security>("security", { doc }),
+  /** Checks the permissions password; when right the app keeps it, so the protection can be changed. */
+  checkOwner: (doc: number, password: string) => invoke<boolean>("check_owner", { doc, password }),
   existingFiles: (paths: string[]) => invoke<string[]>("existing_files", { paths }),
   peekFile: (path: string, password?: string) => invoke<Peek>("peek_file", { path, password: password ?? null }),
   pageLabel: (doc: number, page: number) => invoke<string>("page_label", { doc, page }),

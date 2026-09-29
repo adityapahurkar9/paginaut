@@ -101,6 +101,11 @@ extern "C" {
     pub fn fo_convert_to_pdf(c: *mut fo_ctx, d: *mut fo_doc, path: *const c_char, order: *const c_int, count: c_int, rot: *const c_int) -> c_int;
     pub fn fo_pdf_insert_pages(c: *mut fo_ctx, d: *mut fo_doc, src: *mut fo_doc, pages: *const c_int, count: c_int, fit: *const c_float) -> c_int;
     pub fn fo_pdf_new(c: *mut fo_ctx) -> *mut fo_doc;
+    pub fn fo_pdf_security_json(c: *mut fo_ctx, d: *mut fo_doc, password: *const c_char) -> *mut c_char;
+    pub fn fo_pdf_check_owner(c: *mut fo_ctx, d: *mut fo_doc, candidate: *const c_char, current: *const c_char) -> c_int;
+    pub fn fo_pdf_fix_page_tree(c: *mut fo_ctx, d: *mut fo_doc) -> c_int;
+    pub fn fo_pdf_rewrite_images(c: *mut fo_ctx, d: *mut fo_doc, dpi: c_int, quality: c_int, lossless_too: c_int) -> c_int;
+    pub fn fo_pdf_save_with(c: *mut fo_ctx, d: *mut fo_doc, path: *const c_char, encrypt: c_int, permissions: c_int, owner: *const c_char, user: *const c_char, compact: c_int) -> c_int;
     pub fn fo_pdf_outline_clear(c: *mut fo_ctx, d: *mut fo_doc) -> c_int;
     pub fn fo_pdf_outline_add(c: *mut fo_ctx, d: *mut fo_doc, parent: c_int, title: *const c_char, page: c_int, y: c_float) -> c_int;
     pub fn fo_pdf_page_label_ranges_json(c: *mut fo_ctx, d: *mut fo_doc) -> *mut c_char;

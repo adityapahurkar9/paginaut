@@ -456,6 +456,46 @@ impl Document {
         })
     }
 
+    /// Protection as JSON (see fo_pdf_security_json).
+    pub fn security_json(&self, password: &str) -> Result<String> {
+        let pw = CString::new(password).unwrap_or_default();
+        with_kind(self.1, |c| take_string(c, unsafe { fo_pdf_security_json(c, self.0, pw.as_ptr()) }).ok_or_else(|| last_error(c)))
+    }
+
+    /// Whether `candidate` is the owner (permissions) password; `current` is the one it was opened with.
+    pub fn check_owner(&self, candidate: &str, current: &str) -> bool {
+        let (a, b) = (CString::new(candidate).unwrap_or_default(), CString::new(current).unwrap_or_default());
+        with_kind(self.1, |c| unsafe { fo_pdf_check_owner(c, self.0, a.as_ptr(), b.as_ptr()) } > 0)
+    }
+
+    /// For a file repaired on opening: rebuilds the page tree from the readable pages; returns how many were left out.
+    pub fn fix_page_tree(&self) -> Result<usize> {
+        with_kind(self.1, |c| {
+            let n = unsafe { fo_pdf_fix_page_tree(c, self.0) };
+            if n >= 0 { Ok(n as usize) } else { Err(last_error(c)) }
+        })
+    }
+
+    /// Brings pictures down to `dpi`, photos saved as JPEG at `quality` (and lossless ones if `lossless_too`).
+    pub fn rewrite_images(&self, dpi: i32, quality: i32, lossless_too: bool) -> Result<()> {
+        with_kind(self.1, |c| if unsafe { fo_pdf_rewrite_images(c, self.0, dpi, quality, lossless_too as c_int) } == 0 { Ok(()) } else { Err(last_error(c)) })
+    }
+
+    /// Full rewrite: `encrypt` None keeps the protection, Some(None) removes it, Some(Some((owner, user, perms))) sets AES-256.
+    pub fn save_pdf_with(&self, path: &str, encrypt: Option<Option<(&str, &str, i32)>>, compact: bool) -> Result<()> {
+        let p = CString::new(path).map_err(|e| e.to_string())?;
+        let (mode, owner, user, perms) = match encrypt {
+            None => (-1, "", "", -1),
+            Some(None) => (0, "", "", -1),
+            Some(Some((o, u, perms))) => (1, o, u, perms),
+        };
+        let (o, u) = (CString::new(owner).map_err(|e| e.to_string())?, CString::new(user).map_err(|e| e.to_string())?);
+        with_kind(self.1, |c| {
+            let rc = unsafe { fo_pdf_save_with(c, self.0, p.as_ptr(), mode, perms, o.as_ptr(), u.as_ptr(), compact as c_int) };
+            if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
     /// Writes any document (EPUB, images, XPS…) as a PDF with the given order and rotations.
     pub fn convert_to_pdf(&self, path: &str, order: &[usize], rot: &[i32]) -> Result<()> {
         let p = CString::new(path).map_err(|e| e.to_string())?;

@@ -232,6 +232,58 @@ pub struct Properties {
     pub modified: String,
 }
 
+/// A PDF's protection, as the Protect dialog shows it.
+#[derive(Serialize, Deserialize, Default)]
+pub struct Security {
+    /// "AES" or "RC4" (with `bits`), or "" when not protected.
+    pub method: String,
+    pub bits: i32,
+    pub perms: i32,
+    /// Opened with the owner (permissions) password, or it has none: its protection can be changed.
+    pub owner: bool,
+    /// Needs a password to open.
+    pub opens: bool,
+    /// Damaged, and repaired when it was opened.
+    pub repaired: bool,
+}
+
+/// New protection for a saved PDF: `remove` it, or AES-256 with these passwords (either may be
+/// empty) and permissions (PDF permission bits).
+#[derive(Deserialize, Clone, Default)]
+pub struct Protection {
+    #[serde(default)]
+    pub remove: bool,
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default = "all_permissions")]
+    pub perms: i32,
+}
+
+fn all_permissions() -> i32 {
+    -1
+}
+
+/// How to write a PDF beyond a plain save.
+#[derive(Deserialize, Clone, Default)]
+pub struct SaveOptions {
+    #[serde(default)]
+    pub protect: Option<Protection>,
+    /// 0 lossless, 1 smaller (pictures at 150 dpi), 2 smallest (100 dpi, all pictures JPEG).
+    #[serde(default)]
+    pub compress: Option<u8>,
+    /// Write every object again from scratch (repairs a damaged file).
+    #[serde(default)]
+    pub rewrite: bool,
+}
+
+impl SaveOptions {
+    fn any(&self) -> bool {
+        self.protect.is_some() || self.compress.is_some() || self.rewrite
+    }
+}
+
 /// One file to write: these pages (document indices, in order) at `path`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -979,7 +1031,43 @@ impl Engine {
     ///
     /// Afterwards the document is reopened from disk, so what you see is what was saved.
     pub fn save(&self, id: DocId, order: Vec<usize>, rot: Vec<i32>, target: Option<String>) -> Result<DocInfo, String> {
+        self.save_with(id, order, rot, target, SaveOptions::default())
+    }
+
+    /// The document's protection.
+    pub fn security(&self, id: DocId) -> Result<Security, String> {
         let d = self.doc(id)?;
+        let pw = d.password.lock().clone().unwrap_or_default();
+        let inner = d.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Ok(Security { owner: true, ..Default::default() });
+        }
+        let json = inner.doc.security_json(&pw)?;
+        serde_json::from_str(&json).map_err(|e| e.to_string())
+    }
+
+    /// Checks the owner (permissions) password; when right, it's kept so the protection can be changed.
+    pub fn check_owner(&self, id: DocId, candidate: &str) -> Result<bool, String> {
+        let d = self.doc(id)?;
+        let cur = d.password.lock().clone().unwrap_or_default();
+        let ok = d.inner.lock().doc.check_owner(candidate, &cur);
+        if ok {
+            *d.password.lock() = Some(candidate.to_string());
+        }
+        Ok(ok)
+    }
+
+    /// Saves as `save` does, and can also protect, compress or rewrite the file (always a full rewrite then).
+    pub fn save_with(&self, id: DocId, order: Vec<usize>, rot: Vec<i32>, target: Option<String>, opts: SaveOptions) -> Result<DocInfo, String> {
+        let d = self.doc(id)?;
+        if opts.any() {
+            if !d.inner.lock().doc.is_pdf() {
+                return Err("Only PDFs can be protected, compressed or repaired. Save this file as a PDF first (Save as).".into());
+            }
+            if opts.protect.is_some() && !self.security(id)?.owner {
+                return Err("Enter the permissions password first: only its owner can change how this file is protected.".into());
+            }
+        }
         self.release_private_doc(id);
         let cur = d.path();
         let out = target.unwrap_or_else(|| cur.clone());
@@ -996,6 +1084,24 @@ impl Engine {
                     // appended to the file; a full rewrite leaves them out.
                     let unused = (d.file_pages.load(Ordering::Relaxed)..d.page_count()).any(|i| !order.contains(&i));
                     inner.doc.apply_page_edits(&rot, &order, d.file_pages.load(Ordering::Relaxed))?;
+                    // A damaged file's page tree is rebuilt, or the saved file can't be opened again.
+                    inner.doc.fix_page_tree()?;
+                    if opts.any() {
+                        match opts.compress {
+                            Some(1) => inner.doc.rewrite_images(150, 70, false)?,
+                            Some(2) => inner.doc.rewrite_images(100, 55, true)?,
+                            _ => {}
+                        }
+                        let encrypt = opts.protect.as_ref().map(|p| if p.remove { None } else { Some((p.owner.as_str(), p.user.as_str(), p.perms)) });
+                        let compact = opts.compress.is_some();
+                        return if in_place {
+                            inner.doc.save_pdf_with(&tmp, encrypt, compact)?;
+                            inner.doc = Document::open(&tmp)?;
+                            copy_with_retry(&tmp, &cur)
+                        } else {
+                            inner.doc.save_pdf_with(&out, encrypt, compact)
+                        };
+                    }
                     if in_place && inner.doc.can_save_incrementally() && !unused {
                         inner.doc.save_pdf(&cur, true)
                     } else if in_place {
@@ -1014,6 +1120,13 @@ impl Engine {
             })();
             // Reopen from disk: on success the saved file, on failure the untouched original.
             let reopen = if res.is_ok() { out.clone() } else { cur.clone() };
+            if res.is_ok() {
+                if let Some(p) = &opts.protect {
+                    // The new passwords open it from now on (the owner's keeps it changeable).
+                    let pw = if p.remove { "" } else if !p.owner.is_empty() { &p.owner } else { &p.user };
+                    *d.password.lock() = (!pw.is_empty()).then(|| pw.to_string());
+                }
+            }
             let fresh = Document::open(&reopen)?;
             if fresh.needs_password() {
                 if let Some(pw) = d.password.lock().as_deref() {

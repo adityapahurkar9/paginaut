@@ -854,3 +854,20 @@ select.fw { appearance: none; -webkit-appearance: none; padding-right: 12px; bac
 .labels-head, .labels-row { display: grid; grid-template-columns: 76px 1fr 90px 76px 28px; gap: 6px; align-items: center; }
 .labels-head { font-size: 12px; color: var(--tx3); }
 .labels-row .inp { min-width: 0; }
+
+/* Protect, reduce size, repair */
+.secure-dialog > .hint, .secure-dialog .hint { display: block; font-size: 12.5px; color: var(--tx3); line-height: 1.4; margin-bottom: 10px; }
+.secure-head { font-weight: 600; margin: 6px 0 8px; }
+.secure-pw { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0 0 10px 24px; }
+.secure-rights { display: flex; flex-direction: column; gap: 5px; margin: 0 0 10px 24px; font-size: 12.5px; }
+.secure-rights > span { color: var(--tx3); }
+.secure-levels { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.secure-level { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--bd); border-radius: 8px; cursor: pointer; }
+.secure-level.on { border-color: var(--acc); background: var(--acc-soft); }
+.secure-level input { margin-top: 3px; }
+.secure-level span { display: flex; flex-direction: column; gap: 2px; }
+.secure-level small { color: var(--tx3); font-size: 12px; line-height: 1.35; }
+.secure-busy { display: inline-flex; align-items: center; gap: 8px; color: var(--tx2); font-size: 13px; }
+.secure-warn { display: block; font-size: 12.5px; line-height: 1.4; margin-bottom: 12px; padding: 8px 10px; border-radius: 6px; background: rgba(196, 43, 28, 0.1); color: #c42b1c; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .secure-warn { color: #ff8a80; } }
+:root[data-theme="dark"] .secure-warn { color: #ff8a80; }

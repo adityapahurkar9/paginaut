@@ -20,6 +20,15 @@ $geometry = Join-Path $root "source\fitz\geometry.c"
 $src = Get-Content $geometry -Raw
 if ($src -match "\{NAN, NAN\}") { Set-Content $geometry ($src -replace "NAN", "(0.0/0.0)") -NoNewline }
 
+# Saving a gray or RGB picture with an ICC profile as JPEG converted it to RGB, while the
+# image rewriter (Reduce file size) kept the gray colour space: scans came out garbled.
+# Only convert what JPEG can't hold, as fz_write_pixmap_as_jpeg itself checks.
+$jpeg = Join-Path $root "source\fitz\output-jpeg.c"
+$src = Get-Content $jpeg -Raw
+$old = "pix->colorspace != fz_device_gray(ctx) && pix->colorspace != fz_device_rgb(ctx) && pix->colorspace != fz_device_cmyk(ctx)"
+$new = "!fz_colorspace_is_gray(ctx, pix->colorspace) && !fz_colorspace_is_rgb(ctx, pix->colorspace) && !fz_colorspace_is_cmyk(ctx, pix->colorspace)"
+if ($src.Contains($old)) { Set-Content $jpeg $src.Replace($old, $new) -NoNewline }
+
 $env:CL = "/MP /DTOFU_CJK"
 $target = if ($Clean) { "libmupdf:Rebuild" } else { "libmupdf" }
 & $msbuild (Join-Path $root "platform\win32\mupdf.sln") "/target:$target" `

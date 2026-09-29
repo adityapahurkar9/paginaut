@@ -13,6 +13,7 @@ import { toggleGrid } from "./PageGrid";
 import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
 import { startLabels, startProperties } from "./MetaUI";
+import { startSecure } from "./SecureUI";
 import { addBookmarkHere } from "./Sidebar";
 import { removeStamps } from "../stamps";
 import { helpPanel } from "./HelpDialogs";
@@ -227,6 +228,10 @@ function commands(): Item[] {
     c("Watermark…", withTab((t) => startWatermark(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Page labels (how pages are numbered)…", withTab((t) => startLabels(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Document properties (title, author)…", withTab((t) => startProperties(t)), "Ctrl+D", hasDoc),
+    c("Protect with a password (encrypt, restrict printing or copying)…", withTab((t) => startSecure(t, "protect")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Remove password / unlock…", withTab((t) => startSecure(t, "protect")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Reduce file size (compress)…", withTab((t) => startSecure(t, "compress")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Repair a damaged PDF…", withTab((t) => startSecure(t, "repair")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Add a bookmark for this page", withTab((t) => void addBookmarkHere(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Remove page numbers, headers and footers", withTab((t) => void removeStamps(t, "Header")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Remove watermark", withTab((t) => void removeStamps(t, "Watermark")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),

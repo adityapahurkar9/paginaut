@@ -297,14 +297,22 @@ Document details:
 - [x] Page labels dialog: ranges (from page, 1/i/I/a/A or none, prefix, start at) with a preview; remove all
 
 Security:
-- [ ] Protect: password to open (AES-256) and a permissions password (printing, copying, editing)
-- [ ] Unlock: remove the password when you know it
-- [ ] Warning before any of these on digitally signed documents
+- [x] Protect (Organize menu): password to open (AES-256) and/or a permissions password with what's allowed
+      (printing, copying, comments and forms, changing pages, other changes); shows the current protection
+- [x] Unlock / change: needs the permissions password (the open password alone can't lift restrictions); remove
+      protection. A wrong permissions password no longer leaves the file unreadable (MuPDF drops its keys on a
+      failed try; they're restored)
+- [x] Warning on digitally signed documents (their signatures stop being valid after a rewrite)
 
 Size and repair:
-- [ ] Compress: presets (Screen / eBook / Print) that shrink and recompress pictures and clean up the file; size before
-      and after; saves as a new file by default
-- [ ] Repair: rewrite a damaged file and report what was fixed
+- [x] Reduce file size: Tidy up (lossless: de-duplicate, object streams, maximum compression), Smaller (pictures
+      at 150 dpi, photos JPEG) and Smallest (100 dpi, all JPEG); black-and-white scans stay sharp. Save a copy or
+      replace; size before and after. A 242 MB 300-page scan: 86 MB / 38 MB; a colour newspaper 5.4 MB -> 1.9 MB
+- [x] Fix (MuPDF): gray and RGB pictures with an ICC profile came out garbled when recompressed as JPEG
+      (patched in native/build-mupdf.ps1)
+- [x] Repair: rewrites a damaged file and says what was lost
+- [x] Fix: saving a file MuPDF repaired on opening wrote a page tree it couldn't open again ("cycle in page
+      tree"); the tree is now rebuilt from the pages that can be read, and the save says how many were lost
 
 Extract content (right-click the item on the page; the same menu in Read/Book mode):
 - [ ] Pictures: copy, or save in their original quality: the image as stored in the PDF (JPEGs saved as they are,

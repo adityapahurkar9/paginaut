@@ -27,6 +27,7 @@ import { toggleGrid } from "./PageGrid";
 import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
 import { startLabels, startProperties } from "./MetaUI";
+import { startSecure } from "./SecureUI";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -505,7 +506,11 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { label: "Document properties…", hint: "Ctrl+D", disabled: !tab, run: () => tab && startProperties(tab) },
         { sep: true },
 
-        soon("Protect / unlock", 6.2), soon("Compress", 6.2), soon("Repair", 6.2), soon("Extract pictures and tables", 6.2),
+        { label: "Protect with a password…", disabled: !tab?.info.value?.isPdf, run: () => tab && startSecure(tab, "protect") },
+        { label: "Reduce file size…", disabled: !tab?.info.value?.isPdf, run: () => tab && startSecure(tab, "compress") },
+        { label: "Repair…", disabled: !tab?.info.value?.isPdf, run: () => tab && startSecure(tab, "repair") },
+        { sep: true },
+        soon("Extract pictures and tables", 6.2),
         soon("Edit PDF", 6.3), soon("Redact", 6.5), soon("Compare", 7.5),
       ], "left", 280)} />
       <TB icon={I(RefreshCw, 17)} label="Convert" menu onClick={(e) => openMenu(e, [

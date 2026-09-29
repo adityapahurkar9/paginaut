@@ -52,6 +52,33 @@ pub async fn save_document(
     blocking(move || engine.save(doc, order, rot, target)).await
 }
 
+/// Saves and protects, compresses or rewrites (repairs) the PDF.
+#[tauri::command]
+pub async fn save_with(
+    state: State<'_, AppState>,
+    doc: DocId,
+    order: Vec<usize>,
+    rot: Vec<i32>,
+    target: Option<String>,
+    opts: crate::engine::SaveOptions,
+) -> Res<DocInfo> {
+    let engine = state.engine.clone();
+    blocking(move || engine.save_with(doc, order, rot, target, opts)).await
+}
+
+#[tauri::command]
+pub async fn security(state: State<'_, AppState>, doc: DocId) -> Res<crate::engine::Security> {
+    let engine = state.engine.clone();
+    blocking(move || engine.security(doc)).await
+}
+
+/// Checks the permissions password (kept when right, so the protection can be changed).
+#[tauri::command]
+pub async fn check_owner(state: State<'_, AppState>, doc: DocId, password: String) -> Res<bool> {
+    let engine = state.engine.clone();
+    blocking(move || engine.check_owner(doc, &password)).await
+}
+
 /// Adds pages of other files at the end of the document (one undo step).
 #[tauri::command]
 pub async fn insert_pages(state: State<'_, AppState>, doc: DocId, sources: Vec<InsertSource>, fit: Option<[f32; 2]>) -> Res<Inserted> {
