@@ -63,6 +63,29 @@ export interface LabelRange {
   n: number;
 }
 
+/** A picture on a page: r (relative to the page origin), size in pixels, how it's stored
+ *  (k "jpg"/"jp2"/"png"), m: has transparency, n: stored bytes, id: same picture, same id. */
+export interface Picture {
+  r: [number, number, number, number];
+  w: number;
+  h: number;
+  k: string;
+  m: number;
+  n: number;
+  id: string;
+}
+
+/** A file embedded in a PDF: on the document (page -1) or pinned to a page; modified: seconds since 1970, or -1. */
+export interface Attachment {
+  i: number;
+  page: number;
+  size: number;
+  modified: number;
+  name: string;
+  mime: string;
+  desc: string;
+}
+
 /** A PDF's protection: method "AES"/"RC4" (with bits) or "" when none; perms: PDF permission bits;
  *  owner: its protection can be changed (opened with the permissions password, or it has none). */
 export interface Security {
@@ -249,6 +272,22 @@ export const api = {
   saveWith: (doc: number, order: number[], rot: number[], target: string | null, opts: SaveOptions) =>
     invoke<DocInfo>("save_with", { doc, order, rot, target, opts }),
   security: (doc: number) => invoke<Security>("security", { doc }),
+  pictures: (doc: number, page: number) => invoke<Picture[]>("pictures", { doc, page }),
+  /** fmt 0 as stored, 1 PNG, 2 PDF. */
+  pictureBytes: (doc: number, page: number, idx: number, fmt: number) => invoke<ArrayBuffer>("picture_bytes", { doc, page, idx, fmt }),
+  /** Returns the path used (its extension follows the format). */
+  pictureSave: (doc: number, page: number, idx: number, fmt: number, path: string) => invoke<string>("picture_save", { doc, page, idx, fmt, path }),
+  savePictures: (doc: number, pages: number[], names: string[], min: number, fmt: number, dir: string, stem: string) =>
+    invoke<{ saved: number; small: number; repeats: number }>("save_pictures", { doc, pages, names, min, fmt, dir, stem }),
+  areaBytes: (doc: number, page: number, area: [number, number, number, number], rot: number, kind: "png" | "svg" | "pdf", dpi: number) =>
+    invoke<ArrayBuffer>("area_bytes", { doc, page, area, rot, kind, dpi }),
+  areaSave: (doc: number, page: number, area: [number, number, number, number], rot: number, kind: "png" | "svg" | "pdf", dpi: number, path: string) =>
+    invoke<void>("area_save", { doc, page, area, rot, kind, dpi, path }),
+  areaText: (doc: number, page: number, area: [number, number, number, number]) => invoke<string>("area_text", { doc, page, area }),
+  attachments: (doc: number) => invoke<Attachment[]>("attachments", { doc }),
+  /** Saves at `path`, or into folder `dir` under its own name; returns the path used. */
+  attachmentSave: (doc: number, i: number, path: string | null, dir: string | null) => invoke<string>("attachment_save", { doc, i, path, dir }),
+  attachmentOpen: (doc: number, i: number) => invoke<void>("attachment_open", { doc, i }),
   /** Checks the permissions password; when right the app keeps it, so the protection can be changed. */
   checkOwner: (doc: number, password: string) => invoke<boolean>("check_owner", { doc, password }),
   existingFiles: (paths: string[]) => invoke<string[]>("existing_files", { paths }),

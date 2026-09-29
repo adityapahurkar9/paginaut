@@ -28,13 +28,14 @@ import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
 import { startLabels, startProperties } from "./MetaUI";
 import { startSecure } from "./SecureUI";
+import { picturesDialog, showAttachments, startArea } from "../extract";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
 import { Menu, type MenuItem } from "./Overlays";
 
 type MenuState = { x: number; y: number; bottom?: number; items: MenuItem[]; width?: number } | null;
-const menu = signal<MenuState>(null);
+export const menu = signal<MenuState>(null);
 
 /** "up": centred above the button (for the status bar). */
 function openMenu(e: MouseEvent, items: MenuItem[], align: "left" | "right" | "up" = "left", width = 220) {
@@ -510,7 +511,12 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { label: "Reduce file size…", disabled: !tab?.info.value?.isPdf, run: () => tab && startSecure(tab, "compress") },
         { label: "Repair…", disabled: !tab?.info.value?.isPdf, run: () => tab && startSecure(tab, "repair") },
         { sep: true },
-        soon("Extract pictures and tables", 6.2),
+        { head: "Get content out" },
+        { label: "Save all pictures…", disabled: !tab, run: () => tab && (picturesDialog.value = tab) },
+        { label: "Select an area to copy or save…", hint: "or right-click a page", disabled: !tab, run: () => tab && startArea(tab) },
+        { label: `Attached files${tab?.attachments.value?.length ? ` (${tab.attachments.value.length})` : ""}`, disabled: !tab?.attachments.value?.length, run: showAttachments },
+        soon("Tables to Excel / CSV", 6.2),
+        { sep: true },
         soon("Edit PDF", 6.3), soon("Redact", 6.5), soon("Compare", 7.5),
       ], "left", 280)} />
       <TB icon={I(RefreshCw, 17)} label="Convert" menu onClick={(e) => openMenu(e, [

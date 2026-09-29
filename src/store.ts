@@ -3,7 +3,7 @@
 import type { PageSizeSettings } from "./pagesize";
 import type { HeaderSettings, WatermarkSettings } from "./stamps";
 import { batch, computed, effect, signal, type Signal } from "@preact/signals";
-import { api, type DocInfo, type OutlineItem } from "./api";
+import { api, type Attachment, type DocInfo, type OutlineItem } from "./api";
 import type { FitMode, LayoutMode, ViewState, Viewer } from "./render/Viewer";
 import { renderer } from "./render/RenderManager";
 import type { SearchState } from "./search";
@@ -33,7 +33,7 @@ export interface Settings {
   night: boolean;
   sidebarOpen: boolean;
   sidebarWidth: number;
-  sidebarTab: "pages" | "outline" | "comments";
+  sidebarTab: "pages" | "outline" | "comments" | "files";
   /** Smallest width of a page in the page grid, px. */
   gridSize: number;
   /** The Page size tool's last choices. */
@@ -149,6 +149,8 @@ export class Tab {
   sizes = signal<[number, number][] | null>(null);
   /** The file's own page labels (by original page index), when it has any. */
   labels = signal<string[] | null>(null);
+  /** Files embedded in the PDF (null until read). */
+  attachments = signal<Attachment[] | null>(null);
   viewer: Viewer | null = null;
   passwordTries = 0;
   /** Unsaved page edits (order, rotation); null until the document is ready. */

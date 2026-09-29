@@ -871,3 +871,15 @@ select.fw { appearance: none; -webkit-appearance: none; padding-right: 12px; bac
 .secure-warn { display: block; font-size: 12.5px; line-height: 1.4; margin-bottom: 12px; padding: 8px 10px; border-radius: 6px; background: rgba(196, 43, 28, 0.1); color: #c42b1c; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .secure-warn { color: #ff8a80; } }
 :root[data-theme="dark"] .secure-warn { color: #ff8a80; }
+
+/* Getting content out: area box, attachments */
+body.area-mode .pg { cursor: crosshair; }
+.area-box { position: fixed; z-index: 40; border: 1.5px dashed var(--acc); background: color-mix(in srgb, var(--acc) 12%, transparent); pointer-events: none; }
+.attach-list { padding: 2px 6px 12px; }
+.attach-row { display: flex; align-items: center; gap: 8px; padding: 7px 6px; border-radius: 6px; cursor: default; color: var(--tx2); }
+.attach-row:hover { background: var(--hover, rgba(127, 127, 127, 0.12)); }
+.attach-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.attach-name { color: var(--tx); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-meta { color: var(--tx3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-hint { display: block; font-size: 11.5px; color: var(--tx3); padding: 10px 6px; line-height: 1.4; }
+.sidebar-inner .seg .segb.icon { flex: 0 0 30px; display: inline-flex; align-items: center; justify-content: center; }

@@ -3785,6 +3785,536 @@ int fo_pdf_save_with(fo_ctx *c, fo_doc *d, const char *path, int encrypt, int pe
 	return 0;
 }
 
+/* ---------------------------------------------------------------- pictures */
+
+static fz_stext_page *pictures_of(fz_context *ctx, fz_display_list *l)
+{
+	fz_stext_options opts;
+	fz_init_stext_options(ctx, &opts);
+	opts.flags |= FZ_STEXT_PRESERVE_IMAGES;
+	return fz_new_stext_page_from_display_list(ctx, l, &opts);
+}
+
+static fz_stext_block *nth_picture(fz_context *ctx, fz_stext_page *t, int idx)
+{
+	for (fz_stext_block *b = t->first_block; b; b = b->next)
+		if (b->type == FZ_STEXT_BLOCK_IMAGE && b->u.i.image && idx-- == 0)
+			return b;
+	fz_throw(ctx, FZ_ERROR_ARGUMENT, "no such picture");
+}
+
+/* The picture's own bytes, when they can be saved as they are (a JPEG or JPEG 2000 file). */
+static fz_buffer *original_bytes(fz_context *ctx, fz_image *img, const char **ext)
+{
+	fz_compressed_buffer *cb = fz_compressed_image_buffer(ctx, img);
+	if (!cb || !cb->buffer)
+		return NULL;
+	if (cb->params.type == FZ_IMAGE_JPEG)
+		*ext = "jpg";
+	else if (cb->params.type == FZ_IMAGE_JPX)
+		*ext = "jp2";
+	else
+		return NULL;
+	return fz_keep_buffer(ctx, cb->buffer);
+}
+
+/* The picture as PNG: full resolution, RGB or gray, with its transparency. */
+static fz_buffer *picture_png(fz_context *ctx, fz_image *img)
+{
+	fz_pixmap *pix = NULL, *rgb = NULL, *mask = NULL, *scaled = NULL, *both = NULL;
+	fz_buffer *out = NULL;
+	fz_var(pix);
+	fz_var(rgb);
+	fz_var(mask);
+	fz_var(scaled);
+	fz_var(both);
+	fz_try(ctx)
+	{
+		fz_pixmap *use;
+		pix = fz_get_pixmap_from_image(ctx, img, NULL, NULL, NULL, NULL);
+		use = pix;
+		if (pix->colorspace && !fz_colorspace_is_gray(ctx, pix->colorspace) && !fz_colorspace_is_rgb(ctx, pix->colorspace))
+			use = rgb = fz_convert_pixmap(ctx, pix, fz_device_rgb(ctx), NULL, NULL, fz_default_color_params, 1);
+		if (img->mask && !use->alpha)
+		{
+			mask = fz_get_pixmap_from_image(ctx, img->mask, NULL, NULL, NULL, NULL);
+			if (mask->n == 1 && !mask->alpha)
+			{
+				if (mask->w != use->w || mask->h != use->h)
+				{
+					fz_irect clip = { 0, 0, use->w, use->h };
+					scaled = fz_scale_pixmap(ctx, mask, 0, 0, use->w, use->h, &clip);
+				}
+				both = fz_new_pixmap_from_color_and_mask(ctx, use, scaled ? scaled : mask);
+				use = both;
+			}
+		}
+		out = fz_new_buffer_from_pixmap_as_png(ctx, use, fz_default_color_params);
+	}
+	fz_always(ctx)
+	{
+		fz_drop_pixmap(ctx, pix);
+		fz_drop_pixmap(ctx, rgb);
+		fz_drop_pixmap(ctx, mask);
+		fz_drop_pixmap(ctx, scaled);
+		fz_drop_pixmap(ctx, both);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return out;
+}
+
+/* A one-page PDF with just the picture, stored as it is, at the size it has on the page. */
+static fz_buffer *picture_pdf(fz_context *ctx, fz_image *img, fz_rect r)
+{
+	pdf_document *doc = NULL;
+	pdf_obj *res = NULL, *page = NULL;
+	fz_buffer *contents = NULL, *out = NULL;
+	fz_output *o = NULL;
+	fz_var(doc);
+	fz_var(res);
+	fz_var(page);
+	fz_var(contents);
+	fz_var(out);
+	fz_var(o);
+	fz_try(ctx)
+	{
+		float w = fz_max(1, r.x1 - r.x0), h = fz_max(1, r.y1 - r.y0);
+		pdf_write_options opts = pdf_default_write_options;
+		doc = pdf_create_document(ctx);
+		res = pdf_new_dict(ctx, doc, 1);
+		pdf_dict_putp_drop(ctx, res, "XObject/Im0", pdf_add_image(ctx, doc, img));
+		contents = fz_new_buffer(ctx, 64);
+		fz_append_printf(ctx, contents, "q %g 0 0 %g 0 0 cm /Im0 Do Q", w, h);
+		page = pdf_add_page(ctx, doc, fz_make_rect(0, 0, w, h), 0, res, contents);
+		pdf_insert_page(ctx, doc, -1, page);
+		out = fz_new_buffer(ctx, 1024);
+		o = fz_new_output_with_buffer(ctx, out);
+		opts.do_compress = 1;
+		opts.do_garbage = 1;
+		pdf_write_document(ctx, doc, o, &opts);
+		fz_close_output(ctx, o);
+	}
+	fz_always(ctx)
+	{
+		fz_drop_output(ctx, o);
+		fz_drop_buffer(ctx, contents);
+		pdf_drop_obj(ctx, page);
+		pdf_drop_obj(ctx, res);
+		pdf_drop_document(ctx, doc);
+	}
+	fz_catch(ctx)
+	{
+		fz_drop_buffer(ctx, out);
+		fz_rethrow(ctx);
+	}
+	return out;
+}
+
+char *fo_pictures_json(fo_ctx *c, fo_list *l, const float b[4])
+{
+	fz_stext_page *t = NULL;
+	fz_buffer *buf = NULL;
+	char *s = NULL;
+	fz_var(t);
+	fz_var(buf);
+	fz_try(CTX)
+	{
+		int first = 1;
+		t = pictures_of(CTX, (fz_display_list *)l);
+		buf = fz_new_buffer(CTX, 256);
+		fz_append_byte(CTX, buf, '[');
+		for (fz_stext_block *block = t->first_block; block; block = block->next)
+		{
+			fz_image *img;
+			fz_compressed_buffer *cb;
+			const char *ext = "png";
+			unsigned char md5[16];
+			if (block->type != FZ_STEXT_BLOCK_IMAGE || !block->u.i.image)
+				continue;
+			img = block->u.i.image;
+			cb = fz_compressed_image_buffer(CTX, img);
+			if (cb && cb->params.type == FZ_IMAGE_JPEG)
+				ext = "jpg";
+			else if (cb && cb->params.type == FZ_IMAGE_JPX)
+				ext = "jp2";
+			if (!first)
+				fz_append_byte(CTX, buf, ',');
+			first = 0;
+			fz_append_printf(CTX, buf, "{\"r\":[%g,%g,%g,%g],\"w\":%d,\"h\":%d,\"k\":\"%s\",\"m\":%d,\"n\":%zu,\"id\":\"",
+				block->bbox.x0 - b[0], block->bbox.y0 - b[1], block->bbox.x1 - b[0], block->bbox.y1 - b[1],
+				img->w, img->h, ext, img->mask || img->imagemask ? 1 : 0, cb && cb->buffer ? cb->buffer->len : 0);
+			/* The same picture used again (on other pages, too) has the same id. */
+			if (cb && cb->buffer)
+			{
+				fz_md5_buffer(CTX, cb->buffer, md5);
+				for (int i = 0; i < 16; i++)
+					fz_append_printf(CTX, buf, "%02x", md5[i]);
+			}
+			fz_append_string(CTX, buf, "\"}");
+		}
+		fz_append_byte(CTX, buf, ']');
+		s = buffer_to_string(CTX, buf);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_stext_page(CTX, t);
+		fz_drop_buffer(CTX, buf);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
+int fo_picture_data(fo_ctx *c, fo_list *l, int idx, int fmt, unsigned char **data, size_t *len, char ext[8])
+{
+	fz_stext_page *t = NULL;
+	fz_buffer *out = NULL;
+	*data = NULL;
+	*len = 0;
+	fz_var(t);
+	fz_var(out);
+	fz_try(CTX)
+	{
+		fz_stext_block *block;
+		const char *e = "png";
+		t = pictures_of(CTX, (fz_display_list *)l);
+		block = nth_picture(CTX, t, idx);
+		if (fmt == 0)
+			out = original_bytes(CTX, block->u.i.image, &e);
+		if (fmt == 2)
+		{
+			out = picture_pdf(CTX, block->u.i.image, block->bbox);
+			e = "pdf";
+		}
+		if (!out)
+		{
+			out = picture_png(CTX, block->u.i.image);
+			e = "png";
+		}
+		fz_strlcpy(ext, e, 8);
+		*len = out->len;
+		*data = fz_malloc(CTX, out->len ? out->len : 1);
+		memcpy(*data, out->data, out->len);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_stext_page(CTX, t);
+		fz_drop_buffer(CTX, out);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* ---------------------------------------------------------------- attachments */
+
+/* Every embedded file: the document's (EmbeddedFiles), then those pinned to pages
+ * (FileAttachment annotations), each once. `pages` gets the page index, or -1. */
+static void collect_attachments(fz_context *ctx, pdf_document *doc, pdf_obj *files, pdf_obj *pages)
+{
+	pdf_obj *tree = pdf_load_name_tree(ctx, doc, PDF_NAME(EmbeddedFiles));
+	fz_try(ctx)
+	{
+		int n = pdf_dict_len(ctx, tree);
+		for (int i = 0; i < n; i++)
+		{
+			pdf_obj *fs = pdf_dict_get_val(ctx, tree, i);
+			if (pdf_is_embedded_file(ctx, fs))
+			{
+				pdf_array_push(ctx, files, fs);
+				pdf_array_push_int(ctx, pages, -1);
+			}
+		}
+		n = pdf_count_pages(ctx, doc);
+		for (int p = 0; p < n; p++)
+		{
+			pdf_obj *annots = pdf_dict_get(ctx, pdf_lookup_page_obj(ctx, doc, p), PDF_NAME(Annots));
+			for (int a = 0; a < pdf_array_len(ctx, annots); a++)
+			{
+				pdf_obj *annot = pdf_array_get(ctx, annots, a);
+				pdf_obj *fs = pdf_dict_get(ctx, annot, PDF_NAME(FS));
+				int dup = 0;
+				if (!pdf_name_eq(ctx, pdf_dict_get(ctx, annot, PDF_NAME(Subtype)), PDF_NAME(FileAttachment)) || !pdf_is_embedded_file(ctx, fs))
+					continue;
+				for (int k = 0; k < pdf_array_len(ctx, files) && !dup; k++)
+					dup = pdf_is_indirect(ctx, fs) && pdf_to_num(ctx, fs) == pdf_to_num(ctx, pdf_array_get(ctx, files, k));
+				if (dup)
+					continue;
+				pdf_array_push(ctx, files, fs);
+				pdf_array_push_int(ctx, pages, p);
+			}
+		}
+	}
+	fz_always(ctx)
+		pdf_drop_obj(ctx, tree);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+char *fo_attachments_json(fo_ctx *c, fo_doc *d)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_obj *files = NULL, *pages = NULL;
+	fz_buffer *b = NULL;
+	char *s = NULL;
+	fz_var(files);
+	fz_var(pages);
+	fz_var(b);
+	fz_try(CTX)
+	{
+		b = fz_new_buffer(CTX, 256);
+		fz_append_byte(CTX, b, '[');
+		if (pdf)
+		{
+			files = pdf_new_array(CTX, pdf, 8);
+			pages = pdf_new_array(CTX, pdf, 8);
+			collect_attachments(CTX, pdf, files, pages);
+			for (int i = 0; i < pdf_array_len(CTX, files); i++)
+			{
+				pdf_obj *fs = pdf_array_get(CTX, files, i);
+				pdf_filespec_params prm;
+				pdf_get_filespec_params(CTX, fs, &prm);
+				if (i)
+					fz_append_byte(CTX, b, ',');
+				char when[32];
+				/* fz_append_printf has no %lld. */
+				snprintf(when, sizeof when, "%lld", (long long)prm.modified);
+				fz_append_printf(CTX, b, "{\"i\":%d,\"page\":%d,\"size\":%d,\"modified\":%s,\"name\":", i, pdf_array_get_int(CTX, pages, i), prm.size, when);
+				json_str(CTX, b, prm.filename ? prm.filename : "");
+				fz_append_string(CTX, b, ",\"mime\":");
+				json_str(CTX, b, prm.mimetype ? prm.mimetype : "");
+				fz_append_string(CTX, b, ",\"desc\":");
+				json_str(CTX, b, pdf_dict_get_text_string(CTX, fs, PDF_NAME(Desc)));
+				fz_append_byte(CTX, b, '}');
+			}
+		}
+		fz_append_byte(CTX, b, ']');
+		s = buffer_to_string(CTX, b);
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, files);
+		pdf_drop_obj(CTX, pages);
+		fz_drop_buffer(CTX, b);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
+int fo_attachment_data(fo_ctx *c, fo_doc *d, int idx, unsigned char **data, size_t *len)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_obj *files = NULL, *pages = NULL;
+	fz_buffer *buf = NULL;
+	*data = NULL;
+	*len = 0;
+	fz_var(files);
+	fz_var(pages);
+	fz_var(buf);
+	fz_try(CTX)
+	{
+		if (!pdf)
+			fz_throw(CTX, FZ_ERROR_ARGUMENT, "not a PDF");
+		files = pdf_new_array(CTX, pdf, 8);
+		pages = pdf_new_array(CTX, pdf, 8);
+		collect_attachments(CTX, pdf, files, pages);
+		if (idx < 0 || idx >= pdf_array_len(CTX, files))
+			fz_throw(CTX, FZ_ERROR_ARGUMENT, "no such attachment");
+		buf = pdf_load_embedded_file_contents(CTX, pdf_array_get(CTX, files, idx));
+		if (!buf)
+			fz_throw(CTX, FZ_ERROR_FORMAT, "the attachment is empty or can't be read");
+		*len = buf->len;
+		*data = fz_malloc(CTX, buf->len ? buf->len : 1);
+		memcpy(*data, buf->data, buf->len);
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, files);
+		pdf_drop_obj(CTX, pages);
+		fz_drop_buffer(CTX, buf);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* ---------------------------------------------------------------- areas */
+
+static int take_buffer(fz_context *ctx, fz_buffer *buf, unsigned char **data, size_t *len)
+{
+	*len = buf->len;
+	*data = fz_malloc(ctx, buf->len ? buf->len : 1);
+	memcpy(*data, buf->data, buf->len);
+	return 0;
+}
+
+int fo_area_image(fo_ctx *c, fo_list *l, const float b[4], const float area[4], int rot, float dpi, int svg, unsigned char **data, size_t *len)
+{
+	fz_pixmap *pix = NULL;
+	fz_device *dev = NULL;
+	fz_buffer *buf = NULL;
+	fz_output *out = NULL;
+	*data = NULL;
+	*len = 0;
+	fz_var(pix);
+	fz_var(dev);
+	fz_var(buf);
+	fz_var(out);
+	fz_try(CTX)
+	{
+		fz_rect r = fz_make_rect(area[0] + b[0], area[1] + b[1], area[2] + b[0], area[3] + b[1]);
+		/* Turned as the page is shown, with the area's corner at 0,0. */
+		fz_matrix turn = fz_rotate((float)rot);
+		fz_rect t = fz_transform_rect(r, turn);
+		turn = fz_concat(turn, fz_translate(-t.x0, -t.y0));
+		if (svg)
+		{
+			/* Vector: text as outlines, so it looks the same everywhere. */
+			buf = fz_new_buffer(CTX, 4096);
+			out = fz_new_output_with_buffer(CTX, buf);
+			dev = fz_new_svg_device(CTX, out, t.x1 - t.x0, t.y1 - t.y0, FZ_SVG_TEXT_AS_PATH, 1);
+			fz_run_display_list(CTX, (fz_display_list *)l, dev, turn, fz_make_rect(0, 0, t.x1 - t.x0, t.y1 - t.y0), NULL);
+			fz_close_device(CTX, dev);
+			fz_close_output(CTX, out);
+		}
+		else
+		{
+			float z = dpi / 72;
+			fz_matrix ctm = fz_concat(turn, fz_scale(z, z));
+			fz_irect box = fz_round_rect(fz_transform_rect(r, ctm));
+			if ((int64_t)(box.x1 - box.x0) * (box.y1 - box.y0) > 200000000)
+				fz_throw(CTX, FZ_ERROR_LIMIT, "that's too large at this resolution; choose a lower one");
+			pix = fz_new_pixmap_with_bbox(CTX, fz_device_rgb(CTX), box, NULL, 0);
+			fz_clear_pixmap_with_value(CTX, pix, 255);
+			dev = fz_new_draw_device(CTX, fz_identity, pix);
+			fz_run_display_list(CTX, (fz_display_list *)l, dev, ctm, fz_rect_from_irect(box), NULL);
+			fz_close_device(CTX, dev);
+			pix->xres = pix->yres = (int)dpi;
+			buf = fz_new_buffer_from_pixmap_as_png(CTX, pix, fz_default_color_params);
+		}
+		take_buffer(CTX, buf, data, len);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_device(CTX, dev);
+		fz_drop_output(CTX, out);
+		fz_drop_pixmap(CTX, pix);
+		fz_drop_buffer(CTX, buf);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+char *fo_area_text(fo_ctx *c, fo_list *l, const float b[4], const float area[4])
+{
+	fz_stext_page *t = NULL;
+	char *s = NULL, *copy = NULL;
+	fz_var(t);
+	fz_var(copy);
+	fz_try(CTX)
+	{
+		fz_stext_options opts;
+		fz_init_stext_options(CTX, &opts);
+		opts.flags |= FZ_STEXT_DEHYPHENATE;
+		t = fz_new_stext_page_from_display_list(CTX, (fz_display_list *)l, &opts);
+		copy = fz_copy_rectangle(CTX, t, fz_make_rect(area[0] + b[0], area[1] + b[1], area[2] + b[0], area[3] + b[1]), 1);
+		s = fz_strdup(CTX, copy ? copy : "");
+	}
+	fz_always(CTX)
+	{
+		fz_free(CTX, copy);
+		fz_drop_stext_page(CTX, t);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
+int fo_pdf_area_pdf(fo_ctx *c, fo_page *p, const float area[4], int rot, unsigned char **data, size_t *len)
+{
+	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
+	pdf_document *dst = NULL;
+	pdf_graft_map *map = NULL;
+	fz_buffer *buf = NULL;
+	fz_output *out = NULL;
+	*data = NULL;
+	*len = 0;
+	if (!page)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	fz_var(dst);
+	fz_var(map);
+	fz_var(buf);
+	fz_var(out);
+	fz_try(CTX)
+	{
+		pdf_write_options opts = pdf_default_write_options;
+		fz_matrix ctm;
+		fz_rect r;
+		pdf_obj *np;
+		int idx = pdf_lookup_page_number(CTX, page->doc, page->obj);
+		dst = pdf_create_document(CTX);
+		map = pdf_new_graft_map(CTX, dst);
+		pdf_graft_mapped_page(CTX, map, -1, page->doc, idx);
+		/* The page itself, vector and all, shown only within the area. */
+		pdf_page_transform(CTX, page, NULL, &ctm);
+		r = fz_transform_rect(fz_make_rect(area[0], area[1], area[2], area[3]), fz_invert_matrix(ctm));
+		np = pdf_lookup_page_obj(CTX, dst, 0);
+		pdf_dict_put_rect(CTX, np, PDF_NAME(MediaBox), r);
+		pdf_dict_put_rect(CTX, np, PDF_NAME(CropBox), r);
+		pdf_dict_del(CTX, np, PDF_NAME(TrimBox));
+		pdf_dict_del(CTX, np, PDF_NAME(BleedBox));
+		pdf_dict_del(CTX, np, PDF_NAME(ArtBox));
+		if (rot)
+			pdf_dict_put_int(CTX, np, PDF_NAME(Rotate), ((pdf_dict_get_inheritable_int(CTX, page->obj, PDF_NAME(Rotate)) + rot) % 360 + 360) % 360);
+		buf = fz_new_buffer(CTX, 4096);
+		out = fz_new_output_with_buffer(CTX, buf);
+		opts.do_compress = 1;
+		opts.do_compress_images = 1;
+		opts.do_compress_fonts = 1;
+		opts.do_garbage = 1;
+		pdf_write_document(CTX, dst, out, &opts);
+		fz_close_output(CTX, out);
+		take_buffer(CTX, buf, data, len);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_output(CTX, out);
+		fz_drop_buffer(CTX, buf);
+		pdf_drop_graft_map(CTX, map);
+		pdf_drop_document(CTX, dst);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
 /* ---------------------------------------------------------------- text */
 
 fo_text *fo_text_new(fo_ctx *c, fo_list *l)

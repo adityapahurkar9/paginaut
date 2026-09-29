@@ -156,6 +156,20 @@ int fo_pdf_rewrite_images(fo_ctx *c, fo_doc *d, int dpi, int quality, int lossle
 /* Full rewrite. encrypt: -1 keep, 0 remove, 1 AES-256 with these passwords and permissions;
  * compact: de-duplicate and pack objects as tightly as possible. */
 int fo_pdf_save_with(fo_ctx *c, fo_doc *d, const char *path, int encrypt, int permissions, const char *owner, const char *user, int compact);
+/* Pictures on a page (display list): JSON [{"r":[bbox rel. to page origin],"w","h" (pixels),
+ * "k":"jpg"|"jp2"|"png" (how it's stored),"m" (has transparency),"n" (stored bytes),"id" (same picture, same id)}]. */
+char *fo_pictures_json(fo_ctx *c, fo_list *l, const float bounds[4]);
+/* Picture idx (in that list's order) as a file: fmt 0 as stored (JPEG/JPEG 2000; else PNG),
+ * 1 PNG, 2 a one-page PDF. ext gets the file extension. Free *data with fo_free. */
+int fo_picture_data(fo_ctx *c, fo_list *l, int idx, int fmt, unsigned char **data, size_t *len, char ext[8]);
+/* Files embedded in the PDF (document and page attachments): JSON [{"i","page" (-1: document),"size","modified","name","mime","desc"}]. */
+char *fo_attachments_json(fo_ctx *c, fo_doc *d);
+int fo_attachment_data(fo_ctx *c, fo_doc *d, int idx, unsigned char **data, size_t *len);
+/* An area of a page (coords relative to its origin), turned by rot: PNG at dpi, or SVG. */
+int fo_area_image(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4], int rot, float dpi, int svg, unsigned char **data, size_t *len);
+char *fo_area_text(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4]);
+/* The page as a one-page PDF showing only `area` (page coordinates, not relative). */
+int fo_pdf_area_pdf(fo_ctx *c, fo_page *p, const float area[4], int rot, unsigned char **data, size_t *len);
 /* A new, empty PDF in memory. */
 fo_doc *fo_pdf_new(fo_ctx *c);
 /* Adds a bookmark titled `title` at the end of d's outline, pointing at page

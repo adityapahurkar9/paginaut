@@ -673,6 +673,22 @@ impl Document {
         with_kind(self.1, |c| take_string(c, unsafe { fo_sigs_json(c, self.0) }).ok_or_else(|| last_error(c)))
     }
 
+    /// Embedded files as JSON (see fo_attachments_json).
+    pub fn attachments_json(&self) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_attachments_json(c, self.0) }).ok_or_else(|| last_error(c)))
+    }
+
+    /// The contents of embedded file `i`.
+    pub fn attachment_data(&self, i: usize) -> Result<Vec<u8>> {
+        with_kind(self.1, |c| {
+            let (mut d, mut len) = (std::ptr::null_mut(), 0usize);
+            if unsafe { fo_attachment_data(c, self.0, i as c_int, &mut d, &mut len) } != 0 {
+                return Err(last_error(c));
+            }
+            Ok(take_bytes(c, d, len))
+        })
+    }
+
     /// The bytes signature `i` covers, and its CMS blob.
     pub fn sig_data(&self, i: usize) -> Result<(Vec<u8>, Vec<u8>)> {
         with_kind(self.1, |c| {
@@ -690,7 +706,28 @@ impl Document {
     }
 }
 
+/// Copies `len` bytes the native side allocated, and frees them.
+fn take_bytes(c: *mut fo_ctx, p: *mut u8, len: usize) -> Vec<u8> {
+    if p.is_null() {
+        return Vec::new();
+    }
+    let v = unsafe { std::slice::from_raw_parts(p, len).to_vec() };
+    unsafe { fo_free(c, p.cast()) };
+    v
+}
+
 impl Page {
+    /// This page as a one-page PDF showing only `area` (page coordinates), turned by `rot`.
+    pub fn area_pdf(&self, area: &[f32; 4], rot: i32) -> Result<Vec<u8>> {
+        with_kind(self.1, |c| {
+            let (mut d, mut len) = (std::ptr::null_mut(), 0usize);
+            if unsafe { fo_pdf_area_pdf(c, self.0, area.as_ptr(), rot, &mut d, &mut len) } != 0 {
+                return Err(last_error(c));
+            }
+            Ok(take_bytes(c, d, len))
+        })
+    }
+
     /// Adds a signed signature field. The signature itself is made by
     /// `signing` during the next incremental save, which must happen while
     /// `signing` is alive.
@@ -1012,6 +1049,39 @@ impl List {
                 _ => Err(last_error(c)),
             }
         })
+    }
+
+    /// Pictures on the page as JSON (see fo_pictures_json).
+    pub fn pictures_json(&self, bounds: &[f32; 4]) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_pictures_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c)))
+    }
+
+    /// Picture `idx` as a file (fmt 0 as stored, 1 PNG, 2 PDF) and its extension.
+    pub fn picture_data(&self, idx: usize, fmt: i32) -> Result<(Vec<u8>, String)> {
+        with_kind(self.1, |c| {
+            let (mut d, mut len, mut ext) = (std::ptr::null_mut(), 0usize, [0 as c_char; 8]);
+            if unsafe { fo_picture_data(c, self.0, idx as c_int, fmt, &mut d, &mut len, ext.as_mut_ptr()) } != 0 {
+                return Err(last_error(c));
+            }
+            let ext = unsafe { std::ffi::CStr::from_ptr(ext.as_ptr()) }.to_string_lossy().into_owned();
+            Ok((take_bytes(c, d, len), ext))
+        })
+    }
+
+    /// An area (relative to the page origin), turned by `rot`: PNG at `dpi`, or SVG.
+    pub fn area_image(&self, bounds: &[f32; 4], area: &[f32; 4], rot: i32, dpi: f32, svg: bool) -> Result<Vec<u8>> {
+        with_kind(self.1, |c| {
+            let (mut d, mut len) = (std::ptr::null_mut(), 0usize);
+            if unsafe { fo_area_image(c, self.0, bounds.as_ptr(), area.as_ptr(), rot, dpi, svg as c_int, &mut d, &mut len) } != 0 {
+                return Err(last_error(c));
+            }
+            Ok(take_bytes(c, d, len))
+        })
+    }
+
+    /// The text in an area (relative to the page origin).
+    pub fn area_text(&self, bounds: &[f32; 4], area: &[f32; 4]) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_area_text(c, self.0, bounds.as_ptr(), area.as_ptr()) }).ok_or_else(|| last_error(c)))
     }
 
     /// Where images are drawn on the page: [x0, y0, x1, y1] relative to its origin.

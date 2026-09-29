@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import { bookScreen } from "../modes";
 import { selectWhenShown } from "../annots";
 import * as A from "../actions";
-import { ChevronDown, ChevronRight, Plus } from "lucide-preact";
+import { ChevronDown, ChevronRight, Paperclip, Plus } from "lucide-preact";
+import { Attachments } from "./ExtractUI";
 import { api, type OutlineItem } from "../api";
 import { renderer, renderKey, type Want } from "../render/RenderManager";
 import { LO_SCALE, paint } from "../render/Viewer";
@@ -138,6 +139,8 @@ export function Sidebar() {
   };
 
   const open = s.sidebarOpen && !!tab && !bookScreen.value;
+  const hasFiles = !!tab?.attachments.value?.length;
+  const files = hasFiles && s.sidebarTab === "files";
   return (
     <div class={`sidebar ${open ? "" : "closed"} ${dragging ? "dragging" : ""}`} style={{ width: open ? width : 0 }}>
       <div class="sidebar-inner" style={{ width }}>
@@ -152,11 +155,17 @@ export function Sidebar() {
             <button class={`segb ${s.sidebarTab === "outline" ? "on" : ""}`} onClick={() => updateSettings({ sidebarTab: "outline" })}>
               Outline
             </button>
+            {hasFiles && (
+              <button class={`segb icon ${files ? "on" : ""}`} title="Attached files" aria-label="Attached files" onClick={() => updateSettings({ sidebarTab: "files" })}>
+                <Paperclip size={14} />
+              </button>
+            )}
           </div>
         </div>
         {tab && tab.status.value === "ready" && (
-          s.sidebarTab === "pages" ? <Thumbnails key={tab.key} tab={tab} width={width} visible={open} />
+          s.sidebarTab === "pages" || (s.sidebarTab === "files" && !hasFiles) ? <Thumbnails key={tab.key} tab={tab} width={width} visible={open} />
           : s.sidebarTab === "comments" ? <Comments key={tab.key} tab={tab} />
+          : files ? <Attachments key={tab.key} tab={tab} />
           : <Outline key={tab.key} tab={tab} />
         )}
       </div>

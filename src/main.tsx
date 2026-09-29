@@ -17,6 +17,7 @@ import { creating, droppedPicture } from "./sign";
 import { fileMenuOpen } from "./ui/Toolbar";
 import { toggleGrid } from "./ui/PageGrid";
 import { startProperties } from "./ui/MetaUI";
+import "./extract";
 import { endPageSize, pageSizeEdit } from "./pagesize";
 
 render(<App />, document.getElementById("app")!);

@@ -232,6 +232,55 @@ pub struct Properties {
     pub modified: String,
 }
 
+/// A picture on a page: where (relative to the page origin), its size in pixels, how it's
+/// stored ("jpg", "jp2", "png"), whether it has transparency, stored bytes, and an id
+/// (the same picture used again has the same id; empty when unknown).
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Picture {
+    pub r: [f32; 4],
+    pub w: i32,
+    pub h: i32,
+    pub k: String,
+    pub m: i32,
+    pub n: usize,
+    pub id: String,
+}
+
+/// A file embedded in a PDF: on the document (page -1) or pinned to a page.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Attachment {
+    pub i: usize,
+    pub page: i32,
+    pub size: i64,
+    pub modified: i64,
+    pub name: String,
+    pub mime: String,
+    pub desc: String,
+}
+
+/// What "Save all pictures" did.
+#[derive(Serialize)]
+pub struct SavedPictures {
+    pub saved: usize,
+    pub small: usize,
+    pub repeats: usize,
+}
+
+/// `dir/name.ext`, or `dir/name (2).ext`… when that's taken. Names are made safe for Windows.
+pub fn free_path(dir: &str, name: &str, ext: &str) -> std::path::PathBuf {
+    let clean: String = name.chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect();
+    let clean = clean.trim().trim_end_matches('.').to_string();
+    let clean = if clean.is_empty() { "file".to_string() } else { clean };
+    let dot = if ext.is_empty() { String::new() } else { format!(".{ext}") };
+    let mut p = std::path::Path::new(dir).join(format!("{clean}{dot}"));
+    let mut n = 2;
+    while p.exists() {
+        p = std::path::Path::new(dir).join(format!("{clean} ({n}){dot}"));
+        n += 1;
+    }
+    p
+}
+
 /// A PDF's protection, as the Protect dialog shows it.
 #[derive(Serialize, Deserialize, Default)]
 pub struct Security {
@@ -582,6 +631,82 @@ impl Doc {
         self.content_edited.store(true, Ordering::Release);
         self.edited();
         ops.iter().map(|op| self.bounds(op.page).map(|b| [b[2] - b[0], b[3] - b[1]])).collect()
+    }
+
+    // ------------------------------------------------------------ pictures, areas, attachments
+
+    pub fn pictures(&self, index: usize) -> Result<Vec<Picture>, String> {
+        let b = self.bounds(index)?;
+        let json = self.list(index, 1)?.pictures_json(&b)?;
+        serde_json::from_str(&json).map_err(|e| e.to_string())
+    }
+
+    /// Picture `idx` of page `index` (fmt 0 as stored, 1 PNG, 2 PDF) and its extension.
+    pub fn picture_data(&self, index: usize, idx: usize, fmt: i32) -> Result<(Vec<u8>, String), String> {
+        self.list(index, 1)?.picture_data(idx, fmt)
+    }
+
+    /// Saves the pictures on `pages` (named with `names`) into `dir`: each picture once, none
+    /// with a side shorter than `min` pixels.
+    pub fn save_pictures(&self, pages: &[usize], names: &[String], min: i32, fmt: i32, dir: &str, stem: &str) -> Result<SavedPictures, String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = SavedPictures { saved: 0, small: 0, repeats: 0 };
+        for (k, &i) in pages.iter().enumerate() {
+            let list = self.list(i, 1)?;
+            let pics: Vec<Picture> = serde_json::from_str(&list.pictures_json(&self.bounds(i)?)?).map_err(|e| e.to_string())?;
+            let mut n = 0;
+            for (j, p) in pics.iter().enumerate() {
+                if p.w.min(p.h) < min {
+                    out.small += 1;
+                    continue;
+                }
+                if !p.id.is_empty() && !seen.insert(p.id.clone()) {
+                    out.repeats += 1;
+                    continue;
+                }
+                let (bytes, ext) = list.picture_data(j, fmt)?;
+                n += 1;
+                let name = format!("{stem} page {} picture {n}", names.get(k).map(String::as_str).unwrap_or(""));
+                std::fs::write(free_path(dir, &name, &ext), bytes).map_err(|e| e.to_string())?;
+                out.saved += 1;
+            }
+        }
+        Ok(out)
+    }
+
+    /// An area of page `index` (relative to its origin), turned by `rot`: "png" at `dpi`, "svg" or "pdf".
+    pub fn area_data(&self, index: usize, area: [f32; 4], rot: i32, kind: &str, dpi: f32) -> Result<Vec<u8>, String> {
+        let b = self.bounds(index)?;
+        match kind {
+            "pdf" => {
+                let abs = [area[0] + b[0], area[1] + b[1], area[2] + b[0], area[3] + b[1]];
+                let mut inner = self.inner.lock();
+                if !inner.doc.is_pdf() {
+                    return Err("Only PDF pages can be saved as PDF areas. Save as a picture instead.".into());
+                }
+                let page = self.page(&mut inner, index)?;
+                page.area_pdf(&abs, rot)
+            }
+            "svg" => self.list(index, 1)?.area_image(&b, &area, rot, 72.0, true),
+            _ => self.list(index, 1)?.area_image(&b, &area, rot, dpi.clamp(36.0, 1200.0), false),
+        }
+    }
+
+    pub fn area_text(&self, index: usize, area: [f32; 4]) -> Result<String, String> {
+        let b = self.bounds(index)?;
+        self.list(index, 1)?.area_text(&b, &area)
+    }
+
+    pub fn attachments(&self) -> Result<Vec<Attachment>, String> {
+        let inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Ok(Vec::new());
+        }
+        serde_json::from_str(&inner.doc.attachments_json()?).map_err(|e| e.to_string())
+    }
+
+    pub fn attachment_data(&self, i: usize) -> Result<Vec<u8>, String> {
+        self.inner.lock().doc.attachment_data(i)
     }
 
     // ------------------------------------------------------------ bookmarks, labels, properties

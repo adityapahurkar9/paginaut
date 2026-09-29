@@ -101,6 +101,13 @@ extern "C" {
     pub fn fo_convert_to_pdf(c: *mut fo_ctx, d: *mut fo_doc, path: *const c_char, order: *const c_int, count: c_int, rot: *const c_int) -> c_int;
     pub fn fo_pdf_insert_pages(c: *mut fo_ctx, d: *mut fo_doc, src: *mut fo_doc, pages: *const c_int, count: c_int, fit: *const c_float) -> c_int;
     pub fn fo_pdf_new(c: *mut fo_ctx) -> *mut fo_doc;
+    pub fn fo_pictures_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
+    pub fn fo_picture_data(c: *mut fo_ctx, l: *mut fo_list, idx: c_int, fmt: c_int, data: *mut *mut u8, len: *mut usize, ext: *mut c_char) -> c_int;
+    pub fn fo_attachments_json(c: *mut fo_ctx, d: *mut fo_doc) -> *mut c_char;
+    pub fn fo_attachment_data(c: *mut fo_ctx, d: *mut fo_doc, idx: c_int, data: *mut *mut u8, len: *mut usize) -> c_int;
+    pub fn fo_area_image(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, area: *const c_float, rot: c_int, dpi: c_float, svg: c_int, data: *mut *mut u8, len: *mut usize) -> c_int;
+    pub fn fo_area_text(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, area: *const c_float) -> *mut c_char;
+    pub fn fo_pdf_area_pdf(c: *mut fo_ctx, p: *mut fo_page, area: *const c_float, rot: c_int, data: *mut *mut u8, len: *mut usize) -> c_int;
     pub fn fo_pdf_security_json(c: *mut fo_ctx, d: *mut fo_doc, password: *const c_char) -> *mut c_char;
     pub fn fo_pdf_check_owner(c: *mut fo_ctx, d: *mut fo_doc, candidate: *const c_char, current: *const c_char) -> c_int;
     pub fn fo_pdf_fix_page_tree(c: *mut fo_ctx, d: *mut fo_doc) -> c_int;

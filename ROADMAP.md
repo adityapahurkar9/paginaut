@@ -315,16 +315,18 @@ Size and repair:
       tree"); the tree is now rebuilt from the pages that can be read, and the save says how many were lost
 
 Extract content (right-click the item on the page; the same menu in Read/Book mode):
-- [ ] Pictures: copy, or save in their original quality: the image as stored in the PDF (JPEGs saved as they are,
-      no recompression, full resolution, not a screenshot), PNG, or a one-page PDF. "Save all pictures" for the
-      document or selected pages, with a minimum size so icons and specks are skipped
+- [x] Pictures (right-click one on the page): copy, or save as stored (JPEG and JPEG 2000 byte for byte, full
+      resolution), as PNG (with transparency) or as a one-page PDF (picture stored as is, at its size on the page).
+      "Save all pictures" for all, selected or listed pages: repeats saved once, small ones (icons, specks) skipped
 - [ ] Tables: copy as a real table (pastes into Excel and Word with cells), save as CSV or Excel (.xlsx), save as PDF
       (vector, cut from the page) or picture. Cells from ruling lines and text positions (Read-mode table hunt);
       borderless tables: draw a box round the table and adjust the column lines
-- [ ] Charts and drawings: save as PDF or SVG (vector), or PNG at a chosen resolution
-- [ ] Any area: drag a box, then save as PDF (vector), picture at a chosen resolution, or copy its text
-- [ ] Attachments: files stored in the PDF (attached to the document or pinned to a page) listed in an Attachments
-      side panel: open, save, save all
+- [x] Any area, charts and drawings: "Select an area" (right-click menu, Organize), drag a box: copy its text,
+      copy as picture, save as PDF (vector; the rest of the page is hidden, not removed), SVG (vector, text as
+      outlines) or PNG at 150/300/600 dpi; turned as the page is shown
+- [x] Attachments: files embedded in the PDF (on the document or pinned to a page) in a paperclip side panel:
+      open (double-click; programs and scripts are refused, only saved), save, save all
+- [x] Fix: copying a picture made WebView2 ask for clipboard permission (the write now starts inside the click)
 
 ### Phase 6.3 (0.6.30): Edit PDF
 - [ ] Edit existing text: click a line, change it; same font where the PDF carries the letters needed, a close

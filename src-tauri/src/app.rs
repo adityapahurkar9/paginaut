@@ -402,6 +402,134 @@ fn sig_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------- pictures, areas, attachments
+
+#[tauri::command]
+pub async fn pictures(state: State<'_, AppState>, doc: DocId, page: usize) -> Res<Vec<crate::engine::Picture>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.pictures(page)).await
+}
+
+/// A picture's bytes (for the clipboard).
+#[tauri::command]
+pub async fn picture_bytes(state: State<'_, AppState>, doc: DocId, page: usize, idx: usize, fmt: i32) -> Res<tauri::ipc::Response> {
+    let engine = state.engine.clone();
+    blocking(move || Ok(tauri::ipc::Response::new(engine.doc(doc)?.picture_data(page, idx, fmt)?.0))).await
+}
+
+/// Saves a picture at `path` (its extension follows how the picture is saved); returns the path used.
+#[tauri::command]
+pub async fn picture_save(state: State<'_, AppState>, doc: DocId, page: usize, idx: usize, fmt: i32, path: String) -> Res<String> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        let (bytes, ext) = engine.doc(doc)?.picture_data(page, idx, fmt)?;
+        let p = std::path::Path::new(&path).with_extension(ext);
+        std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
+        Ok(p.to_string_lossy().into_owned())
+    })
+    .await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn save_pictures(
+    state: State<'_, AppState>,
+    doc: DocId,
+    pages: Vec<usize>,
+    names: Vec<String>,
+    min: i32,
+    fmt: i32,
+    dir: String,
+    stem: String,
+) -> Res<crate::engine::SavedPictures> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.save_pictures(&pages, &names, min, fmt, &dir, &stem)).await
+}
+
+#[tauri::command]
+pub async fn area_bytes(state: State<'_, AppState>, doc: DocId, page: usize, area: [f32; 4], rot: i32, kind: String, dpi: f32) -> Res<tauri::ipc::Response> {
+    let engine = state.engine.clone();
+    blocking(move || Ok(tauri::ipc::Response::new(engine.doc(doc)?.area_data(page, area, rot, &kind, dpi)?))).await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn area_save(state: State<'_, AppState>, doc: DocId, page: usize, area: [f32; 4], rot: i32, kind: String, dpi: f32, path: String) -> Res<()> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        let bytes = engine.doc(doc)?.area_data(page, area, rot, &kind, dpi)?;
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn area_text(state: State<'_, AppState>, doc: DocId, page: usize, area: [f32; 4]) -> Res<String> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.area_text(page, area)).await
+}
+
+#[tauri::command]
+pub async fn attachments(state: State<'_, AppState>, doc: DocId) -> Res<Vec<crate::engine::Attachment>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.attachments()).await
+}
+
+/// Saves attachment `i` at `path`, or (`dir` set) into that folder under its own name; returns the path used.
+#[tauri::command]
+pub async fn attachment_save(state: State<'_, AppState>, doc: DocId, i: usize, path: Option<String>, dir: Option<String>) -> Res<String> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        let d = engine.doc(doc)?;
+        let bytes = d.attachment_data(i)?;
+        let p = match (path, dir) {
+            (Some(p), _) => std::path::PathBuf::from(p),
+            (None, Some(dir)) => {
+                let name = d.attachments()?.into_iter().find(|a| a.i == i).map(|a| a.name).unwrap_or_default();
+                let file = std::path::Path::new(&name);
+                let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("attachment").to_string();
+                let ext = file.extension().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                crate::engine::free_path(&dir, &stem, &ext)
+            }
+            _ => return Err("Nowhere to save the attachment.".into()),
+        };
+        std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
+        Ok(p.to_string_lossy().into_owned())
+    })
+    .await
+}
+
+/// Kinds of file that run code when opened: attachments like these are only saved, never opened.
+const RISKY: &[&str] = &[
+    "exe", "com", "bat", "cmd", "scr", "pif", "cpl", "msi", "msp", "msc", "dll", "sys", "jar", "js", "jse", "vbs", "vbe", "wsf", "wsh",
+    "ps1", "psm1", "hta", "lnk", "url", "reg", "inf", "scf", "appref-ms", "application", "gadget", "chm", "iso", "img", "vhd", "vhdx", "docm",
+    "xlsm", "pptm", "html", "htm", "svg", "xhtml", "mht",
+];
+
+/// Opens attachment `i` with its usual app (from a temporary copy). Files that could run code are refused.
+#[tauri::command]
+pub async fn attachment_open(app: tauri::AppHandle, state: State<'_, AppState>, doc: DocId, i: usize) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let engine = state.engine.clone();
+    let path = blocking(move || {
+        let d = engine.doc(doc)?;
+        let name = d.attachments()?.into_iter().find(|a| a.i == i).map(|a| a.name).unwrap_or_default();
+        let file = std::path::Path::new(&name);
+        let ext = file.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+        if ext.is_empty() || RISKY.contains(&ext.as_str()) {
+            return Err(format!("\"{name}\" could run programs on this PC, so Paginaut won't open it. Save it instead, and open it only if you trust where it came from."));
+        }
+        let dir = std::env::temp_dir().join("Paginaut").join("attachments");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("attachment").to_string();
+        let p = crate::engine::free_path(&dir.to_string_lossy(), &stem, &ext);
+        std::fs::write(&p, d.attachment_data(i)?).map_err(|e| e.to_string())?;
+        Ok(p.to_string_lossy().into_owned())
+    })
+    .await?;
+    app.opener().open_path(path, None::<&str>).map_err(|e| e.to_string())
+}
+
 /// A picture dropped on the signature dialog from Explorer (pictures only, up to 40 MB).
 #[tauri::command]
 pub async fn read_picture(path: String) -> Res<tauri::ipc::Response> {
