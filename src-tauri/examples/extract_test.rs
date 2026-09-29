@@ -112,6 +112,36 @@ fn main() {
     let info = engine.open(&format!("{dir}/text-1000.pdf")).unwrap();
     check("no attachments", engine.doc(info.doc_id).unwrap().attachments().unwrap().is_empty(), String::new());
 
+    // Tables in a prospectus: found with their cells, saved as CSV and Excel.
+    let info = engine.open(&format!("{dir}/nse rhp.pdf")).unwrap();
+    let d = engine.doc(info.doc_id).unwrap();
+    let t = std::time::Instant::now();
+    let mut best: Option<(usize, paginaut_lib::engine::table::Table)> = None;
+    let mut found = 0;
+    for i in 0..info.page_count.min(60) {
+        for tb in d.tables(i).unwrap_or_default() {
+            found += 1;
+            if best.as_ref().map_or(true, |(_, b)| tb.cells.len() > b.cells.len()) {
+                best = Some((i, tb));
+            }
+        }
+    }
+    println!("  {found} tables on the first 60 pages in {} ms", t.elapsed().as_millis());
+    if let Some((page, tb)) = &best {
+        let grid = tb.grid();
+        println!("  page {}: {} x {}; first rows: {:?}", page + 1, tb.rows(), tb.cols(), grid.iter().take(4).map(|r| r.iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>()).collect::<Vec<_>>());
+        std::fs::write(format!("{tmp}/table.csv"), tb.csv()).unwrap();
+        std::fs::write(format!("{tmp}/table.xlsx"), tb.xlsx()).unwrap();
+        // Reading the same area again, and with the column lines given.
+        let again = d.table_in(*page, tb.r, &[]).unwrap();
+        check("table read from its area", again.as_ref().is_some_and(|a| a.cols() == tb.cols()), format!("{:?}", again.as_ref().map(|a| (a.rows(), a.cols()))));
+        let mid = (tb.xs[0] + tb.xs[tb.xs.len() - 1]) / 2.0;
+        let two = d.table_in(*page, tb.r, &[tb.xs[0], mid, tb.xs[tb.xs.len() - 1]]).unwrap();
+        check("column lines as given", two.as_ref().is_some_and(|a| a.cols() == 2), format!("{:?}", two.as_ref().map(|a| (a.rows(), a.cols()))));
+    }
+    check("tables found", found > 0 && best.is_some(), format!("{found}"));
+    engine.close(info.doc_id);
+
     println!("{}", if failures == 0 { "ALL PASSED".to_string() } else { format!("{failures} FAILED") });
     std::process::exit(failures);
 }

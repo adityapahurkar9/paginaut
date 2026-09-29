@@ -28,7 +28,7 @@ import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
 import { startLabels, startProperties } from "./MetaUI";
 import { startSecure } from "./SecureUI";
-import { picturesDialog, showAttachments, startArea } from "../extract";
+import { openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -515,7 +515,7 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { label: "Save all pictures…", disabled: !tab, run: () => tab && (picturesDialog.value = tab) },
         { label: "Select an area to copy or save…", hint: "or right-click a page", disabled: !tab, run: () => tab && startArea(tab) },
         { label: `Attached files${tab?.attachments.value?.length ? ` (${tab.attachments.value.length})` : ""}`, disabled: !tab?.attachments.value?.length, run: showAttachments },
-        soon("Tables to Excel / CSV", 6.2),
+        { label: "Table on this page to Excel / CSV…", disabled: !tab, run: () => tab && void openPageTable(tab) },
         { sep: true },
         soon("Edit PDF", 6.3), soon("Redact", 6.5), soon("Compare", 7.5),
       ], "left", 280)} />

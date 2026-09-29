@@ -14,7 +14,7 @@ import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
 import { startLabels, startProperties } from "./MetaUI";
 import { startSecure } from "./SecureUI";
-import { picturesDialog, showAttachments, startArea } from "../extract";
+import { openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
 import { addBookmarkHere } from "./Sidebar";
 import { removeStamps } from "../stamps";
 import { helpPanel } from "./HelpDialogs";
@@ -234,6 +234,7 @@ function commands(): Item[] {
     c("Reduce file size (compress)…", withTab((t) => startSecure(t, "compress")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Repair a damaged PDF…", withTab((t) => startSecure(t, "repair")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Save all pictures (extract images)…", withTab((t) => (picturesDialog.value = t)), "", hasDoc),
+    c("Table on this page to Excel / CSV (extract table)…", withTab((t) => void openPageTable(t)), "", hasDoc),
     c("Select an area to copy or save (PDF, SVG, PNG, text)…", withTab((t) => startArea(t)), "", hasDoc),
     c("Attached files (attachments)", showAttachments, "", () => hasDoc() && !!activeTab.value?.attachments.value?.length),
     c("Add a bookmark for this page", withTab((t) => void addBookmarkHere(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),

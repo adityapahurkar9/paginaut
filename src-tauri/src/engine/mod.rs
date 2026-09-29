@@ -4,6 +4,7 @@ pub mod ffi;
 pub mod mupdf;
 pub mod ocr;
 pub mod pool;
+pub mod table;
 
 use mupdf::{Document, List, Page, RenderOutcome, Text};
 use parking_lot::{Mutex, RwLock};
@@ -690,6 +691,21 @@ impl Doc {
             "svg" => self.list(index, 1)?.area_image(&b, &area, rot, 72.0, true),
             _ => self.list(index, 1)?.area_image(&b, &area, rot, dpi.clamp(36.0, 1200.0), false),
         }
+    }
+
+    /// Tables found on page `index`.
+    pub fn tables(&self, index: usize) -> Result<Vec<table::Table>, String> {
+        let b = self.bounds(index)?;
+        let list: Vec<Option<table::Table>> = serde_json::from_str(&self.list(index, 1)?.tables_json(&b)?).map_err(|e| e.to_string())?;
+        Ok(list.into_iter().flatten().filter(|t| t.rows() > 0 && t.cols() > 0).collect())
+    }
+
+    /// The table in `area` of page `index`, with the column lines `cols` if given (two or more).
+    pub fn table_in(&self, index: usize, area: [f32; 4], cols: &[f32]) -> Result<Option<table::Table>, String> {
+        let b = self.bounds(index)?;
+        let json = self.list(index, 1)?.table_in_json(&b, &area, cols)?;
+        let list: Vec<Option<table::Table>> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        Ok(list.into_iter().flatten().filter(|t| t.rows() > 0 && t.cols() > 0).max_by_key(|t| t.cells.len()))
     }
 
     pub fn area_text(&self, index: usize, area: [f32; 4]) -> Result<String, String> {

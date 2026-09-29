@@ -1,7 +1,7 @@
 // Getting content out of a page: pictures (right-click), any area (drag a box), attachments.
 import { effect, signal } from "@preact/signals";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { api, type Picture } from "./api";
+import { api, type Picture, type Table } from "./api";
 import * as A from "./actions";
 import { onDocReady } from "./pages";
 import { activeTab, baseName, showToast, toast, updateSettings, type Tab } from "./store";
@@ -80,12 +80,109 @@ function pictureItems(tab: Tab, view: number, idx: number, pic: Picture): MenuIt
   ];
 }
 
+// ---------------------------------------------------------------- tables
+
+const tableCache = new Map<string, Promise<Table[]>>();
+
+function tablesOf(tab: Tab, src: number): Promise<Table[]> {
+  const info = tab.info.value!;
+  const key = `${info.docId}:${src}:${tab.contentRev.value}`;
+  let p = tableCache.get(key);
+  if (!p) {
+    if (tableCache.size > 64) tableCache.clear();
+    p = api.tables(info.docId, src).catch(() => []);
+    tableCache.set(key, p);
+  }
+  return p;
+}
+
+/** The table's text in rows and columns; rows with nothing in them left out. */
+export function gridOf(t: Table): string[][] {
+  const h = t.ys.length - 1, w = t.xs.length - 1;
+  const g = Array.from({ length: h }, () => Array<string>(w).fill(""));
+  for (const [r, c, , , s] of t.cells) if (r < h && c < w) g[r][c] = g[r][c] ? `${g[r][c]} ${s}` : s;
+  return g.filter((row) => row.some((s) => s.trim()));
+}
+
+const figure = /^[\s(₹$€£-]*[\d.,]+%?\)?\s*$/;
+
+/** Joins two pieces of a heading: "operatio" + "ns" (a word cut at a line) without a space. */
+const joinText = (a: string, b: string) => (!a ? b : !b ? a : /\p{Ll}$/u.test(a) && /^\p{Ll}{1,3}\b/u.test(b) && b.length <= 3 ? a + b : `${a} ${b}`);
+
+/**
+ * Headings set over several lines come out as several rows. This joins the rows above the
+ * first row of figures into one heading row, column by column.
+ */
+export function joinHeading(t: Table): Table {
+  const h = t.ys.length - 1, w = t.xs.length - 1;
+  const g = Array.from({ length: h }, () => Array<string>(w).fill(""));
+  for (const [r, c, , , s] of t.cells) if (r < h && c < w) g[r][c] = joinText(g[r][c], s);
+  const d = g.findIndex((row) => {
+    const full = row.filter((s) => s.trim());
+    // Years (2025) head columns; they aren't figures.
+    return full.length >= 2 && full.filter((s) => figure.test(s) && !/^\s*(19|20)\d\d\s*$/.test(s)).length * 2 >= full.length;
+  });
+  if (d < 2) return t;
+  const head = Array.from({ length: w }, (_, c) => g.slice(0, d).reduce((a, row) => joinText(a, row[c].trim()), ""));
+  const cells: Table["cells"] = head.map((s, c) => [0, c, 1, 1, s] as [number, number, number, number, string]).filter((x) => x[4]);
+  for (const [r, c, rs, cs, s] of t.cells) if (r >= d) cells.push([r - d + 1, c, rs, cs, s]);
+  return { ...t, ys: [t.ys[0], ...t.ys.slice(d)], cells };
+}
+
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** Copies as a real table (cells in Excel, Word) and as tab-separated text. */
+export function copyTable(t: Table) {
+  const g = gridOf(t);
+  const html = `<table>${g.map((row) => `<tr>${row.map((s) => `<td>${esc(s)}</td>`).join("")}</tr>`).join("")}</table>`;
+  const tsv = g.map((row) => row.map((s) => s.replace(/[\t\n]/g, " ")).join("\t")).join("\r\n");
+  navigator.clipboard
+    .write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([tsv], { type: "text/plain" }) })])
+    .then(() => showToast(`Table copied · ${g.length} rows · paste it into Excel or Word`), (e) => showToast(`Couldn't copy: ${e}`, 5000));
+}
+
+export async function saveTable(tab: Tab, view: number, t: Table, kind: "xlsx" | "csv") {
+  const path = await askPath(kind === "xlsx" ? "Save the table as Excel" : "Save the table as CSV", `${stemOf(tab)} page ${labelOf(tab, view)} table`, kind, kind === "xlsx" ? "Excel workbook" : "CSV");
+  if (!path) return;
+  try {
+    await api.tableSave(t, path);
+    showToast(`Saved ${baseName(path)}`);
+  } catch (e) {
+    showToast(`Couldn't save the table: ${e}`, 5000);
+  }
+}
+
+/** The table dialog: the table over its picture, with column lines to move. */
+export const tableDialog = signal<{ tab: Tab; view: number; area: [number, number, number, number]; table: Table | null } | null>(null);
+
+/** Opens the largest table on the page in view (Organize menu, command palette). */
+export async function openPageTable(tab: Tab) {
+  const view = tab.page.value;
+  const tables = await tablesOf(tab, srcOf(tab, view));
+  if (!tables.length) return showToast("No table found on this page. Select an area round one and choose Read as a table.", 5000);
+  const t = tables.reduce((a, b) => (b.cells.length > a.cells.length ? b : a));
+  tableDialog.value = { tab, view, area: t.r, table: t };
+}
+
+function tableItems(tab: Tab, view: number, found: Table): MenuItem[] {
+  const t = joinHeading(found);
+  const rows = gridOf(t).length, cols = t.xs.length - 1;
+  return [
+    { head: `Table · ${rows} rows × ${cols} columns` },
+    { label: "Copy table", run: () => copyTable(t) },
+    { label: "Save table as Excel…", run: () => void saveTable(tab, view, t, "xlsx") },
+    { label: "Save table as CSV…", run: () => void saveTable(tab, view, t, "csv") },
+    { label: "Check and adjust columns…", run: () => (tableDialog.value = { tab, view, area: found.r, table: found }) },
+  ];
+}
+
 // ---------------------------------------------------------------- the page's right-click menu
 
 /** Opens the menu for a right-click on page `view` at page point `pt`. */
 async function pageMenu(tab: Tab, view: number, pt: [number, number], x: number, y: number) {
   const src = srcOf(tab, view);
-  const pics = await picturesOf(tab, src);
+  const [pics, tables] = await Promise.all([picturesOf(tab, src), tablesOf(tab, src)]);
+  const table = tables.find((t) => pt[0] >= t.r[0] && pt[0] <= t.r[2] && pt[1] >= t.r[1] && pt[1] <= t.r[3]);
   // The smallest picture under the pointer (a photo on a scan, not the scan).
   let hit = -1;
   for (let i = 0; i < pics.length; i++) {
@@ -95,7 +192,8 @@ async function pageMenu(tab: Tab, view: number, pt: [number, number], x: number,
   }
   const items: MenuItem[] = [];
   if (tab.hasSelection.value) items.push({ label: "Copy", hint: "Ctrl+C", run: A.copySelection }, { sep: true });
-  if (hit >= 0) items.push(...pictureItems(tab, view, hit, pics[hit]), { sep: true });
+  if (table) items.push(...tableItems(tab, view, table), { sep: true });
+  if (hit >= 0 && !table) items.push(...pictureItems(tab, view, hit, pics[hit]), { sep: true });
   items.push(
     { label: "Select an area to copy or save…", run: () => startArea(tab) },
     { label: "Save all pictures…", run: () => (picturesDialog.value = tab) },
@@ -226,6 +324,7 @@ function areaItems(tab: Tab, view: number, area: [number, number, number, number
   return [
     { label: "Copy text", run: () => copyLater("text/plain", api.areaText(info.docId, src, area), "Text copied") },
     { label: "Copy as picture", run: () => copyLater("image/png", api.areaBytes(info.docId, src, area, rot, "png", 200), "Picture copied") },
+    { label: "Read as a table…", run: () => (tableDialog.value = { tab, view, area, table: null }) },
     { sep: true },
     ...(info.isPdf ? [{ label: "Save as PDF (sharp at any size)…", run: () => void save("pdf") }] : []),
     { label: "Save as SVG (for drawings, charts)…", run: () => void save("svg") },

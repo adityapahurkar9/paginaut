@@ -30,6 +30,7 @@ import { HeaderDialog, WatermarkDialog } from "./StampUI";
 import { LabelsDialog, PropertiesDialog } from "./MetaUI";
 import { SecureDialog } from "./SecureUI";
 import { PicturesDialog } from "./ExtractUI";
+import { TableDialog } from "./TableUI";
 import { PageDragGhost } from "./Sidebar";
 import { PageGrid } from "./PageGrid";
 import { selectedAnnot } from "../annots";
@@ -81,6 +82,7 @@ export function App() {
       <LabelsDialog />
       <SecureDialog />
       <PicturesDialog />
+      <TableDialog />
       <PageDragGhost />
       <Toast />
       {dropping.value && <div class="drop-veil" />}

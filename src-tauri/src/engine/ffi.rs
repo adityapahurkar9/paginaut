@@ -101,6 +101,8 @@ extern "C" {
     pub fn fo_convert_to_pdf(c: *mut fo_ctx, d: *mut fo_doc, path: *const c_char, order: *const c_int, count: c_int, rot: *const c_int) -> c_int;
     pub fn fo_pdf_insert_pages(c: *mut fo_ctx, d: *mut fo_doc, src: *mut fo_doc, pages: *const c_int, count: c_int, fit: *const c_float) -> c_int;
     pub fn fo_pdf_new(c: *mut fo_ctx) -> *mut fo_doc;
+    pub fn fo_tables_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
+    pub fn fo_table_in_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, area: *const c_float, cols: *const c_float, ncols: c_int) -> *mut c_char;
     pub fn fo_pictures_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
     pub fn fo_picture_data(c: *mut fo_ctx, l: *mut fo_list, idx: c_int, fmt: c_int, data: *mut *mut u8, len: *mut usize, ext: *mut c_char) -> c_int;
     pub fn fo_attachments_json(c: *mut fo_ctx, d: *mut fo_doc) -> *mut c_char;

@@ -75,6 +75,15 @@ export interface Picture {
   id: string;
 }
 
+/** A table read from a page: where (relative to the page origin), its column and row lines,
+ *  and its cells as [row, column, rows spanned, columns spanned, text]. */
+export interface Table {
+  r: [number, number, number, number];
+  xs: number[];
+  ys: number[];
+  cells: [number, number, number, number, string][];
+}
+
 /** A file embedded in a PDF: on the document (page -1) or pinned to a page; modified: seconds since 1970, or -1. */
 export interface Attachment {
   i: number;
@@ -284,6 +293,11 @@ export const api = {
   areaSave: (doc: number, page: number, area: [number, number, number, number], rot: number, kind: "png" | "svg" | "pdf", dpi: number, path: string) =>
     invoke<void>("area_save", { doc, page, area, rot, kind, dpi, path }),
   areaText: (doc: number, page: number, area: [number, number, number, number]) => invoke<string>("area_text", { doc, page, area }),
+  tables: (doc: number, page: number) => invoke<Table[]>("tables", { doc, page }),
+  /** The table in `area`; with two or more column lines, exactly those columns. */
+  tableIn: (doc: number, page: number, area: [number, number, number, number], cols: number[]) => invoke<Table | null>("table_in", { doc, page, area, cols }),
+  /** Writes a table at `path` (.csv or .xlsx). */
+  tableSave: (table: Table, path: string) => invoke<void>("table_save", { table, path }),
   attachments: (doc: number) => invoke<Attachment[]>("attachments", { doc }),
   /** Saves at `path`, or into folder `dir` under its own name; returns the path used. */
   attachmentSave: (doc: number, i: number, path: string | null, dir: string | null) => invoke<string>("attachment_save", { doc, i, path, dir }),

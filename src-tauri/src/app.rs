@@ -470,6 +470,34 @@ pub async fn area_text(state: State<'_, AppState>, doc: DocId, page: usize, area
 }
 
 #[tauri::command]
+pub async fn tables(state: State<'_, AppState>, doc: DocId, page: usize) -> Res<Vec<crate::engine::table::Table>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.tables(page)).await
+}
+
+/// Reads the table in `area`, with the column lines `cols` if given (two or more).
+#[tauri::command]
+pub async fn table_in(state: State<'_, AppState>, doc: DocId, page: usize, area: [f32; 4], cols: Vec<f32>) -> Res<Option<crate::engine::table::Table>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.table_in(page, area, &cols)).await
+}
+
+/// Writes a table as CSV or Excel at `path` (which must end in .csv or .xlsx).
+#[tauri::command]
+pub async fn table_save(table: crate::engine::table::Table, path: String) -> Res<()> {
+    blocking(move || {
+        let ext = std::path::Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let bytes = match ext.as_str() {
+            "csv" => table.csv(),
+            "xlsx" => table.xlsx(),
+            _ => return Err("Tables are saved as .csv or .xlsx files.".into()),
+        };
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn attachments(state: State<'_, AppState>, doc: DocId) -> Res<Vec<crate::engine::Attachment>> {
     let engine = state.engine.clone();
     blocking(move || engine.doc(doc)?.attachments()).await

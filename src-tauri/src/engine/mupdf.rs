@@ -1051,6 +1051,18 @@ impl List {
         })
     }
 
+    /// Tables on the page as JSON (see fo_tables_json).
+    pub fn tables_json(&self, bounds: &[f32; 4]) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_tables_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c)))
+    }
+
+    /// The table in `area`, with these column lines if given (see fo_table_in_json).
+    pub fn table_in_json(&self, bounds: &[f32; 4], area: &[f32; 4], cols: &[f32]) -> Result<String> {
+        with_kind(self.1, |c| {
+            take_string(c, unsafe { fo_table_in_json(c, self.0, bounds.as_ptr(), area.as_ptr(), cols.as_ptr(), cols.len() as c_int) }).ok_or_else(|| last_error(c))
+        })
+    }
+
     /// Pictures on the page as JSON (see fo_pictures_json).
     pub fn pictures_json(&self, bounds: &[f32; 4]) -> Result<String> {
         with_kind(self.1, |c| take_string(c, unsafe { fo_pictures_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c)))

@@ -270,7 +270,7 @@ Strike-through in both places (highlight stays in the Comment tab only):
 
 - [x] Placeholder: Tools › Organize › "Edit PDF" shown as coming in 6.3
 
-### Phase 6.2 (0.6.20): Stamp, protect, extract
+### Phase 6.2 (0.6.20): Stamp, protect, extract (done)
 - [x] Night mode on scans and pages that are one big picture (screenshots, web pages printed as images): the photos in
       them are found in the rendered page (cells of mostly mid-tones or colour, joined into regions, paper edges
       trimmed) and keep their real colours, while text stays dark. Text-only scans get none
@@ -314,13 +314,18 @@ Size and repair:
 - [x] Fix: saving a file MuPDF repaired on opening wrote a page tree it couldn't open again ("cycle in page
       tree"); the tree is now rebuilt from the pages that can be read, and the save says how many were lost
 
-Extract content (right-click the item on the page; the same menu in Read/Book mode):
+Extract content (right-click the item on the page; Tools › Organize; command palette):
 - [x] Pictures (right-click one on the page): copy, or save as stored (JPEG and JPEG 2000 byte for byte, full
       resolution), as PNG (with transparency) or as a one-page PDF (picture stored as is, at its size on the page).
       "Save all pictures" for all, selected or listed pages: repeats saved once, small ones (icons, specks) skipped
-- [ ] Tables: copy as a real table (pastes into Excel and Word with cells), save as CSV or Excel (.xlsx), save as PDF
-      (vector, cut from the page) or picture. Cells from ruling lines and text positions (Read-mode table hunt);
-      borderless tables: draw a box round the table and adjust the column lines
+- [x] Tables (right-click one on the page, "Table on this page", or "Read as a table" on a drawn area): found by
+      MuPDF's table hunt (57 tables on 60 pages of a prospectus in 0.3 s); copy as a real table (cells in Excel
+      and Word), save as Excel (.xlsx: figures as numbers, "1,23,456.50" and "(1,234)" too; spanned cells merged;
+      column widths as on the page) or CSV (UTF-8, Marathi safe). The table dialog shows it over its picture: drag
+      the column lines, click to add one, double-click to remove; the columns are then exactly those. Heading lines
+      are joined into one row (years stay headings)
+- [ ] Tables, later: rows as adjustable as columns; group headings spread over the columns they span; percentages
+      as numbers; the same menu in Read/Book mode
 - [x] Any area, charts and drawings: "Select an area" (right-click menu, Organize), drag a box: copy its text,
       copy as picture, save as PDF (vector; the rest of the page is hidden, not removed), SVG (vector, text as
       outlines) or PNG at 150/300/600 dpi; turned as the page is shown

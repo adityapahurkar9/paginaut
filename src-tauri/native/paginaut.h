@@ -170,6 +170,11 @@ int fo_area_image(fo_ctx *c, fo_list *l, const float bounds[4], const float area
 char *fo_area_text(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4]);
 /* The page as a one-page PDF showing only `area` (page coordinates, not relative). */
 int fo_pdf_area_pdf(fo_ctx *c, fo_page *p, const float area[4], int rot, unsigned char **data, size_t *len);
+/* Tables on a page: JSON [{"r","xs" (column lines),"ys" (row lines),"cells":[[row,col,rows,cols,text]]}|null],
+ * coordinates relative to the page origin. fo_table_in_json reads the one table in `area`, with the
+ * column lines `cols` (page coordinates relative to the origin, left and right edges included) if given. */
+char *fo_tables_json(fo_ctx *c, fo_list *l, const float bounds[4]);
+char *fo_table_in_json(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4], const float *cols, int ncols);
 /* A new, empty PDF in memory. */
 fo_doc *fo_pdf_new(fo_ctx *c);
 /* Adds a bookmark titled `title` at the end of d's outline, pointing at page
