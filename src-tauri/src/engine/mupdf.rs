@@ -728,6 +728,14 @@ impl Page {
         })
     }
 
+    /// Deletes (0), moves (1), replaces (2) or adds (3) a picture in the page's own content (see fo_pdf_picture_edit).
+    pub fn picture_edit(&self, target: &[f32; 4], action: i32, dest: &[f32; 4], data: &[u8]) -> Result<()> {
+        with_kind(self.1, |c| {
+            let rc = unsafe { fo_pdf_picture_edit(c, self.0, target.as_ptr(), action, dest.as_ptr(), data.as_ptr(), data.len()) };
+            if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
     /// This page as a one-page PDF showing only `area` (page coordinates), turned by `rot`.
     pub fn area_pdf(&self, area: &[f32; 4], rot: i32) -> Result<Vec<u8>> {
         with_kind(self.1, |c| {

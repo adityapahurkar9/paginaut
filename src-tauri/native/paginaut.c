@@ -2805,6 +2805,10 @@ static void put_color_rect(fz_context *ctx, fz_buffer *buf, const unsigned char 
 	fz_append_printf(ctx, buf, "%g %g %g rg %g %g %g %g re f\n", rgb[0] / 255.0f, rgb[1] / 255.0f, rgb[2] / 255.0f, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
 }
 
+/* Defined with the stamps below: keep stamps out of a content rewrite. */
+static pdf_obj *stamps_aside(fz_context *ctx, pdf_page *page);
+static void stamps_back(fz_context *ctx, pdf_page *page, pdf_obj *saved);
+
 int fo_pdf_page_size(fo_ctx *c, fo_page *p, const float crop[4], const float size[2], int fit, float ax, float ay, int remove, int fill, const float rgb[3])
 {
 	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
@@ -2870,7 +2874,18 @@ int fo_pdf_page_size(fo_ctx *c, fo_page *p, const float crop[4], const float siz
 					any = 1;
 				}
 			if (any)
-				pdf_redact_page(CTX, doc, page, &opts);
+			{
+				pdf_obj *saved = stamps_aside(CTX, page);
+				fz_try(CTX)
+				{
+					pdf_redact_page(CTX, doc, page, &opts);
+					stamps_back(CTX, page, saved);
+				}
+				fz_always(CTX)
+					pdf_drop_obj(CTX, saved);
+				fz_catch(CTX)
+					fz_rethrow(CTX);
+			}
 			annots = pdf_dict_get(CTX, pobj, PDF_NAME(Annots));
 			for (int i = 0; i < pdf_array_len(CTX, annots); i++)
 			{
@@ -3009,6 +3024,123 @@ int fo_pdf_page_size(fo_ctx *c, fo_page *p, const float crop[4], const float siz
 		return -1;
 	}
 	return 0;
+}
+
+
+static pdf_obj *page_own_resources(fz_context *ctx, pdf_document *doc, pdf_obj *pobj);
+
+/* Rewriting a page's content (redaction, picture edits) merges its streams into one and
+ * keeps only the resources that content uses; stamps (page numbers, watermarks) keep their
+ * own flagged streams so they can be removed again. These set them aside, with the form
+ * objects and layer they draw with, and put them back: those before the page's own content
+ * in front, the rest after it. */
+static pdf_obj *stamps_aside(fz_context *ctx, pdf_page *page)
+{
+	pdf_document *doc = page->doc;
+	pdf_obj *contents = pdf_dict_get(ctx, page->obj, PDF_NAME(Contents));
+	pdf_obj *front = NULL, *back = NULL, *rest = NULL, *saved = NULL;
+	int seen_own = 0;
+	if (!pdf_is_array(ctx, contents))
+		return NULL;
+	fz_var(front);
+	fz_var(back);
+	fz_var(rest);
+	fz_try(ctx)
+	{
+		front = pdf_new_array(ctx, doc, 2);
+		back = pdf_new_array(ctx, doc, 2);
+		rest = pdf_new_array(ctx, doc, 4);
+		for (int i = 0; i < pdf_array_len(ctx, contents); i++)
+		{
+			pdf_obj *s = pdf_array_get(ctx, contents, i);
+			if (pdf_dict_gets(ctx, s, "PaginautStamp"))
+				pdf_array_push(ctx, seen_own ? back : front, s);
+			else
+			{
+				pdf_array_push(ctx, rest, s);
+				seen_own = 1;
+			}
+		}
+		if (pdf_array_len(ctx, front) || pdf_array_len(ctx, back))
+		{
+			pdf_obj *res = pdf_dict_get_inheritable(ctx, page->obj, PDF_NAME(Resources));
+			pdf_obj *xobjs = pdf_dict_get(ctx, res, PDF_NAME(XObject)), *keep;
+			saved = pdf_new_array(ctx, doc, 3);
+			pdf_array_push(ctx, saved, front);
+			pdf_array_push(ctx, saved, back);
+			keep = pdf_array_push_dict(ctx, saved, 4);
+			for (int i = 0; i < pdf_dict_len(ctx, xobjs); i++)
+				if (!strncmp(pdf_to_name(ctx, pdf_dict_get_key(ctx, xobjs, i)), "PgnStamp", 8))
+					pdf_dict_put(ctx, keep, pdf_dict_get_key(ctx, xobjs, i), pdf_dict_get_val(ctx, xobjs, i));
+			if (pdf_dict_getp(ctx, res, "Properties/PgnWM"))
+				pdf_dict_puts(ctx, keep, "PgnWM", pdf_dict_getp(ctx, res, "Properties/PgnWM"));
+			pdf_dict_put(ctx, page->obj, PDF_NAME(Contents), rest);
+		}
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_obj(ctx, front);
+		pdf_drop_obj(ctx, back);
+		pdf_drop_obj(ctx, rest);
+	}
+	fz_catch(ctx)
+	{
+		pdf_drop_obj(ctx, saved);
+		fz_rethrow(ctx);
+	}
+	return saved;
+}
+
+static void stamps_back(fz_context *ctx, pdf_page *page, pdf_obj *saved)
+{
+	pdf_obj *arr = NULL, *contents;
+	/* A filter's output closes every q it opens, so what's drawn after it can't be moved by
+	 * it: marked like the q … Q wrap, so later additions don't wrap (and nest) again. */
+	contents = pdf_dict_get(ctx, page->obj, PDF_NAME(Contents));
+	if (pdf_is_stream(ctx, contents))
+		pdf_dict_puts(ctx, contents, "PaginautWrap", PDF_TRUE);
+	if (!saved)
+		return;
+	fz_var(arr);
+	fz_try(ctx)
+	{
+		pdf_obj *front = pdf_array_get(ctx, saved, 0), *back = pdf_array_get(ctx, saved, 1);
+		contents = pdf_dict_get(ctx, page->obj, PDF_NAME(Contents));
+		arr = pdf_new_array(ctx, page->doc, 4);
+		for (int i = 0; i < pdf_array_len(ctx, front); i++)
+			pdf_array_push(ctx, arr, pdf_array_get(ctx, front, i));
+		if (pdf_is_array(ctx, contents))
+			for (int i = 0; i < pdf_array_len(ctx, contents); i++)
+				pdf_array_push(ctx, arr, pdf_array_get(ctx, contents, i));
+		else if (contents)
+			pdf_array_push(ctx, arr, contents);
+		for (int i = 0; i < pdf_array_len(ctx, back); i++)
+			pdf_array_push(ctx, arr, pdf_array_get(ctx, back, i));
+		pdf_dict_put(ctx, page->obj, PDF_NAME(Contents), arr);
+		{
+			pdf_obj *keep = pdf_array_get(ctx, saved, 2), *res = page_own_resources(ctx, page->doc, page->obj), *xobjs, *props;
+			for (int i = 0; i < pdf_dict_len(ctx, keep); i++)
+			{
+				pdf_obj *key = pdf_dict_get_key(ctx, keep, i);
+				if (!strcmp(pdf_to_name(ctx, key), "PgnWM"))
+				{
+					props = pdf_dict_get(ctx, res, PDF_NAME(Properties));
+					if (!props)
+						props = pdf_dict_put_dict(ctx, res, PDF_NAME(Properties), 1);
+					pdf_dict_put(ctx, props, key, pdf_dict_get_val(ctx, keep, i));
+					continue;
+				}
+				xobjs = pdf_dict_get(ctx, res, PDF_NAME(XObject));
+				if (!xobjs)
+					xobjs = pdf_dict_put_dict(ctx, res, PDF_NAME(XObject), 1);
+				pdf_dict_put(ctx, xobjs, key, pdf_dict_get_val(ctx, keep, i));
+			}
+		}
+	}
+	fz_always(ctx)
+		pdf_drop_obj(ctx, arr);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
 }
 
 /* ---------------------------------------------------------------- stamps (page numbers, headers, watermarks) */
@@ -3533,7 +3665,18 @@ static void remove_text_in(fz_context *ctx, pdf_page *page, const fz_rect *rects
 			pdf_drop_annot(ctx, r);
 		}
 		if (n)
-			pdf_redact_page(ctx, page->doc, page, &opts);
+		{
+			pdf_obj *saved = stamps_aside(ctx, page);
+			fz_try(ctx)
+			{
+				pdf_redact_page(ctx, page->doc, page, &opts);
+				stamps_back(ctx, page, saved);
+			}
+			fz_always(ctx)
+				pdf_drop_obj(ctx, saved);
+			fz_catch(ctx)
+				fz_rethrow(ctx);
+		}
 	}
 	fz_always(ctx)
 	{
@@ -3772,6 +3915,128 @@ int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const fl
 		fz_drop_stext_page(CTX, t);
 		fz_free(CTX, rects);
 		fz_free(CTX, fullcss);
+	}
+	fz_catch(CTX)
+	{
+		if (began)
+			pdf_abandon_operation(CTX, page->doc);
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* ---------------------------------------------------------------- editing pictures */
+
+struct picture_pick
+{
+	fz_rect target;
+	fz_image *taken;
+	fz_matrix ctm;
+};
+
+static fz_image *pick_picture(fz_context *ctx, void *opaque, fz_matrix ctm, const char *name, fz_image *image, fz_rect scissor)
+{
+	struct picture_pick *st = opaque;
+	fz_rect r = fz_transform_rect(fz_unit_rect, ctm);
+	(void)name;
+	(void)scissor;
+	if (st->taken)
+		return image;
+	if (fabsf(r.x0 - st->target.x0) < 1.5f && fabsf(r.y0 - st->target.y0) < 1.5f && fabsf(r.x1 - st->target.x1) < 1.5f && fabsf(r.y1 - st->target.y1) < 1.5f)
+	{
+		st->taken = fz_keep_image(ctx, image);
+		st->ctm = ctm;
+		return NULL;
+	}
+	return image;
+}
+
+/* action 0 deletes the picture at `target`, 1 moves or resizes it to `dest` (turned and
+ * flipped as it was), 2 replaces it with the picture in data at `dest`, 3 adds that picture
+ * at `dest`. Rectangles in page coordinates relative to the origin; one undo step. */
+int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action, const float dest[4], const unsigned char *data, size_t len)
+{
+	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
+	struct picture_pick st = { 0 };
+	fz_image *img = NULL;
+	fz_buffer *buf = NULL;
+	fz_display_list *list = NULL;
+	fz_device *dev = NULL;
+	pdf_obj *saved = NULL;
+	int began = 0;
+	static const char *names[] = { "Delete picture", "Move picture", "Replace picture", "Add picture" };
+	if (!page || action < 0 || action > 3)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF page");
+		return -1;
+	}
+	fz_var(img);
+	fz_var(buf);
+	fz_var(list);
+	fz_var(dev);
+	fz_var(saved);
+	fz_var(began);
+	fz_var(st.taken);
+	fz_try(CTX)
+	{
+		fz_rect d = fz_make_rect(dest[0], dest[1], dest[2], dest[3]);
+		fz_rect o = fz_make_rect(target[0], target[1], target[2], target[3]);
+		fz_matrix pagectm;
+		/* The filter sees pictures in the PDF's own space (y up); these are in page space. */
+		pdf_page_transform(CTX, page, NULL, &pagectm);
+		pdf_begin_operation(CTX, page->doc, names[action]);
+		began = 1;
+		if (action < 3)
+		{
+			pdf_sanitize_filter_options sopts = { 0 };
+			pdf_filter_factory filters[2] = { { pdf_new_sanitize_filter, &sopts }, { NULL, NULL } };
+			pdf_filter_options fopts = { 0 };
+			st.target = fz_transform_rect(o, fz_invert_matrix(pagectm));
+			sopts.opaque = &st;
+			sopts.image_filter = pick_picture;
+			fopts.recurse = 0;
+			fopts.instance_forms = 1;
+			fopts.filters = filters;
+			saved = stamps_aside(CTX, page);
+			pdf_filter_page_contents(CTX, page->doc, page, &fopts);
+			stamps_back(CTX, page, saved);
+			if (!st.taken)
+				fz_throw(CTX, FZ_ERROR_ARGUMENT, "that picture isn't part of the page itself (it may be a comment or a stamp)");
+		}
+		if (action >= 1)
+		{
+			fz_matrix m;
+			if (action == 1)
+			{
+				/* The old placement, scaled and moved from the old box to the new one. */
+				float sx = (d.x1 - d.x0) / fz_max(0.01f, o.x1 - o.x0), sy = (d.y1 - d.y0) / fz_max(0.01f, o.y1 - o.y0);
+				img = fz_keep_image(CTX, st.taken);
+				m = fz_concat(fz_concat(fz_concat(st.ctm, pagectm), fz_translate(-o.x0, -o.y0)), fz_concat(fz_scale(sx, sy), fz_translate(d.x0, d.y0)));
+			}
+			else
+			{
+				buf = fz_new_buffer_from_copied_data(CTX, data, len);
+				img = fz_new_image_from_buffer(CTX, buf);
+				m = fz_make_matrix(d.x1 - d.x0, 0, 0, d.y1 - d.y0, d.x0, d.y0);
+			}
+			list = fz_new_display_list(CTX, d);
+			dev = fz_new_list_device(CTX, list);
+			fz_fill_image(CTX, dev, img, m, 1, fz_default_color_params);
+			fz_close_device(CTX, dev);
+			add_page_drawing(CTX, page, list, fz_identity, "Pic");
+		}
+		pdf_end_operation(CTX, page->doc);
+		began = 0;
+	}
+	fz_always(CTX)
+	{
+		fz_drop_device(CTX, dev);
+		fz_drop_display_list(CTX, list);
+		fz_drop_image(CTX, img);
+		fz_drop_image(CTX, st.taken);
+		fz_drop_buffer(CTX, buf);
+		pdf_drop_obj(CTX, saved);
 	}
 	fz_catch(CTX)
 	{

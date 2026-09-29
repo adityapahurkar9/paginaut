@@ -36,7 +36,7 @@ fn main() {
     // Pictures in a scan: the stored JPEG comes out byte for byte.
     let info = engine.open(&format!("{dir}/scan-300.pdf")).unwrap();
     let d = engine.doc(info.doc_id).unwrap();
-    let pics = d.pictures(0).unwrap();
+    let pics = d.pictures(0, false).unwrap();
     let p = pics.first();
     check("scan picture found", p.is_some_and(|p| p.w == 2480 && p.h == 3509 && p.k == "jpg"), format!("{:?}", p.map(|p| (p.w, p.h, &p.k, p.r))));
     let (bytes, ext) = d.picture_data(0, 0, 0).unwrap();

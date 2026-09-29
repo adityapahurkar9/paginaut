@@ -1,6 +1,7 @@
 //! Editing text: cargo run --release --example edit_test -- <testfiles dir> <temp dir>
 //! Works on copies; never touches the originals.
-use paginaut_lib::engine::{Engine, TextEdit};
+use paginaut_lib::engine::mupdf::StampPart;
+use paginaut_lib::engine::{Engine, StampPage, TextEdit};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -66,6 +67,51 @@ fn main() {
     d.edit_text(0, &TextEdit { para: heading, text: "पान १ – Page one".into() }).unwrap();
     let flat = page_text(&d).split_whitespace().collect::<Vec<_>>().join(" ");
     check("Marathi heading", flat.contains("पान १ – Page one"), flat.chars().take(40).collect());
+
+    // Pictures on page 3, which also has a page number stamped on it.
+    let footer = StampPart {
+        text: Some("Stamped footer 3".into()),
+        image: None,
+        font: Some("sans-serif".into()),
+        size: 9.0,
+        color: [0.2, 0.2, 0.2],
+        bold: false,
+        align: Some("center".into()),
+        width: w - 72.0,
+        height: 0.0,
+        valign: 2,
+        matrix: [1.0, 0.0, 0.0, 1.0, 36.0, h - 24.0],
+        opacity: 1.0,
+    };
+    d.stamp_pages(&[StampPage { page: 2, parts: vec![footer] }], "Header", false, false).unwrap();
+    let photo = std::fs::read(format!("{dir}/photo.png")).unwrap();
+    let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1.0);
+    let own = |d: &paginaut_lib::engine::Doc| d.pictures(2, true).unwrap();
+    let none = [0.0f32; 4];
+    d.picture_edit(2, none, 3, [100.0, 100.0, 300.0, 250.0], &photo).unwrap();
+    let pics = own(&d);
+    check("picture added", pics.len() == 1 && near(pics[0].r, [100.0, 100.0, 300.0, 250.0]), format!("{:?}", pics.iter().map(|p| p.r).collect::<Vec<_>>()));
+    d.picture_edit(2, pics[0].r, 1, [200.0, 300.0, 300.0, 375.0], &[]).unwrap();
+    let pics = own(&d);
+    check("picture moved and resized", pics.len() == 1 && near(pics[0].r, [200.0, 300.0, 300.0, 375.0]), format!("{:?}", pics.iter().map(|p| p.r).collect::<Vec<_>>()));
+    d.picture_edit(2, pics[0].r, 2, [50.0, 50.0, 150.0, 125.0], &photo).unwrap();
+    let pics = own(&d);
+    check("picture replaced", pics.len() == 1 && near(pics[0].r, [50.0, 50.0, 150.0, 125.0]), format!("{:?}", pics.iter().map(|p| p.r).collect::<Vec<_>>()));
+    // A text edit on the same page too, then the stamp must still come off.
+    let para = d.paragraphs(2).unwrap().into_iter().max_by_key(|p| p.l.len()).unwrap();
+    d.edit_text(2, &TextEdit { para, text: "Page three, edited.".into() }).unwrap();
+    d.picture_edit(2, pics[0].r, 0, none, &[]).unwrap();
+    check("picture deleted", own(&d).is_empty(), String::new());
+    d.undo(false).unwrap();
+    check("delete undone", own(&d).len() == 1, String::new());
+    d.undo(true).unwrap();
+    let t3 = d.area_text(2, [0.0, 0.0, w, h]).unwrap();
+    check("stamp kept through edits", t3.contains("Stamped footer 3") && t3.contains("Page three, edited."), format!("{:?}", t3.lines().filter(|l| l.contains("Stamped") || l.contains("three") || l.contains("Page")).collect::<Vec<_>>()));
+    let removed = d.remove_stamps("Header", Some(vec![2])).unwrap();
+    let t3 = d.area_text(2, [0.0, 0.0, w, h]).unwrap();
+    check("stamp still removable", removed >= 1 && !t3.contains("Stamped footer 3") && t3.contains("Page three, edited."), format!("{removed} removed"));
+    let bad = d.picture_edit(2, [1.0, 1.0, 2.0, 2.0], 0, none, &[]);
+    check("no picture there: an error, page kept", bad.is_err() && d.area_text(2, [0.0, 0.0, w, h]).unwrap().contains("Page three"), format!("{:?}", bad.err()));
 
     // Saved and reopened.
     let n = info.page_count;

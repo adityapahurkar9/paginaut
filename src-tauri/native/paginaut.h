@@ -183,6 +183,10 @@ char *fo_paragraphs_json(fo_ctx *c, fo_list *l, const float bounds[4]);
  * font of the letter nearest `probe` where it has the letters. Page coordinates relative to the origin. */
 int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const float probe[2], const char *html, const char *css,
 	float x, float baseline, float width);
+/* Pictures in the page's own content: action 0 deletes the one at `target`, 1 moves or resizes it
+ * to `dest`, 2 replaces it with the picture in data at `dest`, 3 adds that picture at `dest`.
+ * Page coordinates relative to the origin; one undo step. */
+int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action, const float dest[4], const unsigned char *data, size_t len);
 /* A new, empty PDF in memory. */
 fo_doc *fo_pdf_new(fo_ctx *c);
 /* Adds a bookmark titled `title` at the end of d's outline, pointing at page

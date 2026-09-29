@@ -153,6 +153,7 @@ pub fn run() {
             app::attachments,
             app::tables,
             app::paragraphs,
+            app::picture_edit,
             app::edit_text,
             app::table_in,
             app::table_save,

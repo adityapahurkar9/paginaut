@@ -405,9 +405,35 @@ fn sig_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
 // ---------------------------------------------------------------- pictures, areas, attachments
 
 #[tauri::command]
-pub async fn pictures(state: State<'_, AppState>, doc: DocId, page: usize) -> Res<Vec<crate::engine::Picture>> {
+pub async fn pictures(state: State<'_, AppState>, doc: DocId, page: usize, own: Option<bool>) -> Res<Vec<crate::engine::Picture>> {
     let engine = state.engine.clone();
-    blocking(move || engine.doc(doc)?.pictures(page)).await
+    blocking(move || engine.doc(doc)?.pictures(page, own.unwrap_or(false))).await
+}
+
+/// Deletes (0), moves or resizes (1), replaces (2) or adds (3) a picture on a page (one undo step);
+/// for 2 and 3 the picture comes from `path` (a picture file, up to 100 MB).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn picture_edit(state: State<'_, AppState>, doc: DocId, page: usize, target: [f32; 4], action: i32, dest: [f32; 4], path: Option<String>) -> Res<()> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        let data = match (action, path) {
+            (2 | 3, Some(p)) => {
+                let ext = std::path::Path::new(&p).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+                if !["png", "jpg", "jpeg", "jfif", "bmp", "gif", "tif", "tiff", "webp", "jp2", "jpx"].contains(&ext.as_str()) {
+                    return Err("That isn't a picture.".into());
+                }
+                if std::fs::metadata(&p).map_err(|e| e.to_string())?.len() > 100 << 20 {
+                    return Err("That picture is too large (over 100 MB).".into());
+                }
+                std::fs::read(&p).map_err(|e| e.to_string())?
+            }
+            (2 | 3, None) => return Err("No picture chosen.".into()),
+            _ => Vec::new(),
+        };
+        engine.doc(doc)?.picture_edit(page, target, action, dest, &data)
+    })
+    .await
 }
 
 /// A picture's bytes (for the clipboard).

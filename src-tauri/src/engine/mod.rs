@@ -661,10 +661,25 @@ impl Doc {
 
     // ------------------------------------------------------------ pictures, areas, attachments
 
-    pub fn pictures(&self, index: usize) -> Result<Vec<Picture>, String> {
+    /// Pictures on page `index`; `own`: only those in the page's own content (not comments, stamps or fields).
+    pub fn pictures(&self, index: usize, own: bool) -> Result<Vec<Picture>, String> {
         let b = self.bounds(index)?;
-        let json = self.list(index, 1)?.pictures_json(&b)?;
+        let json = self.list(index, if own { 0 } else { 1 })?.pictures_json(&b)?;
         serde_json::from_str(&json).map_err(|e| e.to_string())
+    }
+
+    /// Deletes (0), moves or resizes (1), replaces (2) or adds (3) a picture on page `index` (one undo step).
+    pub fn picture_edit(&self, index: usize, target: [f32; 4], action: i32, dest: [f32; 4], data: &[u8]) -> Result<(), String> {
+        {
+            let mut inner = self.inner.lock();
+            if !inner.doc.is_pdf() {
+                return Err("Only PDFs can be edited. Save this file as a PDF first (Save as).".into());
+            }
+            let page = self.page(&mut inner, index)?;
+            page.picture_edit(&target, action, &dest, data)?;
+        }
+        self.edited();
+        Ok(())
     }
 
     /// Picture `idx` of page `index` (fmt 0 as stored, 1 PNG, 2 PDF) and its extension.
@@ -760,13 +775,11 @@ impl Doc {
         // A little room on the right, so a line that just fitted still does.
         let width = (p.r[2] - p.r[0]) + size * 0.3;
         let probe = [(first[0] + first[2]) / 2.0, (first[1] + first[3]) / 2.0];
-        let inner = self.inner.lock();
-        if !inner.doc.is_pdf() {
-            return Err("Only PDFs can be edited. Save this file as a PDF first (Save as).".into());
-        }
-        drop(inner);
         {
             let mut inner = self.inner.lock();
+            if !inner.doc.is_pdf() {
+                return Err("Only PDFs can be edited. Save this file as a PDF first (Save as).".into());
+            }
             let page = self.page(&mut inner, index)?;
             page.edit_text(&lines, probe, &html, &css, p.r[0], first[4], width)?;
         }
