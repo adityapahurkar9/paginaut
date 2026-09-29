@@ -79,6 +79,8 @@ async function docStep(tab: Tab, redo: boolean) {
   if (!info) return;
   try {
     const r = await api.docUndo(info.docId, redo);
+    // The step may have been recognised text.
+    tab.textRev.value++;
     formsChanged(tab, r.changed);
   } catch (e) {
     showToast(`Couldn't ${redo ? "redo" : "undo"}: ${e}`);
@@ -138,7 +140,14 @@ export function onDocReady(fn: (tab: Tab) => void) {
 }
 export const runDocReady = (tab: Tab) => afterOpenHooks.forEach((f) => f(tab));
 
+/** Set by ocr.ts: runs before saving (e.g. to stop text recognition); false cancels the save. */
+let beforeSave: (tab: Tab) => Promise<boolean> = async () => true;
+export function setBeforeSave(fn: (tab: Tab) => Promise<boolean>) {
+  beforeSave = fn;
+}
+
 export async function save(tab: Tab, saveAs = false): Promise<boolean> {
+  if (!(await beforeSave(tab))) return false;
   const info = tab.info.value;
   const e = tab.edits.value;
   if (!info || !e || tab.saving.value) return false;

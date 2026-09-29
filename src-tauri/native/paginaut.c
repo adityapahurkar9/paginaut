@@ -1,4 +1,5 @@
 #include "paginaut.h"
+#include "ocr.h"
 #include <mupdf/fitz.h>
 #include <mupdf/pdf.h>
 #include <stdio.h>
@@ -714,6 +715,23 @@ static fz_rect struct_bbox(fz_stext_block *b)
 	return r;
 }
 
+/* Recognised (OCR) text uses an invisible font whose glyphs are all one width
+ * (half an em, stretched to fit each word), so its fixed pitch and stretched size
+ * say nothing about how the text looked. */
+static int is_ocr_font(fz_context *ctx, fz_font *font)
+{
+	return font && strcmp(fz_font_name(ctx, font), "GlyphLessFont") == 0;
+}
+
+/* Text size of a character. MuPDF's size includes horizontal stretching; for OCR
+ * text the glyph box height is the size the line was recognised at. */
+static float char_size(fz_context *ctx, fz_stext_char *ch)
+{
+	if (is_ocr_font(ctx, ch->font))
+		return hypotf(ch->quad.ul.x - ch->quad.ll.x, ch->quad.ul.y - ch->quad.ll.y);
+	return ch->size;
+}
+
 static int char_style(fz_context *ctx, fz_stext_char *ch, float line_size, float baseline)
 {
 	int s = 0;
@@ -721,9 +739,9 @@ static int char_style(fz_context *ctx, fz_stext_char *ch, float line_size, float
 		s |= 1;
 	if (ch->font && fz_font_is_italic(ctx, ch->font))
 		s |= 2;
-	if (ch->font && fz_font_is_monospaced(ctx, ch->font))
+	if (ch->font && fz_font_is_monospaced(ctx, ch->font) && !is_ocr_font(ctx, ch->font))
 		s |= 4;
-	if (ch->size < 0.8f * line_size && ch->origin.y < baseline - 0.15f * line_size)
+	if (char_size(ctx, ch) < 0.8f * line_size && ch->origin.y < baseline - 0.15f * line_size)
 		s |= 8;
 	return s;
 }
@@ -734,9 +752,9 @@ static void reflow_line(fz_context *ctx, fz_buffer *buf, fz_buffer *span, fz_ste
 	int style = -1, spans = 0;
 	fz_stext_char *ch;
 	for (ch = line->first_char; ch; ch = ch->next)
-		if (ch->size > line_size)
+		if (char_size(ctx, ch) > line_size)
 		{
-			line_size = ch->size;
+			line_size = char_size(ctx, ch);
 			baseline = ch->origin.y;
 		}
 	fz_append_string(ctx, buf, "{\"x\":");
@@ -747,7 +765,7 @@ static void reflow_line(fz_context *ctx, fz_buffer *buf, fz_buffer *span, fz_ste
 	fz_clear_buffer(ctx, span);
 	for (ch = line->first_char; ch; ch = ch->next)
 	{
-		float sz = floorf(ch->size * 2 + 0.5f) / 2;
+		float sz = floorf(char_size(ctx, ch) * 2 + 0.5f) / 2;
 		int st = char_style(ctx, ch, line_size, baseline);
 		if (span->len && (sz != size || st != style))
 		{
@@ -2275,4 +2293,535 @@ int fo_sig_data(fo_ctx *c, fo_doc *d, int i, unsigned char **data, size_t *len, 
 		return -1;
 	}
 	return 0;
+}
+
+/* ---------------------------------------------------------------- OCR */
+
+/* MuPDF (source/fitz/leptonica-wrap.c): Leptonica, which Tesseract draws its
+ * images with, allocates through one global context. MuPDF sets it only while its
+ * own OCR runs and refuses a second thread; ours is set once, to a context of its
+ * own with no locks and an empty store, which amounts to plain malloc/free and is
+ * safe from any number of threads. */
+void fz_set_leptonica_mem(fz_context *ctx);
+
+static fz_context *g_lept = NULL;
+
+int fo_ocr_init(void)
+{
+	if (g_lept)
+		return 0;
+	g_lept = fz_new_context(NULL, NULL, FZ_STORE_UNLIMITED);
+	if (!g_lept)
+		return -1;
+	fz_try(g_lept)
+		fz_set_leptonica_mem(g_lept);
+	fz_catch(g_lept)
+		return -1;
+	return 0;
+}
+
+/* Draws everything but text: what's left to read is in pictures or outlines. */
+static void nt_fill_text(fz_context *ctx, fz_device *dev, const fz_text *text, fz_matrix ctm, fz_colorspace *cs, const float *color, float alpha, fz_color_params cp) {}
+static void nt_stroke_text(fz_context *ctx, fz_device *dev, const fz_text *text, const fz_stroke_state *st, fz_matrix ctm, fz_colorspace *cs, const float *color, float alpha, fz_color_params cp) {}
+static void nt_ignore_text(fz_context *ctx, fz_device *dev, const fz_text *text, fz_matrix ctm) {}
+
+static fz_device *new_notext_device(fz_context *ctx, fz_device *target)
+{
+	fz_device *dev = fz_new_passthrough_device_of_size(ctx, target, sizeof(fz_device));
+	dev->fill_text = nt_fill_text;
+	dev->stroke_text = nt_stroke_text;
+	dev->ignore_text = nt_ignore_text;
+	return dev;
+}
+
+typedef struct
+{
+	fz_context *ctx;
+	fz_buffer *buf;
+	float s;
+	int line;
+	int words;
+	int failed;
+} ocr_out;
+
+/* Called from C++: no MuPDF exception may escape it. */
+static void ocr_word(void *arg, int line, const int lb[4], const int bl[4], const int wb[4], float conf, const char *text)
+{
+	ocr_out *o = (ocr_out *)arg;
+	fz_context *ctx = o->ctx;
+	float s = o->s;
+	if (o->failed)
+		return;
+	fz_try(ctx)
+	{
+		if (line != o->line)
+		{
+			if (o->line >= 0)
+				fz_append_string(ctx, o->buf, "]},");
+			o->line = line;
+			fz_append_printf(ctx, o->buf, "{\"b\":[%.2f,%.2f,%.2f,%.2f],\"bl\":[%.2f,%.2f,%.2f,%.2f],\"w\":[",
+				lb[0] / s, lb[1] / s, lb[2] / s, lb[3] / s, bl[0] / s, bl[1] / s, bl[2] / s, bl[3] / s);
+		}
+		else
+			fz_append_byte(ctx, o->buf, ',');
+		fz_append_printf(ctx, o->buf, "[%.2f,%.2f,%.2f,%.2f,%.0f,", wb[0] / s, wb[1] / s, wb[2] / s, wb[3] / s, conf);
+		json_str(ctx, o->buf, text);
+		fz_append_byte(ctx, o->buf, ']');
+		o->words++;
+	}
+	fz_catch(ctx)
+		o->failed = 1;
+}
+
+/* Renders what isn't text yet in grey at scale: text drawing is left out, and text
+ * the page already has but that isn't drawn (e.g. an earlier OCR layer over a scan)
+ * is painted over. *dark counts the pixels darker than mid-grey. NULL if aborted. */
+static fz_pixmap *render_untexted(fz_context *ctx, fz_display_list *l, fz_rect b, float scale, fz_cookie *k, size_t *dark)
+{
+	fz_pixmap *pix = NULL;
+	fz_device *draw = NULL, *dev = NULL;
+	fz_stext_page *text = NULL;
+	int w, h;
+	float bf[4] = { b.x0, b.y0, b.x1, b.y1 };
+	fz_var(pix);
+	fz_var(draw);
+	fz_var(dev);
+	fz_var(text);
+	fo_render_size(bf, scale, 0, &w, &h);
+	if (w < 8 || h < 8)
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "page too small");
+	fz_try(ctx)
+	{
+		fz_matrix m = page_matrix(b, scale, 0);
+		fz_stext_options opts = { 0 };
+		pix = fz_new_pixmap_with_bbox(ctx, fz_device_gray(ctx), fz_make_irect(0, 0, w, h), NULL, 0);
+		fz_clear_pixmap_with_value(ctx, pix, 255);
+		draw = fz_new_draw_device(ctx, fz_identity, pix);
+		dev = new_notext_device(ctx, draw);
+		fz_run_display_list(ctx, l, dev, m, fz_infinite_rect, k);
+		fz_close_device(ctx, dev);
+		if (k && k->abort)
+			break;
+
+		text = fz_new_stext_page_from_display_list(ctx, l, &opts);
+		for (fz_stext_block *block = text->first_block; block; block = block->next)
+		{
+			if (block->type != FZ_STEXT_BLOCK_TEXT)
+				continue;
+			for (fz_stext_line *line = block->u.t.first_line; line; line = line->next)
+			{
+				fz_irect r = fz_round_rect(fz_transform_rect(line->bbox, m));
+				r.x0 = fz_maxi(r.x0 - 2, 0);
+				r.y0 = fz_maxi(r.y0 - 2, 0);
+				r.x1 = fz_mini(r.x1 + 2, w);
+				r.y1 = fz_mini(r.y1 + 2, h);
+				for (int y = r.y0; y < r.y1; y++)
+					if (r.x1 > r.x0)
+						memset(pix->samples + (size_t)y * pix->stride + r.x0, 255, (size_t)(r.x1 - r.x0));
+			}
+		}
+
+		*dark = 0;
+		for (int y = 0; y < h; y++)
+		{
+			const unsigned char *p = pix->samples + (size_t)y * pix->stride;
+			for (int x = 0; x < w; x++)
+				*dark += p[x] < 128;
+		}
+	}
+	fz_always(ctx)
+	{
+		fz_drop_device(ctx, dev);
+		fz_drop_device(ctx, draw);
+		fz_drop_stext_page(ctx, text);
+	}
+	fz_catch(ctx)
+	{
+		fz_drop_pixmap(ctx, pix);
+		fz_rethrow(ctx);
+	}
+	if (k && k->abort)
+	{
+		fz_drop_pixmap(ctx, pix);
+		return NULL;
+	}
+	return pix;
+}
+
+/* How much of the page is left to read (see render_untexted), in parts per 10,000
+ * of its area, from a quick low-resolution render. -1 on error. */
+int fo_ocr_ink(fo_ctx *c, fo_list *l, const float bf[4])
+{
+	fz_pixmap *pix = NULL;
+	size_t dark = 0;
+	int ink = -1;
+	fz_var(pix);
+	fz_try(CTX)
+	{
+		pix = render_untexted(CTX, (fz_display_list *)l, fz_make_rect(bf[0], bf[1], bf[2], bf[3]), 50.0f / 72, NULL, &dark);
+		ink = (int)(dark * 10000 / ((size_t)pix->w * pix->h));
+	}
+	fz_always(CTX)
+		fz_drop_pixmap(CTX, pix);
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return ink;
+}
+
+/* Recognises a page: renders what isn't text yet (see render_untexted), then runs
+ * Tesseract on it.
+ * JSON {"l":[{"b":[line box],"bl":[baseline x1,y1,x2,y2],"w":[[x0,y0,x1,y1,conf,"text"],...]}],"blank":1?}
+ * in points relative to the page origin. *aborted is set when k was aborted. */
+char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bf[4], float dpi, po_tess *t, fo_cookie *k, int *aborted)
+{
+	fz_pixmap *pix = NULL;
+	fz_buffer *buf = NULL;
+	char *s = NULL;
+	*aborted = 0;
+	fz_var(pix);
+	fz_var(buf);
+	fz_try(CTX)
+	{
+		float scale = dpi / 72;
+		int w, h, rc;
+		size_t dark = 0;
+		ocr_out out = { 0 };
+
+		/* Very large pages (posters, drawings) are read at a lower resolution. */
+		fo_render_size(bf, scale, 0, &w, &h);
+		if ((double)w * h > 40e6)
+			scale *= (float)sqrt(40e6 / ((double)w * h));
+		pix = render_untexted(CTX, (fz_display_list *)l, fz_make_rect(bf[0], bf[1], bf[2], bf[3]), scale, (fz_cookie *)k, &dark);
+		if (!pix)
+		{
+			*aborted = 1;
+			break;
+		}
+
+		buf = fz_new_buffer(CTX, 4096);
+		fz_append_string(CTX, buf, "{\"l\":[");
+
+		/* Nothing (or only specks) left: no need to wake Tesseract. */
+		if (dark < (size_t)pix->w * pix->h / 5000)
+		{
+			fz_append_string(CTX, buf, "],\"blank\":1}");
+			s = buffer_to_string(CTX, buf);
+			break;
+		}
+
+		out.ctx = CTX;
+		out.buf = buf;
+		out.s = scale;
+		out.line = -1;
+		rc = po_tess_recognize(t, pix->samples, pix->w, pix->h, (int)pix->stride, (int)(scale * 72 + 0.5f), ocr_word, &out,
+			k ? &((fz_cookie *)k)->abort : NULL);
+		if (rc == 1)
+		{
+			*aborted = 1;
+			break;
+		}
+		if (rc < 0 || out.failed)
+			fz_throw(CTX, FZ_ERROR_LIBRARY, "text recognition failed");
+		if (out.line >= 0)
+			fz_append_string(CTX, buf, "]}");
+		fz_append_string(CTX, buf, "]}");
+		s = buffer_to_string(CTX, buf);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_pixmap(CTX, pix);
+		fz_drop_buffer(CTX, buf);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
+/* The invisible font of recognised text (as Tesseract and MuPDF write it): every
+ * character is one blank glyph half an em wide, and ToUnicode maps each code
+ * straight to the character it stands for. */
+static const char glyphless_cidtogid[] =
+"\x78\x9c\xec\xc2\x01\x09\x00\x00\x00\x02\xa0\xfa\x7f\xba\x21\x89"
+	"\xa6\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x80\x7b\x03\x00\x00\xff\xff\xec\xc2\x01\x0d\x00\x00\x00\xc2\x20"
+	"\xdf\xbf\xb4\x45\x18\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\xeb\x00\x00\x00\xff\xff\xec\xc2\x01\x0d\x00"
+	"\x00\x00\xc2\x20\xdf\xbf\xb4\x45\x18\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\xeb\x00\x00\x00\xff\xff\xed"
+	"\xc2\x01\x0d\x00\x00\x00\xc2\x20\xdf\xbf\xb4\x45\x18\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xeb\x00\xff"
+	"\x00\x10";
+
+static const char glyphless_ttf[] =
+"\x00\x01\x00\x00\x00\x0a\x00\x80\x00\x03\x00\x20\x4f\x53\x2f\x32"
+	"\x56\xde\xc8\x94\x00\x00\x01\x28\x00\x00\x00\x60\x63\x6d\x61\x70"
+	"\x00\x0a\x00\x34\x00\x00\x01\x90\x00\x00\x00\x1e\x67\x6c\x79\x66"
+	"\x15\x22\x41\x24\x00\x00\x01\xb8\x00\x00\x00\x18\x68\x65\x61\x64"
+	"\x0b\x78\xf1\x65\x00\x00\x00\xac\x00\x00\x00\x36\x68\x68\x65\x61"
+	"\x0c\x02\x04\x02\x00\x00\x00\xe4\x00\x00\x00\x24\x68\x6d\x74\x78"
+	"\x04\x00\x00\x00\x00\x00\x01\x88\x00\x00\x00\x08\x6c\x6f\x63\x61"
+	"\x00\x0c\x00\x00\x00\x00\x01\xb0\x00\x00\x00\x06\x6d\x61\x78\x70"
+	"\x00\x04\x00\x05\x00\x00\x01\x08\x00\x00\x00\x20\x6e\x61\x6d\x65"
+	"\xf2\xeb\x16\xda\x00\x00\x01\xd0\x00\x00\x00\x4b\x70\x6f\x73\x74"
+	"\x00\x01\x00\x01\x00\x00\x02\x1c\x00\x00\x00\x20\x00\x01\x00\x00"
+	"\x00\x01\x00\x00\xb0\x94\x71\x10\x5f\x0f\x3c\xf5\x04\x07\x08\x00"
+	"\x00\x00\x00\x00\xcf\x9a\xfc\x6e\x00\x00\x00\x00\xd4\xc3\xa7\xf2"
+	"\x00\x00\x00\x00\x04\x00\x08\x00\x00\x00\x00\x10\x00\x02\x00\x00"
+	"\x00\x00\x00\x00\x00\x01\x00\x00\x08\x00\xff\xff\x00\x00\x04\x00"
+	"\x00\x00\x00\x00\x04\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x02\x00\x01\x00\x00\x00\x02\x00\x04"
+	"\x00\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x01\x90\x00\x05"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x05\x00\x01\x00\x01\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x47\x4f\x4f\x47\x00\x40\x00\x00\x00\x00\x00\x01\xff\xff"
+	"\x00\x00\x00\x01\x00\x01\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00"
+	"\x00\x00\x00\x02\x00\x01\x00\x00\x00\x00\x00\x14\x00\x03\x00\x00"
+	"\x00\x00\x00\x14\x00\x06\x00\x0a\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x0c\x00\x00\x00\x01\x00\x00\x00\x00\x04\x00"
+	"\x08\x00\x00\x03\x00\x00\x31\x21\x11\x21\x04\x00\xfc\x00\x08\x00"
+	"\x00\x00\x00\x03\x00\x2a\x00\x00\x00\x03\x00\x00\x00\x05\x00\x16"
+	"\x00\x00\x00\x01\x00\x00\x00\x00\x00\x05\x00\x0b\x00\x16\x00\x03"
+	"\x00\x01\x04\x09\x00\x05\x00\x16\x00\x00\x00\x56\x00\x65\x00\x72"
+	"\x00\x73\x00\x69\x00\x6f\x00\x6e\x00\x20\x00\x31\x00\x2e\x00\x30"
+	"\x56\x65\x72\x73\x69\x6f\x6e\x20\x31\x2e\x30\x00\x00\x01\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+
+static const char glyphless_tounicode[] =
+	"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+	"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+	"/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n"
+	"1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"
+	"1 beginbfrange\n<0000> <FFFF> <0000>\nendbfrange\n"
+	"endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+
+static pdf_obj *add_stream_bytes(fz_context *ctx, pdf_document *doc, const char *data, size_t len, pdf_obj *dict, int compressed)
+{
+	fz_buffer *b = fz_new_buffer_from_copied_data(ctx, (const unsigned char *)data, len);
+	pdf_obj *ref = NULL;
+	fz_try(ctx)
+		ref = pdf_add_stream(ctx, doc, b, dict, compressed);
+	fz_always(ctx)
+		fz_drop_buffer(ctx, b);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return ref;
+}
+
+static pdf_obj *add_glyphless_font(fz_context *ctx, pdf_document *doc)
+{
+	pdf_obj *d = NULL, *map = NULL, *file = NULL, *uni = NULL, *desc = NULL, *cid = NULL, *font = NULL, *arr;
+	fz_var(d);
+	fz_var(map);
+	fz_var(file);
+	fz_var(uni);
+	fz_var(desc);
+	fz_var(cid);
+	fz_try(ctx)
+	{
+		d = pdf_new_dict(ctx, doc, 1);
+		pdf_dict_put(ctx, d, PDF_NAME(Filter), PDF_NAME(FlateDecode));
+		map = add_stream_bytes(ctx, doc, glyphless_cidtogid, sizeof glyphless_cidtogid - 1, d, 1);
+		pdf_drop_obj(ctx, d);
+		d = pdf_new_dict(ctx, doc, 1);
+		pdf_dict_put_int(ctx, d, PDF_NAME(Length1), sizeof glyphless_ttf - 1);
+		file = add_stream_bytes(ctx, doc, glyphless_ttf, sizeof glyphless_ttf - 1, d, 0);
+		uni = add_stream_bytes(ctx, doc, glyphless_tounicode, sizeof glyphless_tounicode - 1, NULL, 0);
+
+		desc = pdf_add_new_dict(ctx, doc, 10);
+		pdf_dict_put(ctx, desc, PDF_NAME(Type), PDF_NAME(FontDescriptor));
+		pdf_dict_put_name(ctx, desc, PDF_NAME(FontName), "GlyphLessFont");
+		pdf_dict_put_int(ctx, desc, PDF_NAME(Flags), 5);
+		pdf_dict_put_rect(ctx, desc, PDF_NAME(FontBBox), fz_make_rect(0, 0, 500, 1000));
+		pdf_dict_put_int(ctx, desc, PDF_NAME(ItalicAngle), 0);
+		pdf_dict_put_int(ctx, desc, PDF_NAME(Ascent), 1000);
+		pdf_dict_put_int(ctx, desc, PDF_NAME(Descent), -1);
+		pdf_dict_put_int(ctx, desc, PDF_NAME(CapHeight), 1000);
+		pdf_dict_put_int(ctx, desc, PDF_NAME(StemV), 80);
+		pdf_dict_put(ctx, desc, PDF_NAME(FontFile2), file);
+
+		cid = pdf_add_new_dict(ctx, doc, 8);
+		pdf_dict_put(ctx, cid, PDF_NAME(Type), PDF_NAME(Font));
+		pdf_dict_put(ctx, cid, PDF_NAME(Subtype), PDF_NAME(CIDFontType2));
+		pdf_dict_put_name(ctx, cid, PDF_NAME(BaseFont), "GlyphLessFont");
+		{
+			pdf_obj *info = pdf_dict_put_dict(ctx, cid, PDF_NAME(CIDSystemInfo), 3);
+			pdf_dict_put_string(ctx, info, PDF_NAME(Registry), "Adobe", 5);
+			pdf_dict_put_string(ctx, info, PDF_NAME(Ordering), "Identity", 8);
+			pdf_dict_put_int(ctx, info, PDF_NAME(Supplement), 0);
+		}
+		pdf_dict_put(ctx, cid, PDF_NAME(FontDescriptor), desc);
+		pdf_dict_put(ctx, cid, PDF_NAME(CIDToGIDMap), map);
+		pdf_dict_put_int(ctx, cid, PDF_NAME(DW), 500);
+
+		font = pdf_add_new_dict(ctx, doc, 6);
+		pdf_dict_put(ctx, font, PDF_NAME(Type), PDF_NAME(Font));
+		pdf_dict_put(ctx, font, PDF_NAME(Subtype), PDF_NAME(Type0));
+		pdf_dict_put_name(ctx, font, PDF_NAME(BaseFont), "GlyphLessFont");
+		pdf_dict_put(ctx, font, PDF_NAME(Encoding), PDF_NAME(Identity_H));
+		arr = pdf_dict_put_array(ctx, font, PDF_NAME(DescendantFonts), 1);
+		pdf_array_push(ctx, arr, cid);
+		pdf_dict_put(ctx, font, PDF_NAME(ToUnicode), uni);
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_obj(ctx, d);
+		pdf_drop_obj(ctx, map);
+		pdf_drop_obj(ctx, file);
+		pdf_drop_obj(ctx, uni);
+		pdf_drop_obj(ctx, desc);
+		pdf_drop_obj(ctx, cid);
+	}
+	fz_catch(ctx)
+	{
+		pdf_drop_obj(ctx, font);
+		fz_rethrow(ctx);
+	}
+	return font;
+}
+
+static int is_ocr_stream(fz_context *ctx, pdf_obj *o)
+{
+	return pdf_to_bool(ctx, pdf_dict_gets(ctx, o, "PaginautOCR"));
+}
+
+static pdf_obj *add_ocr_stream(fz_context *ctx, pdf_document *doc, fz_buffer *b)
+{
+	pdf_obj *d = pdf_new_dict(ctx, doc, 1);
+	pdf_obj *ref = NULL;
+	fz_try(ctx)
+	{
+		pdf_dict_puts_drop(ctx, d, "PaginautOCR", PDF_TRUE);
+		ref = pdf_add_stream(ctx, doc, b, d, 0);
+	}
+	fz_always(ctx)
+		pdf_drop_obj(ctx, d);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return ref;
+}
+
+int fo_ocr_apply(fo_ctx *c, fo_page *p, const char *content, size_t len, int *font_num)
+{
+	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
+	pdf_obj *font = NULL, *pre = NULL, *post = NULL;
+	fz_buffer *b = NULL;
+	if (!page)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF page");
+		return -1;
+	}
+	fz_var(font);
+	fz_var(pre);
+	fz_var(post);
+	fz_var(b);
+	fz_try(CTX)
+	{
+		pdf_document *doc = page->doc;
+		pdf_obj *pobj = page->obj;
+		pdf_obj *contents = pdf_dict_get(CTX, pobj, PDF_NAME(Contents));
+		pdf_obj *arr, *res, *fonts;
+		fz_matrix ctm, inv;
+
+		/* Removing: drop every layer added earlier. */
+		if (len == 0)
+		{
+			for (int i = pdf_array_len(CTX, contents) - 1; i >= 0; i--)
+				if (is_ocr_stream(CTX, pdf_array_get(CTX, contents, i)))
+					pdf_array_delete(CTX, contents, i);
+			break;
+		}
+
+		/* Adding: a new layer next to any earlier ones (each run reads only what
+		 * isn't text yet, so layers never cover the same words). */
+		if (pdf_is_array(CTX, contents))
+			arr = contents;
+		else
+		{
+			arr = pdf_new_array(CTX, doc, 3);
+			if (contents)
+				pdf_array_push(CTX, arr, contents);
+			pdf_dict_put_drop(CTX, pobj, PDF_NAME(Contents), arr);
+		}
+
+		if (*font_num > 0)
+			font = pdf_new_indirect(CTX, doc, *font_num, 0);
+		else
+		{
+			font = add_glyphless_font(CTX, doc);
+			*font_num = pdf_to_num(CTX, font);
+		}
+		res = pdf_dict_get(CTX, pobj, PDF_NAME(Resources));
+		if (!res)
+		{
+			pdf_obj *inherited = pdf_dict_get_inheritable(CTX, pobj, PDF_NAME(Resources));
+			res = inherited ? pdf_copy_dict(CTX, inherited) : pdf_new_dict(CTX, doc, 1);
+			pdf_dict_put_drop(CTX, pobj, PDF_NAME(Resources), res);
+		}
+		fonts = pdf_dict_get(CTX, res, PDF_NAME(Font));
+		if (!fonts)
+			fonts = pdf_dict_put_dict(CTX, res, PDF_NAME(Font), 1);
+		pdf_dict_puts(CTX, fonts, "PgnOCR", font);
+
+		/* The page's own content runs inside q â€¦ Q, so whatever state it leaves
+		 * behind can't move the text. The text is in page space as shown (origin
+		 * top-left, y down); the matrix takes it back to the PDF's own space. */
+		pdf_page_transform(CTX, page, NULL, &ctm);
+		inv = fz_invert_matrix(ctm);
+		b = fz_new_buffer_from_copied_data(CTX, (const unsigned char *)"q\n", 2);
+		pre = add_ocr_stream(CTX, doc, b);
+		fz_drop_buffer(CTX, b);
+		b = NULL;
+		b = fz_new_buffer(CTX, len + 128);
+		fz_append_printf(CTX, b, "Q\nq\n%g %g %g %g %g %g cm\n", inv.a, inv.b, inv.c, inv.d, inv.e, inv.f);
+		fz_append_data(CTX, b, content, len);
+		fz_append_string(CTX, b, "\nQ\n");
+		post = add_ocr_stream(CTX, doc, b);
+		pdf_array_insert(CTX, arr, pre, 0);
+		pdf_array_push(CTX, arr, post);
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, font);
+		pdf_drop_obj(CTX, pre);
+		pdf_drop_obj(CTX, post);
+		fz_drop_buffer(CTX, b);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* 1 if the page carries a text layer made by fo_ocr_apply. */
+int fo_ocr_has_layer(fo_ctx *c, fo_page *p)
+{
+	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
+	int found = 0;
+	if (!page)
+		return 0;
+	fz_try(CTX)
+	{
+		pdf_obj *contents = pdf_dict_get(CTX, page->obj, PDF_NAME(Contents));
+		for (int i = 0; i < pdf_array_len(CTX, contents) && !found; i++)
+			found = is_ocr_stream(CTX, pdf_array_get(CTX, contents, i));
+	}
+	fz_catch(CTX)
+		return 0;
+	return found;
 }

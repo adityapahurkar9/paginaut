@@ -582,6 +582,119 @@ pub fn reflow(state: State<'_, AppState>, doc: DocId, start: usize, sid: u64, on
     )
 }
 
+// ---------------------------------------------------------------- OCR
+
+use crate::ocr::{ModelDirs, Quality};
+
+/// OCR languages, with which models are built in or downloaded.
+#[tauri::command]
+pub fn ocr_languages(dirs: State<'_, ModelDirs>) -> Vec<crate::ocr::LangInfo> {
+    dirs.languages()
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum DownloadEvent {
+    Progress { done: u64, total: u64 },
+}
+
+/// Downloads a language model; resolves when it's ready to use.
+#[tauri::command]
+pub async fn ocr_download(dirs: State<'_, ModelDirs>, code: String, quality: String, on_event: Channel<DownloadEvent>) -> Res<()> {
+    let dirs = dirs.inner().clone();
+    let q = Quality::parse(&quality);
+    let key = crate::ocr::download_key(&code, q);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    crate::ocr::DOWNLOADS.lock().insert(key.clone(), stop.clone());
+    let res = blocking(move || {
+        let mut last = 0u64;
+        dirs.download(&code, q, &stop, |done, total| {
+            // A progress event per 1% is plenty.
+            if done == total || done - last >= total / 100 {
+                last = done;
+                let _ = on_event.send(DownloadEvent::Progress { done, total });
+            }
+        })
+    })
+    .await;
+    crate::ocr::DOWNLOADS.lock().remove(&key);
+    res
+}
+
+#[tauri::command]
+pub fn ocr_download_stop(code: String, quality: String) {
+    crate::ocr::stop_download(&code, Quality::parse(&quality));
+}
+
+#[tauri::command]
+pub async fn ocr_delete(dirs: State<'_, ModelDirs>, code: String, quality: String) -> Res<()> {
+    let dirs = dirs.inner().clone();
+    blocking(move || dirs.delete(&code, Quality::parse(&quality))).await
+}
+
+/// How many of a sample of pages are scans without text.
+#[tauri::command]
+pub async fn ocr_check(state: State<'_, AppState>, doc: DocId) -> Res<crate::engine::ocr::ScanCheck> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.scan_check()).await
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum OcrEvent {
+    Progress { done: usize, total: usize },
+    Done { end: crate::engine::ocr::OcrEnd },
+}
+
+/// Recognises text on `pages` (source indices, in the order to read them) with
+/// the given languages. Cancelling `sid` stops it and keeps what was read.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn ocr_run(
+    state: State<'_, AppState>,
+    dirs: State<'_, ModelDirs>,
+    doc: DocId,
+    pages: Vec<usize>,
+    langs: Vec<String>,
+    quality: String,
+    sid: u64,
+    on_event: Channel<OcrEvent>,
+) -> Res<()> {
+    let models = dirs.models(&langs, Quality::parse(&quality))?;
+    let progress = on_event.clone();
+    state.engine.ocr(
+        doc,
+        pages,
+        models,
+        sid,
+        move |done, total| {
+            let _ = progress.send(OcrEvent::Progress { done, total });
+        },
+        move |end| {
+            let _ = on_event.send(OcrEvent::Done { end });
+        },
+    )
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrRemoved {
+    pages: usize,
+    dirty: bool,
+}
+
+/// Removes the text Paginaut recognised on every page (one undo step).
+#[tauri::command]
+pub async fn ocr_remove(state: State<'_, AppState>, doc: DocId) -> Res<OcrRemoved> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        let d = engine.doc(doc)?;
+        let pages = d.remove_ocr()?;
+        Ok(OcrRemoved { pages, dirty: d.has_changes() })
+    })
+    .await
+}
+
 #[tauri::command]
 pub fn cancel(state: State<'_, AppState>, ids: Vec<u64>) {
     for id in ids {

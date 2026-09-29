@@ -21,6 +21,7 @@ import { annotTool, PALETTE, selectedAnnot, setStyle, STAMPS, styleOf, toolStyle
 import { startLayoutEdit } from "./LayoutPanel";
 import { loadSigs, newSig, openSignPane, pickSig, sigs, sigsOf, type SigKind } from "../sign";
 import { startSigning } from "../dsc";
+import { recognize, removeRecognized } from "../ocr";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -466,7 +467,10 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
       <TB icon={I(FormInput, 17)} label="Forms" menu onClick={(e) => openMenu(e, formItems(tab), "left", 270)} />
       <TB icon={I(Highlighter, 17)} label="Comment" title="Highlight, draw, add notes and text (Comment tab)" onClick={() => updateSettings({ ribbon: "comment" })} />
       <TB icon={I(Signature, 17)} label="Sign" title="Signatures, initials and Fill & Sign (Sign tab)" onClick={() => updateSettings({ ribbon: "sign", signPane: true })} />
-      <TB icon={I(ScanText, 17)} label="OCR" menu onClick={(e) => openMenu(e, [soon("Recognize text", 5)])} />
+      <TB icon={I(ScanText, 17)} label="OCR" menu disabled={!tab} onClick={(e) => openMenu(e, [
+        { label: "Recognize text…", run: () => tab && void recognize(tab) },
+        { label: "Remove recognized text", disabled: !tab?.info.value?.isPdf, run: () => tab && void removeRecognized(tab) },
+      ], "left", 240)} />
       <TB icon={I(Combine, 17)} label="Organize" menu onClick={(e) => openMenu(e, [
         soon("Merge", 6), soon("Split", 6), soon("Compress", 6), soon("Crop", 6), soon("Page numbers", 6), soon("Watermark", 6),
         soon("Protect / unlock", 6), soon("Redact", 6), soon("Compare", 6), soon("Repair", 6),

@@ -1,6 +1,6 @@
 [package]
 name = "paginaut"
-version = "0.4.0"
+version = "0.5.0"
 description = "Fast PDF reader, annotator and toolkit"
 edition = "2021"
 license = "AGPL-3.0-or-later"
@@ -29,8 +29,9 @@ tauri-plugin-opener = "2"
 # Same versions Tauri uses, to reach WebView2 settings it doesn't expose (touchpad pinch).
 webview2-com = "0.39"
 windows-core = "0.62"
-# DPAPI: saved signatures are encrypted for the Windows user.
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+# DPAPI: saved signatures are encrypted for the Windows user. WinHTTP and BCrypt:
+# downloading OCR language models and checking them.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Networking_WinHttp"] }
 
 [profile.dev]
 # MuPDF is always an optimised static library; keep our own code quick too.

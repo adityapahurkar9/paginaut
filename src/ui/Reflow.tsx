@@ -12,11 +12,14 @@ import { BookView } from "../reflow/BookView";
 import { ReadView, type ReflowView } from "../reflow/ReadView";
 import { createPictures, type Pictures } from "../reflow/render";
 import { isDark, settings, updateSettings, type ReflowSettings, type Tab } from "../store";
+import { ocrState, recognize } from "../ocr";
 
 // ---------------------------------------------------------------- loading
 
 interface Loaded {
   docId: number;
+  /** The tab's textRev it was read at. */
+  rev: number;
   analysis: Promise<Analysis>;
   progress: ReturnType<typeof signal<number>>;
   cancel(): void;
@@ -31,7 +34,7 @@ const pictures = new WeakMap<Tab, { docId: number; pics: Pictures }>();
 export function analysisOf(tab: Tab): Loaded {
   const info = tab.info.value!;
   const prev = loaded.get(tab);
-  if (prev && prev.docId === info.docId) return prev;
+  if (prev && prev.docId === info.docId && prev.rev === tab.textRev.value) return prev;
   prev?.cancel();
   const progress = signal(0);
   const sid = newId();
@@ -49,7 +52,7 @@ export function analysisOf(tab: Tab): Loaded {
       })
       .catch(reject);
   });
-  const entry: Loaded = { docId: info.docId, analysis, progress, cancel: () => api.cancel([sid]).catch(() => {}) };
+  const entry: Loaded = { docId: info.docId, rev: tab.textRev.value, analysis, progress, cancel: () => api.cancel([sid]).catch(() => {}) };
   analysis.catch(() => loaded.get(tab) === entry && loaded.delete(tab));
   loaded.set(tab, entry);
   return entry;
@@ -142,7 +145,7 @@ export function ReflowHost({ tab }: { tab: Tab }) {
     return () => {
       alive = false;
     };
-  }, [tab.info.value?.docId, tab.edits.value, ov]);
+  }, [tab.info.value?.docId, tab.edits.value, ov, tab.textRev.value]);
 
   // Mount the view for the current mode.
   const flow = state.flow;
@@ -224,7 +227,7 @@ export function ReflowHost({ tab }: { tab: Tab }) {
           <span class="error-text">{state.error}</span>
         </div>
       )}
-      {flow && flow.scans > 0 && flow.scans >= (flow.pageStart.length * 0.8) && <ScanNote />}
+      {flow && flow.scans > 0 && flow.scans >= (flow.pageStart.length * 0.8) && <ScanNote tab={tab} />}
       {mode === "book" && flow && <BookBar tab={tab} />}
       {typeOpen.value && <TypePanel book={mode === "book"} />}
       {zoomed && <Lightbox pic={zoomed} pics={picturesOf(tab)} onClose={() => setZoomed(null)} />}
@@ -232,12 +235,18 @@ export function ReflowHost({ tab }: { tab: Tab }) {
   );
 }
 
-function ScanNote() {
+function ScanNote({ tab }: { tab: Tab }) {
   const [shown, setShown] = useState(true);
   if (!shown) return null;
+  const running = ocrState(tab).value?.phase === "running";
   return (
     <div class="rf-note">
-      This is a scanned document, so its pages are shown as pictures. Text will reflow once it has been through OCR (Phase 5).
+      {running ? "Recognizing the text of this scan… Its pages are shown as pictures until it's done." : "This is a scanned document, so its pages are shown as pictures until its text is recognized."}
+      {!running && (
+        <button class="btn sm pri" onClick={() => void recognize(tab)}>
+          Recognize text
+        </button>
+      )}
       <button class="ib sm" aria-label="Dismiss" onClick={() => setShown(false)}>
         <X size={14} />
       </button>

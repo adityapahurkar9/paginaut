@@ -114,6 +114,38 @@ pub fn release_heap() {
     }
 }
 
+// ---------------------------------------------------------------- Tesseract
+
+/// A text recogniser with its language models loaded. It must stay on the
+/// thread that made it.
+pub struct Tess(*mut po_tess);
+
+impl Tess {
+    /// `langs`: "eng" or "eng+hin"; `files`: (language, model file path) for each.
+    pub fn new(langs: &str, files: &[(String, String)]) -> Result<Self> {
+        static INIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*INIT.get_or_init(|| unsafe { fo_ocr_init() } == 0) {
+            return Err("text recognition couldn't start".into());
+        }
+        let list: String = files.iter().map(|(l, p)| format!("{l}\t{p}\n")).collect();
+        let langs = CString::new(langs).map_err(|e| e.to_string())?;
+        let list = CString::new(list).map_err(|e| e.to_string())?;
+        let mut err = [0u8; 256];
+        let t = unsafe { po_tess_new(langs.as_ptr(), list.as_ptr(), err.as_mut_ptr().cast(), err.len() as c_int) };
+        if t.is_null() {
+            Err(unsafe { CStr::from_ptr(err.as_ptr().cast()) }.to_string_lossy().into_owned())
+        } else {
+            Ok(Tess(t))
+        }
+    }
+}
+
+impl Drop for Tess {
+    fn drop(&mut self) {
+        unsafe { po_tess_drop(self.0) }
+    }
+}
+
 // ---------------------------------------------------------------- Cookie
 
 pub struct Cookie(*mut fo_cookie);
@@ -577,6 +609,24 @@ impl Page {
     }
 }
 
+impl Page {
+    /// Adds a recognised-text layer of `content` (empty: removes all such layers).
+    /// `font`: the invisible font's object number to share, 0 to make one.
+    pub fn ocr_apply(&self, content: &str, font: &mut i32) -> Result<()> {
+        with_kind(self.1, |c| {
+            if unsafe { fo_ocr_apply(c, self.0, content.as_ptr().cast(), content.len(), font) } == 0 {
+                Ok(())
+            } else {
+                Err(last_error(c))
+            }
+        })
+    }
+
+    pub fn has_ocr_layer(&self) -> bool {
+        with_kind(self.1, |c| unsafe { fo_ocr_has_layer(c, self.0) }) == 1
+    }
+}
+
 impl Drop for Page {
     fn drop(&mut self) {
         drop_with(self.1, |c| unsafe { fo_page_drop(c, self.0) })
@@ -648,6 +698,33 @@ impl List {
     /// Page content for reflowing, as JSON (see fo_reflow_json).
     pub fn reflow(&self, bounds: &[f32; 4]) -> Result<String> {
         with_kind(self.1, |c| take_string(c, unsafe { fo_reflow_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c)))
+    }
+
+    /// Share of the page (per 10,000) drawn but not text: pictures, text turned into outlines.
+    pub fn untexted_ink(&self, bounds: &[f32; 4]) -> Result<u32> {
+        with_kind(self.1, |c| {
+            let n = unsafe { fo_ocr_ink(c, self.0, bounds.as_ptr()) };
+            if n < 0 {
+                Err(last_error(c))
+            } else {
+                Ok(n as u32)
+            }
+        })
+    }
+
+    /// Recognises what's drawn on the page but isn't text yet (see fo_ocr_page).
+    /// `None` if the cookie aborted it.
+    pub fn ocr(&self, bounds: &[f32; 4], dpi: f32, tess: &Tess, cookie: Option<&Cookie>) -> Result<Option<String>> {
+        with_kind(self.1, |c| {
+            let mut aborted = 0;
+            let k = cookie.map_or(std::ptr::null_mut(), |k| k.0);
+            let s = take_string(c, unsafe { fo_ocr_page(c, self.0, bounds.as_ptr(), dpi, tess.0, k, &mut aborted) });
+            if aborted != 0 {
+                Ok(None)
+            } else {
+                s.map(Some).ok_or_else(|| last_error(c))
+            }
+        })
     }
 
     pub fn text(&self) -> Result<Text> {

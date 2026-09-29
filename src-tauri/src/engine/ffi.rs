@@ -148,6 +148,20 @@ extern "C" {
     pub fn fo_sig_data(c: *mut fo_ctx, d: *mut fo_doc, i: c_int, data: *mut *mut u8, len: *mut usize, cms: *mut *mut u8, cms_len: *mut usize) -> c_int;
 
     pub fn fo_free(c: *mut fo_ctx, p: *mut c_void);
+
+    pub fn fo_ocr_init() -> c_int;
+    pub fn fo_ocr_ink(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> c_int;
+    pub fn fo_ocr_page(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, dpi: c_float, t: *mut po_tess, k: *mut fo_cookie, aborted: *mut c_int) -> *mut c_char;
+    pub fn fo_ocr_apply(c: *mut fo_ctx, p: *mut fo_page, content: *const c_char, len: usize, font_num: *mut c_int) -> c_int;
+    pub fn fo_ocr_has_layer(c: *mut fo_ctx, p: *mut fo_page) -> c_int;
+
+    pub fn po_tess_new(langs: *const c_char, files: *const c_char, err: *mut c_char, errlen: c_int) -> *mut po_tess;
+    pub fn po_tess_drop(t: *mut po_tess);
+}
+
+#[repr(C)]
+pub struct po_tess {
+    _p: [u8; 0],
 }
 
 /// Makes the CMS blob for the bytes MuPDF hands over while saving a signed document.

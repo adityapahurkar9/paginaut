@@ -1,6 +1,8 @@
 pub mod engine;
 mod app;
 mod base64;
+mod ocr;
+mod ocr_langs;
 mod sigstore;
 pub mod dsc;
 
@@ -150,12 +152,24 @@ pub fn run() {
             app::signed_version,
             app::sig_add,
             app::sig_delete,
+            app::ocr_languages,
+            app::ocr_download,
+            app::ocr_download_stop,
+            app::ocr_delete,
+            app::ocr_check,
+            app::ocr_run,
+            app::ocr_remove,
             app::cancel,
             app::system_info,
             app::take_launch_files,
             memory_level,
         ])
         .setup(|app| {
+            // OCR models: English, Hindi and Marathi ship with the app; more are
+            // downloaded into the local (not roaming) data folder.
+            let builtin = app.path().resource_dir().map(|d| d.join("tessdata")).unwrap_or_default();
+            let user = app.path().app_local_data_dir().map(|d| d.join("tessdata")).unwrap_or_default();
+            app.manage(ocr::ModelDirs { builtin, user });
             // Shown by the UI once the first frame is painted, so there's no white flash.
             #[cfg(windows)]
             if let Some(win) = app.get_webview_window("main") {

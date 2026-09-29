@@ -48,6 +48,8 @@ export interface Settings {
   reflow: ReflowSettings;
   /** Digital signing choices, remembered (cert: thumbprint of the last one used). */
   dsc: { reason: string; location: string; showDate: boolean; lock: boolean; newFile: boolean; place: "box" | "invisible"; cert: string };
+  /** Text recognition: the languages and model quality used last. */
+  ocr: { langs: string[]; quality: "fast" | "best" };
 }
 
 export interface ReflowSettings {
@@ -68,6 +70,7 @@ export const settings = signal<Settings>(
     ribbon: "home", coverSeparate: false, highlightFields: true, signPane: false,
     annot: { colors: { hl: "#ffd400", pen: "#e8453c", shape: "#e8453c", text: "#1c1c1c", note: "#ffd400" }, width: 1.5, fontSize: 12 }, reflow: REFLOW_DEFAULTS,
     dsc: { reason: "I approve this document", location: "", showDate: true, lock: false, newFile: true, place: "box", cert: "" },
+    ocr: { langs: ["eng"], quality: "fast" },
     ...load("paginaut.settings", {} as Partial<Settings>),
   },
 );
@@ -164,6 +167,8 @@ export class Tab {
   forms = signal<{ fields: number; xfa: boolean } | null>(null);
   /** Bumped when page content changes in memory (thumbnails redraw). */
   contentRev = signal(0);
+  /** Bumped when the pages' text may have changed in memory (recognised text, undo): Read mode re-reads it. */
+  textRev = signal(0);
   dirty = computed(() => {
     const e = this.edits.value;
     return (!!e && !isIdentity(e)) || this.docChanged.value;

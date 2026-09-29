@@ -85,6 +85,7 @@ function About() {
       <span class="muted">A fast reader and editor for PDFs, e-books, comics and images.</span>
       <div class="about-rows">
         <div><span>Engine</span><span>MuPDF 1.28.5 (native, multi-threaded)</span></div>
+        <div><span>Text recognition</span><span>Tesseract 5 (Apache-2.0), models from tessdata 4.1.0</span></div>
         <div><span>App</span><span>Tauri 2 · WebView2</span></div>
         <div><span>Threads</span><span>{navigator.hardwareConcurrency} logical processors</span></div>
         <div><span>Licence</span><span>AGPL-3.0 (MuPDF's licence)</span></div>

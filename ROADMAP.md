@@ -159,7 +159,50 @@ Also from testing:
       minimized or with no document open, WebView2 is asked to give memory back. Text PDF + 914 MB scan,
       then closing both: stayed at ~690 MB before, now back to ~250 MB within 40 s (212 MB at start)
 
-## Phase 5: OCR (C++ Tesseract module)
+## Phase 5 (0.5.0): OCR (Tesseract)
+Text recognition with the Tesseract 5 built into our MuPDF libraries (no separate module), through a small bridge of
+our own (src-tauri/native/ocr.cpp): MuPDF's own OCR path reloads the models for every page and allows one recognition
+at a time in the whole process.
+- [x] Pages recognised in parallel: one Tesseract per worker, half the workers (at most 8). 300 dpi grey render;
+      ~1.4 s a page on one core, 24 pages in 4.5 s on 8 (synthetic 300 dpi scan, mean confidence 95). Peak ~50 MB
+      per recognition thread, all given back when the job ends
+- [x] Only what isn't text yet is read: page text (visible or invisible, e.g. an earlier OCR layer) is left out of
+      the render, so mixed pages and scans that already have text never get it twice; pages with nothing left skip
+      Tesseract. Words it's unsure of (confidence < 25) or that are only punctuation are dropped
+- [x] The text goes into the PDF as an invisible layer (like scanners and Adobe): an invisible "GlyphLessFont",
+      each word stretched to its box on the line's baseline (skew followed), right-to-left words placed from the right.
+      Marked streams (/PaginautOCR) so "Remove recognized text" can take them out again. One undo step; Ctrl+S keeps
+      it (incremental: +83 KB for 12 pages)
+- [x] Search, selection, copy and Read/Book mode work on it right away: while pages have unsaved text, background
+      jobs (search, reflow) read the document in memory instead of private copies of the file. Read mode re-reads
+      after recognising, undo and redo; OCR text isn't mistaken for monospace, and its size is the line's
+- [x] Written in reading order: lines Tesseract read across a gutter (an article line joined to the sidebar beside
+      it) are split, and the pieces ordered by XY-cut (columns only where both sides are at least a fifth of the width,
+      so full-width text, line numbers and table rows keep their order). MuPDF groups paragraphs in that order, so
+      columns stay apart in Read mode
+- [x] Offer bar when text is part of the picture (12 pages sampled: under 30 characters of text, and over 0.3% of the
+      page drawn once text is left out): scans, and also web pages printed to PDF or documents whose text became
+      outlines. Scans that already have a text layer (e.g. from the scanner) aren't offered. Recognize text; ×
+      stops offering it for that file. Tools › OCR and the command palette: Recognize text…,
+      Remove recognized text
+- [x] Recognize text dialog: all pages / this page / a range ("1-5, 8"), languages (chips; each extra one is
+      slower), accuracy Standard (fast models) or Best (tessdata_best, downloaded once). Remembers the last choice.
+      A warning on digitally signed documents. Pictures (PNG, JPEG, TIFF…) are saved as a PDF first
+- [x] Progress in the bar with Stop (pages already read keep their text); saving while it runs offers
+      "Stop and save"; closing the tab stops it
+- [x] English, Hindi and Marathi (fast models, 7.3 MB) built into the installer (native/get-tessdata.ps1 fetches
+      them, pinned by SHA-256). 123 more languages, and best models for all, download from Tesseract's own
+      repositories at tag 4.1.0 through WinHTTP (system proxy and certificates), checked against the size and git
+      hash GitHub lists (tools/make-ocr-langs.mjs); stored under %LOCALAPPDATA%\app.paginaut.reader\tessdata, and can
+      be removed from the dialog
+- [x] Models are read through our own wide-character file reader, so Windows user names with non-English letters work
+Later:
+- [ ] Sideways pages: our Tesseract build has no orientation detection (it needs the legacy engine); rotate such pages
+      first. A try-each-rotation fallback on low confidence could come later
+- [x] Marathi check: Maharashtra Times article printed to PDF (8 pages, text as outlines): Marathi + English, 1,789
+      words in 1.9 s, 91% mean confidence on page 2; Marathi search finds the words. Few misreads (a large bold
+      heading dropped words); Best models may help
+- [ ] Recognise again with other settings (today: Remove recognized text, then Recognize text)
 ## Phase 6: Tools suite
 ## Phase 7: Conversions
 - [ ] Office quality test first: convert a mixed set of real Office files with MuPDF and with Microsoft Office,

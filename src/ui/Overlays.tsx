@@ -7,6 +7,7 @@ import * as P from "../pages";
 import { setCoverSeparate, setViewMode } from "../modes";
 import { startLayoutEdit } from "./LayoutPanel";
 import { clearForm } from "../forms";
+import { recognize, removeRecognized } from "../ocr";
 import { helpPanel } from "./HelpDialogs";
 import { activeTab, baseName, dialog, findOpen, openFiles, paletteOpen, recent, settings, toast, unlockTab, updateSettings, type Tab } from "../store";
 
@@ -197,6 +198,8 @@ function commands(): Item[] {
     c("Read mode (reflowed text, one column)", () => A.toggleMode("read"), "Ctrl+H", hasDoc),
     c("Book mode (reflowed text, two pages, full screen)", () => A.toggleMode("book"), "F5", hasDoc),
     c("Fix reading layout (columns, order, pictures)", withTab((t) => void startLayoutEdit(t)), "", hasDoc),
+    c("Recognize text (OCR)…", withTab((t) => void recognize(t)), "", hasDoc),
+    c("Remove recognized text", withTab((t) => void removeRecognized(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Clear form", withTab((t) => void clearForm(t)), "", () => !!activeTab.value?.forms.value?.fields),
     c("Save a flattened copy of the form…", withTab((t) => void P.saveFlattened(t)), "", () => !!activeTab.value?.forms.value?.fields),
     c(settings.value.highlightFields ? "Hide form field highlights" : "Highlight form fields", () => updateSettings({ highlightFields: !settings.value.highlightFields }), ""),

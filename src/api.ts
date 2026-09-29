@@ -116,6 +116,10 @@ export type ReflowEvent =
   | { kind: "page"; page: number; data: string }
   | { kind: "done"; complete: boolean; error: string | null };
 
+export type OcrEvent =
+  | { kind: "progress"; done: number; total: number }
+  | { kind: "done"; end: import("./ocr").OcrEnd };
+
 export interface EngineSearchOptions {
   matchCase: boolean;
   regex: boolean;
@@ -169,6 +173,22 @@ export const api = {
   formReset: (doc: number) => invoke<FormChange>("form_reset", { doc }),
   saveFlattened: (doc: number, target: string, order: number[], rot: number[], annots: boolean) =>
     invoke<void>("save_flattened", { doc, target, order, rot, annots }),
+  ocrLanguages: () => invoke<import("./ocr").OcrLang[]>("ocr_languages"),
+  ocrDownload: (code: string, quality: string, onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
+    const ch = new Channel<{ kind: "progress"; done: number; total: number }>();
+    ch.onmessage = onEvent;
+    return invoke<void>("ocr_download", { code, quality, onEvent: ch });
+  },
+  ocrDownloadStop: (code: string, quality: string) => invoke<void>("ocr_download_stop", { code, quality }),
+  ocrDelete: (code: string, quality: string) => invoke<void>("ocr_delete", { code, quality }),
+  ocrCheck: (doc: number) => invoke<{ sampled: number; scans: number }>("ocr_check", { doc }),
+  /** Recognises `pages` (indices in the file); cancelling `sid` stops it and keeps what was read. */
+  ocrRun: (doc: number, pages: number[], langs: string[], quality: string, sid: number, onEvent: (e: OcrEvent) => void) => {
+    const ch = new Channel<OcrEvent>();
+    ch.onmessage = onEvent;
+    return invoke<void>("ocr_run", { doc, pages, langs, quality, sid, onEvent: ch });
+  },
+  ocrRemove: (doc: number) => invoke<{ pages: number; dirty: boolean }>("ocr_remove", { doc }),
   cancel: (ids: number[]) => (ids.length ? invoke<void>("cancel", { ids }) : Promise.resolve()),
   systemInfo: () => invoke<SystemInfo>("system_info"),
   takeLaunchFiles: () => invoke<string[]>("take_launch_files"),

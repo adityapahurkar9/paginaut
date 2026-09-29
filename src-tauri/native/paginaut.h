@@ -154,6 +154,23 @@ int fo_sign_page(fo_ctx *c, fo_page *p, int num, const float rect[4], fo_sign_cb
 char *fo_sigs_json(fo_ctx *c, fo_doc *d);
 int fo_sig_data(fo_ctx *c, fo_doc *d, int i, unsigned char **data, size_t *len, unsigned char **cms, size_t *cms_len);
 
+/* OCR (Tesseract through ocr.h). fo_ocr_init once, before any recogniser is made.
+ * fo_ocr_page: JSON {"l":[{"b":[line box],"bl":[baseline],"w":[[x0,y0,x1,y1,conf,"text"],...]}],"blank":1?},
+ * points relative to the page origin; what is already text on the page is left out.
+ * fo_ocr_apply: adds a recognised-text layer of content (operators in page space
+ * as shown: origin top-left, y down; the font is /PgnOCR), or removes every such
+ * layer when len is 0. *font_num: the font object to share (0 = make one; set on return). */
+#ifndef PO_TESS_DEFINED
+#define PO_TESS_DEFINED
+typedef struct po_tess po_tess;
+#endif
+int fo_ocr_init(void);
+/* Share of the page (per 10,000) left to read once its text is left out: a quick check for scans. */
+int fo_ocr_ink(fo_ctx *c, fo_list *l, const float bounds[4]);
+char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bounds[4], float dpi, po_tess *t, fo_cookie *k, int *aborted);
+int fo_ocr_apply(fo_ctx *c, fo_page *p, const char *content, size_t len, int *font_num);
+int fo_ocr_has_layer(fo_ctx *c, fo_page *p);
+
 void fo_free(fo_ctx *c, void *p);
 
 #endif

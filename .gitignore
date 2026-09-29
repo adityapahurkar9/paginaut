@@ -10,3 +10,6 @@ src-tauri/gen/schemas/
 
 # MuPDF 1.28.5 source and its built libraries (third-party; see native/build-mupdf.ps1)
 native/mupdf/
+
+# OCR models built into the installer (Tesseract's; see native/get-tessdata.ps1)
+native/tessdata/

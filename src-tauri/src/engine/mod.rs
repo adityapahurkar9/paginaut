@@ -2,6 +2,7 @@
 
 pub mod ffi;
 pub mod mupdf;
+pub mod ocr;
 pub mod pool;
 
 use mupdf::{Document, List, Page, RenderOutcome, Text};
@@ -79,6 +80,29 @@ pub struct Doc {
     bg_gen: AtomicU64,
     /// Bumped by each form/annotation edit (cached display lists from before are stale).
     edit_rev: AtomicU64,
+    /// Page content was changed in memory (recognised text): background jobs must
+    /// read this document, not private copies of the file on disk. Cleared on saving.
+    content_edited: AtomicBool,
+}
+
+/// Where a background job reads pages from: a private copy of the file (fast,
+/// parallel), or the document in memory when its pages have unsaved changes.
+pub enum PageSrc<'a> {
+    Private(&'a Document),
+    Shared(&'a Doc),
+}
+
+impl PageSrc<'_> {
+    /// A fresh display list of the page's contents, and the page's bounds.
+    pub fn list(&self, i: usize) -> Result<(List, [f32; 4]), String> {
+        match self {
+            PageSrc::Private(doc) => {
+                let p = doc.load_page(i)?;
+                Ok((p.display_list(0)?, p.bounds()?))
+            }
+            PageSrc::Shared(d) => Ok((d.fresh_list(i)?, d.bounds(i)?)),
+        }
+    }
 }
 
 /// What happens to private document copies once a background job finishes.
@@ -304,6 +328,14 @@ impl Doc {
             self.lists.lock().put((index, extras), list.clone());
         }
         Ok(list)
+    }
+
+    /// A display list of the page's contents as they are now in memory, without
+    /// touching the caches.
+    fn fresh_list(&self, index: usize) -> Result<List, String> {
+        let mut inner = self.inner.lock();
+        let page = self.page(&mut inner, index)?;
+        page.display_list(0)
     }
 
     // ------------------------------------------------------------ forms
@@ -585,6 +617,7 @@ impl Engine {
             password: Mutex::new(None),
             bg_gen: AtomicU64::new(0),
             edit_rev: AtomicU64::new(0),
+            content_edited: AtomicBool::new(false),
         });
         let locked = d.inner.lock().doc.needs_password();
         if !locked {
@@ -687,6 +720,7 @@ impl Engine {
             }
         }
         *d.path.write() = out;
+        d.content_edited.store(false, Ordering::Release);
         d.prepare()?;
         Ok(d.info())
     }
@@ -856,7 +890,7 @@ impl Engine {
         doc: DocId,
         start: usize,
         sid: u64,
-        work: impl Fn(usize, &Document) -> Result<bool, String> + Send + Sync + 'static,
+        work: impl Fn(usize, &PageSrc) -> Result<bool, String> + Send + Sync + 'static,
         scanned: impl Fn(usize, usize) + Send + Sync + 'static,
         finished: impl FnOnce(bool, bool, Option<String>) + Send + 'static,
     ) -> Result<(), String> {
@@ -889,7 +923,7 @@ impl Engine {
             self.pool.submit(sid, -10, move |ctl| {
                 // Any runner stopping, failing or being cancelled stops them all.
                 let halted = || ctl.is_cancelled() || stopped.load(Ordering::Acquire) || error.lock().is_some();
-                let _ = d.with_private(|doc| {
+                let run = |src: &PageSrc| {
                     loop {
                         let k = next.fetch_add(1, Ordering::AcqRel);
                         if k >= chunks || halted() {
@@ -901,7 +935,7 @@ impl Engine {
                             if halted() {
                                 break;
                             }
-                            match work(i, doc) {
+                            match work(i, src) {
                                 Ok(true) => {}
                                 Ok(false) => stopped.store(true, Ordering::Release),
                                 Err(e) => {
@@ -916,8 +950,15 @@ impl Engine {
                             scanned(from, to);
                         }
                     }
-                    Ok(())
-                });
+                };
+                if d.content_edited.load(Ordering::Acquire) {
+                    run(&PageSrc::Shared(&d));
+                } else {
+                    let _ = d.with_private(|doc| {
+                        run(&PageSrc::Private(doc));
+                        Ok(())
+                    });
+                }
                 if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
                     if let Some(f) = finished.lock().take() {
                         f(!ctl.is_cancelled() && error.lock().is_none());
@@ -943,12 +984,9 @@ impl Engine {
             doc,
             opts.start,
             sid,
-            move |i, doc| {
+            move |i, src| {
                 // Text is built from fresh lists so a search doesn't flood the caches.
-                let json = doc.load_page(i).and_then(|p| {
-                    let b = p.bounds()?;
-                    p.display_list(0)?.text()?.find(&b, &needle, opts.flags(), opts.snippets)
-                })?;
+                let json = src.list(i).and_then(|(list, b)| list.text()?.find(&b, &needle, opts.flags(), opts.snippets))?;
                 let found = serde_json::from_str::<Vec<FoundHit>>(&json).map_err(|e| e.to_string())?;
                 if found.is_empty() {
                     return Ok(true);
@@ -984,11 +1022,8 @@ impl Engine {
             doc,
             start,
             sid,
-            move |i, doc| {
-                let json = doc.load_page(i).and_then(|p| {
-                    let b = p.bounds()?;
-                    p.display_list(0)?.reflow(&b)
-                })?;
+            move |i, src| {
+                let json = src.list(i).and_then(|(list, b)| list.reflow(&b))?;
                 page(i, json);
                 Ok(true)
             },

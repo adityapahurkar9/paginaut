@@ -23,6 +23,7 @@ import { AnnotBar } from "./AnnotBar";
 import { Home } from "./Home";
 import { SignPane } from "./SignPane";
 import { SigBar } from "./SigPanel";
+import { OcrBar, OcrDialog } from "./OcrUI";
 import { selectedAnnot } from "../annots";
 
 export const tool = signal<"select" | "hand">("select");
@@ -48,6 +49,7 @@ export function App() {
             {tab && tab.mode.value === "pages" && selectedAnnot.value?.tab !== tab && (
               <div class="topbars">
                 <SigBar tab={tab} />
+                <OcrBar tab={tab} />
                 <FormBar tab={tab} />
               </div>
             )}
@@ -60,6 +62,7 @@ export function App() {
       <Palette />
       <AskDialog />
       <HelpDialogs />
+      <OcrDialog />
       <Toast />
       {dropping.value && <div class="drop-veil" />}
     </div>
