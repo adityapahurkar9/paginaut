@@ -13,6 +13,10 @@ pub struct fo_doc {
     _p: [u8; 0],
 }
 #[repr(C)]
+pub struct fo_stamp {
+    _p: [u8; 0],
+}
+#[repr(C)]
 pub struct fo_page {
     _p: [u8; 0],
 }
@@ -97,6 +101,12 @@ extern "C" {
     pub fn fo_convert_to_pdf(c: *mut fo_ctx, d: *mut fo_doc, path: *const c_char, order: *const c_int, count: c_int, rot: *const c_int) -> c_int;
     pub fn fo_pdf_insert_pages(c: *mut fo_ctx, d: *mut fo_doc, src: *mut fo_doc, pages: *const c_int, count: c_int, fit: *const c_float) -> c_int;
     pub fn fo_pdf_new(c: *mut fo_ctx) -> *mut fo_doc;
+    pub fn fo_stamp_begin(c: *mut fo_ctx, p: *mut fo_page) -> *mut fo_stamp;
+    pub fn fo_stamp_text(c: *mut fo_ctx, st: *mut fo_stamp, html: *const c_char, css: *const c_char, width: c_float, valign: c_int, m: *const c_float, opacity: c_float) -> c_int;
+    pub fn fo_stamp_image(c: *mut fo_ctx, st: *mut fo_stamp, data: *const u8, len: usize, w: c_float, h: c_float, m: *const c_float, opacity: c_float) -> c_int;
+    pub fn fo_stamp_end(c: *mut fo_ctx, st: *mut fo_stamp, kind: *const c_char, behind: c_int) -> c_int;
+    pub fn fo_stamp_drop(c: *mut fo_ctx, st: *mut fo_stamp);
+    pub fn fo_stamp_remove(c: *mut fo_ctx, p: *mut fo_page, kind: *const c_char) -> c_int;
     pub fn fo_page_content_box(c: *mut fo_ctx, p: *mut fo_page, out: *mut c_float) -> c_int;
     pub fn fo_pdf_page_size(c: *mut fo_ctx, p: *mut fo_page, crop: *const c_float, size: *const c_float, fit: c_int, ax: c_float, ay: c_float, remove: c_int, fill: c_int, rgb: *const c_float) -> c_int;
     pub fn fo_pdf_split_by_size(c: *mut fo_ctx, d: *mut fo_doc, order: *const c_int, count: c_int, max_bytes: f64, starts: *mut c_int) -> c_int;

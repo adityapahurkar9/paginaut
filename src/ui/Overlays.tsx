@@ -11,6 +11,8 @@ import { recognize, removeRecognized } from "../ocr";
 import { extractPages, insertBlankPage, startInsert, startMerge, startSplit } from "./PagesUI";
 import { toggleGrid } from "./PageGrid";
 import { startPageSize } from "../pagesize";
+import { startHeaders, startWatermark } from "./StampUI";
+import { removeStamps } from "../stamps";
 import { helpPanel } from "./HelpDialogs";
 import { activeTab, baseName, dialog, findOpen, openFiles, paletteOpen, recent, settings, toast, unlockTab, updateSettings, type Tab } from "../store";
 
@@ -219,6 +221,10 @@ function commands(): Item[] {
     c("Merge files into one PDF…", () => void startMerge(activeTab.value?.status.value === "ready" ? activeTab.value : null), ""),
     c("Page grid (organize pages)", withTab((t) => toggleGrid(t)), "Ctrl+Shift+G", hasDoc),
     c("Crop and resize pages (page size)…", withTab((t) => startPageSize(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Page numbers, headers and footers…", withTab((t) => startHeaders(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Watermark…", withTab((t) => startWatermark(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Remove page numbers, headers and footers", withTab((t) => void removeStamps(t, "Header")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Remove watermark", withTab((t) => void removeStamps(t, "Watermark")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Split into files…", withTab((t) => startSplit(t)), "", hasDoc),
     c("Save selected pages as a new PDF (extract)…", withTab((t) => void extractPages(t)), "", hasDoc),
     c("Insert blank page", withTab((t) => void insertBlankPage(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),

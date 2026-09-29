@@ -25,6 +25,7 @@ import { recognize, removeRecognized } from "../ocr";
 import { extractPages, insertBlankPage, startInsert, startMerge, startSplit } from "./PagesUI";
 import { toggleGrid } from "./PageGrid";
 import { startPageSize } from "../pagesize";
+import { startHeaders, startWatermark } from "./StampUI";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -495,7 +496,10 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { sep: true },
         { label: "Crop and resize pages…", disabled: !tab?.info.value?.isPdf, run: () => tab && startPageSize(tab) },
         { sep: true },
-        soon("Page numbers", 6.2), soon("Watermark", 6.2),
+        { label: "Page numbers, headers and footers…", disabled: !tab?.info.value?.isPdf, run: () => tab && startHeaders(tab) },
+        { label: "Watermark…", disabled: !tab?.info.value?.isPdf, run: () => tab && startWatermark(tab) },
+        { sep: true },
+        
         soon("Protect / unlock", 6.2), soon("Compress", 6.2), soon("Repair", 6.2), soon("Extract pictures and tables", 6.2),
         soon("Edit PDF", 6.3), soon("Redact", 6.5), soon("Compare", 7.5),
       ], "left", 280)} />

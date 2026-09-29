@@ -206,6 +206,14 @@ pub struct PageSizeOp {
     pub size: Option<[f32; 2]>,
 }
 
+/// A stamp for one page: its pieces (see mupdf::StampPart).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StampPage {
+    pub page: usize,
+    pub parts: Vec<mupdf::StampPart>,
+}
+
 /// One file to write: these pages (document indices, in order) at `path`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -504,6 +512,82 @@ impl Doc {
         self.content_edited.store(true, Ordering::Release);
         self.edited();
         ops.iter().map(|op| self.bounds(op.page).map(|b| [b[2] - b[0], b[3] - b[1]])).collect()
+    }
+
+    // ------------------------------------------------------------ stamps
+
+    /// Stamps pages (page numbers, headers and footers, watermarks) as one undo
+    /// step. `replace`: this kind of stamp added earlier is taken off those pages first.
+    pub fn stamp_pages(&self, pages: &[StampPage], kind: &str, behind: bool, replace: bool) -> Result<usize, String> {
+        // Pictures are read once, whatever the number of pages.
+        let mut images = HashMap::new();
+        for part in pages.iter().flat_map(|p| &p.parts) {
+            if let Some(path) = &part.image {
+                if !images.contains_key(path) {
+                    images.insert(path.clone(), std::fs::read(path).map_err(|e| format!("Couldn't read {}: {e}", file_name(path)))?);
+                }
+            }
+        }
+        let mut inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Err("Only PDFs can be stamped. Save this file as a PDF first (Save as).".into());
+        }
+        for p in pages {
+            self.check(p.page)?;
+        }
+        inner.doc.begin_op(if kind == "Watermark" { "Watermark" } else { "Headers and page numbers" });
+        let res = (|| -> Result<(), String> {
+            for p in pages {
+                let page = self.page(&mut inner, p.page)?;
+                if replace {
+                    page.remove_stamps(kind)?;
+                }
+                if !p.parts.is_empty() {
+                    page.stamp(&p.parts, &images, kind, behind)?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = res {
+            inner.doc.abandon_op();
+            return Err(e);
+        }
+        inner.doc.end_op();
+        drop(inner);
+        self.content_edited.store(true, Ordering::Release);
+        self.edited();
+        Ok(pages.len())
+    }
+
+    /// Takes stamps of one kind off every page (or the ones listed), one undo step.
+    /// Returns the pages that had some.
+    pub fn remove_stamps(&self, kind: &str, pages: Option<Vec<usize>>) -> Result<usize, String> {
+        let mut inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Ok(0);
+        }
+        let list = pages.unwrap_or_else(|| (0..self.page_count()).collect());
+        let mut count = 0;
+        inner.doc.begin_op(if kind == "Watermark" { "Remove watermark" } else { "Remove headers and page numbers" });
+        let res = (|| -> Result<(), String> {
+            for &i in &list {
+                self.check(i)?;
+                let page = self.page(&mut inner, i)?;
+                if page.remove_stamps(kind)? {
+                    count += 1;
+                }
+            }
+            Ok(())
+        })();
+        if res.is_err() || count == 0 {
+            inner.doc.abandon_op();
+            return res.map(|_| 0);
+        }
+        inner.doc.end_op();
+        drop(inner);
+        self.content_edited.store(true, Ordering::Release);
+        self.edited();
+        Ok(count)
     }
 
     // ------------------------------------------------------------ inserting pages
@@ -1071,6 +1155,13 @@ impl Engine {
         }
         let starts = inner.doc.split_by_size(&order, max_bytes)?;
         Ok(starts.iter().enumerate().map(|(i, &s)| order[s..starts.get(i + 1).copied().unwrap_or(order.len())].to_vec()).collect())
+    }
+
+    /// Size (points) of a file's first page: for a picture, its size at its own resolution.
+    pub fn first_page_size(&self, path: &str) -> Result<[f32; 2], String> {
+        let d = Document::open(path).map_err(|e| format!("Couldn't open {}: {e}", file_name(path)))?;
+        let b = d.load_page(0)?.bounds()?;
+        Ok([b[2] - b[0], b[3] - b[1]])
     }
 
     /// Page count and kind of a file, without keeping it open.

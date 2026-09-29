@@ -26,6 +26,7 @@ import { SignPane } from "./SignPane";
 import { SigBar } from "./SigPanel";
 import { OcrBar, OcrDialog } from "./OcrUI";
 import { InsertDialog, MergeDialog, SplitDialog } from "./PagesUI";
+import { HeaderDialog, WatermarkDialog } from "./StampUI";
 import { PageDragGhost } from "./Sidebar";
 import { PageGrid } from "./PageGrid";
 import { selectedAnnot } from "../annots";
@@ -71,6 +72,8 @@ export function App() {
       <InsertDialog />
       <MergeDialog />
       <SplitDialog />
+      <HeaderDialog />
+      <WatermarkDialog />
       <PageDragGhost />
       <Toast />
       {dropping.value && <div class="drop-veil" />}

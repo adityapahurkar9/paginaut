@@ -1,6 +1,7 @@
 // App state: tabs, settings, recent files. Signals drive the Preact UI;
 // the Viewer itself is imperative and lives on its tab.
 import type { PageSizeSettings } from "./pagesize";
+import type { HeaderSettings, WatermarkSettings } from "./stamps";
 import { batch, computed, effect, signal, type Signal } from "@preact/signals";
 import { api, type DocInfo, type OutlineItem } from "./api";
 import type { FitMode, LayoutMode, ViewState, Viewer } from "./render/Viewer";
@@ -37,6 +38,9 @@ export interface Settings {
   gridSize: number;
   /** The Page size tool's last choices. */
   pageSize?: Partial<PageSizeSettings>;
+  /** Page numbers / headers / footers and watermark dialogs' last choices. */
+  headers?: Partial<HeaderSettings>;
+  watermark?: Partial<WatermarkSettings>;
   /** The Sign pane on the right (signatures, Fill & Sign, certificates). */
   signPane: boolean;
   /** Save rotations automatically (PDFs only, when nothing else changed). */

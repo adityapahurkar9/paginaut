@@ -66,6 +66,20 @@ pub async fn merge_files(state: State<'_, AppState>, sources: Vec<InsertSource>,
     blocking(move || engine.merge(sources, fit, bookmarks, &target)).await
 }
 
+/// Stamps pages (page numbers, headers, watermarks) as one undo step.
+#[tauri::command]
+pub async fn stamp_pages(state: State<'_, AppState>, doc: DocId, pages: Vec<crate::engine::StampPage>, kind: String, behind: bool, replace: bool) -> Res<usize> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.stamp_pages(&pages, &kind, behind, replace)).await
+}
+
+/// Takes stamps of one kind off the pages (all, or those listed). Returns the pages that had some.
+#[tauri::command]
+pub async fn remove_stamps(state: State<'_, AppState>, doc: DocId, kind: String, pages: Option<Vec<usize>>) -> Res<usize> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.remove_stamps(&kind, pages)).await
+}
+
 /// Crops and/or resizes pages (one undo step). Returns their new sizes.
 #[tauri::command]
 pub async fn page_size(state: State<'_, AppState>, doc: DocId, ops: Vec<crate::engine::PageSizeOp>, opts: crate::engine::mupdf::PageSizeOptions) -> Res<Vec<[f32; 2]>> {
@@ -110,6 +124,13 @@ pub async fn save_parts(state: State<'_, AppState>, doc: DocId, parts: Vec<Part>
 pub async fn split_by_size(state: State<'_, AppState>, doc: DocId, order: Vec<usize>, max_bytes: f64) -> Res<Vec<Vec<usize>>> {
     let engine = state.engine.clone();
     blocking(move || engine.split_by_size(doc, order, max_bytes)).await
+}
+
+/// Size of a file's first page (a picture's own size), in points.
+#[tauri::command]
+pub async fn first_page_size(state: State<'_, AppState>, path: String) -> Res<[f32; 2]> {
+    let engine = state.engine.clone();
+    blocking(move || engine.first_page_size(&path)).await
 }
 
 /// Which of these files exist already.

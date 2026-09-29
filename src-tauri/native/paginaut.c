@@ -3011,6 +3011,339 @@ int fo_pdf_page_size(fo_ctx *c, fo_page *p, const float crop[4], const float siz
 	return 0;
 }
 
+/* ---------------------------------------------------------------- stamps (page numbers, headers, watermarks) */
+
+struct fo_stamp
+{
+	pdf_page *page;
+	float w, h;
+	fz_device *dev;
+	pdf_obj *res;
+	fz_buffer *contents;
+};
+
+static const char *stamp_subtype(const char *kind)
+{
+	return !strcmp(kind, "Watermark") ? "Watermark" : !strcmp(kind, "Background") ? "Background" : "Header";
+}
+
+fo_stamp *fo_stamp_begin(fo_ctx *c, fo_page *p)
+{
+	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
+	fo_stamp *st = NULL;
+	if (!page)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF page");
+		return NULL;
+	}
+	fz_var(st);
+	fz_try(CTX)
+	{
+		fz_rect b = fz_bound_page(CTX, (fz_page *)p);
+		st = fz_malloc_struct(CTX, fo_stamp);
+		st->page = page;
+		st->w = b.x1 - b.x0;
+		st->h = b.y1 - b.y0;
+		st->dev = pdf_page_write(CTX, page->doc, fz_make_rect(0, 0, st->w, st->h), &st->res, &st->contents);
+	}
+	fz_catch(CTX)
+	{
+		fz_free(CTX, st);
+		FAIL();
+		return NULL;
+	}
+	return (fo_stamp *)st;
+}
+
+void fo_stamp_drop(fo_ctx *c, fo_stamp *st)
+{
+	if (!st)
+		return;
+	fz_try(CTX)
+		fz_close_device(CTX, st->dev);
+	fz_catch(CTX)
+		;
+	fz_drop_device(CTX, st->dev);
+	pdf_drop_obj(CTX, st->res);
+	fz_drop_buffer(CTX, st->contents);
+	fz_free(CTX, st);
+}
+
+static fz_matrix to_matrix(const float m[6])
+{
+	return fz_make_matrix(m[0], m[1], m[2], m[3], m[4], m[5]);
+}
+
+/* Text laid out by MuPDF's HTML engine (shaping, Indic scripts, fallback fonts)
+ * in a box `width` wide. valign: the box's top (0), middle (1) or bottom (2)
+ * sits at y = 0 of the box space; m takes box space to page coordinates. */
+int fo_stamp_text(fo_ctx *c, fo_stamp *st, const char *html, const char *css, float width, int valign, const float m[6], float opacity)
+{
+	fz_buffer *buf = NULL;
+	fz_story *story = NULL;
+	fz_var(buf);
+	fz_var(story);
+	fz_try(CTX)
+	{
+		fz_rect filled;
+		float hgt;
+		fz_matrix ctm;
+		buf = fz_new_buffer_from_copied_data(CTX, (const unsigned char *)html, strlen(html));
+		story = fz_new_story(CTX, buf, css, 12, NULL);
+		fz_place_story(CTX, story, fz_make_rect(0, 0, width, 100000), &filled);
+		hgt = filled.y1 - filled.y0;
+		ctm = fz_concat(fz_translate(0, -hgt * valign / 2.0f), to_matrix(m));
+		if (opacity < 0.999f)
+			fz_begin_group(CTX, st->dev, fz_make_rect(0, 0, st->w, st->h), NULL, 0, 0, FZ_BLEND_NORMAL, opacity);
+		fz_draw_story(CTX, story, st->dev, ctm);
+		if (opacity < 0.999f)
+			fz_end_group(CTX, st->dev);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_story(CTX, story);
+		fz_drop_buffer(CTX, buf);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* A picture filling the w×h box at the box origin; m takes box space to page coordinates. */
+int fo_stamp_image(fo_ctx *c, fo_stamp *st, const unsigned char *data, size_t len, float w, float h, const float m[6], float opacity)
+{
+	fz_buffer *buf = NULL;
+	fz_image *img = NULL;
+	fz_var(buf);
+	fz_var(img);
+	fz_try(CTX)
+	{
+		buf = fz_new_buffer_from_copied_data(CTX, data, len);
+		img = fz_new_image_from_buffer(CTX, buf);
+		fz_fill_image(CTX, st->dev, img, fz_concat(fz_scale(w, h), to_matrix(m)), opacity, fz_default_color_params);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_image(CTX, img);
+		fz_drop_buffer(CTX, buf);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+static pdf_obj *page_own_resources(fz_context *ctx, pdf_document *doc, pdf_obj *pobj)
+{
+	pdf_obj *res = pdf_dict_get(ctx, pobj, PDF_NAME(Resources));
+	if (!res)
+	{
+		pdf_obj *inherited = pdf_dict_get_inheritable(ctx, pobj, PDF_NAME(Resources));
+		res = inherited ? pdf_copy_dict(ctx, inherited) : pdf_new_dict(ctx, doc, 1);
+		pdf_dict_put_drop(ctx, pobj, PDF_NAME(Resources), res);
+	}
+	return res;
+}
+
+/* The document's "Watermark" layer (optional content), made on first use. */
+static pdf_obj *watermark_layer(fz_context *ctx, pdf_document *doc)
+{
+	pdf_obj *root = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root));
+	pdf_obj *ocp = pdf_dict_get(ctx, root, PDF_NAME(OCProperties));
+	pdf_obj *ocgs, *d, *order, *ocg, *usage;
+	if (!ocp)
+		ocp = pdf_dict_put_dict(ctx, root, PDF_NAME(OCProperties), 2);
+	ocgs = pdf_dict_get(ctx, ocp, PDF_NAME(OCGs));
+	if (!ocgs)
+		ocgs = pdf_dict_put_array(ctx, ocp, PDF_NAME(OCGs), 1);
+	for (int i = 0; i < pdf_array_len(ctx, ocgs); i++)
+		if (pdf_dict_gets(ctx, pdf_array_get(ctx, ocgs, i), "PaginautLayer"))
+			return pdf_array_get(ctx, ocgs, i);
+	ocg = pdf_add_new_dict(ctx, doc, 4);
+	pdf_dict_put(ctx, ocg, PDF_NAME(Type), PDF_NAME(OCG));
+	pdf_dict_put_text_string(ctx, ocg, PDF_NAME(Name), "Watermark");
+	pdf_dict_puts_drop(ctx, ocg, "PaginautLayer", PDF_TRUE);
+	usage = pdf_dict_put_dict(ctx, ocg, PDF_NAME(Usage), 1);
+	{
+		pdf_obj *el = pdf_new_dict(ctx, doc, 1);
+		pdf_dict_put_name(ctx, el, PDF_NAME(Subtype), "WM");
+		pdf_dict_puts_drop(ctx, usage, "PageElement", el);
+	}
+	pdf_array_push(ctx, ocgs, ocg);
+	d = pdf_dict_get(ctx, ocp, PDF_NAME(D));
+	if (!d)
+		d = pdf_dict_put_dict(ctx, ocp, PDF_NAME(D), 2);
+	order = pdf_dict_get(ctx, d, PDF_NAME(Order));
+	if (!order)
+		order = pdf_dict_put_array(ctx, d, PDF_NAME(Order), 1);
+	pdf_array_push(ctx, order, ocg);
+	pdf_drop_obj(ctx, ocg);
+	return ocg;
+}
+
+static pdf_obj *add_stamp_stream(fz_context *ctx, pdf_document *doc, const char *kind, fz_buffer *b)
+{
+	pdf_obj *d = pdf_new_dict(ctx, doc, 2), *ref = NULL;
+	fz_try(ctx)
+	{
+		pdf_dict_puts_drop(ctx, d, "PaginautStamp", pdf_new_name(ctx, kind));
+		ref = pdf_add_stream(ctx, doc, b, d, 0);
+	}
+	fz_always(ctx)
+		pdf_drop_obj(ctx, d);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return ref;
+}
+
+/* Puts what was drawn on the page, behind or in front of its content, marked
+ * as `kind` ("Header", "Watermark", "Background") so it can be removed again. */
+int fo_stamp_end(fo_ctx *c, fo_stamp *st, const char *kind, int behind)
+{
+	pdf_page *page = st->page;
+	pdf_document *doc = page->doc;
+	pdf_obj *xobj = NULL, *pre = NULL, *post = NULL;
+	fz_buffer *b = NULL;
+	fz_var(xobj);
+	fz_var(pre);
+	fz_var(post);
+	fz_var(b);
+	fz_try(CTX)
+	{
+		pdf_obj *pobj = page->obj;
+		pdf_obj *contents = pdf_dict_get(CTX, pobj, PDF_NAME(Contents));
+		pdf_obj *res, *xobjs, *arr;
+		fz_matrix ctm, m;
+		char name[64];
+		int n = 1;
+		fz_close_device(CTX, st->dev);
+		xobj = pdf_new_xobject(CTX, doc, fz_make_rect(0, 0, st->w, st->h), fz_identity, st->res, st->contents);
+		res = page_own_resources(CTX, doc, pobj);
+		xobjs = pdf_dict_get(CTX, res, PDF_NAME(XObject));
+		if (!xobjs)
+			xobjs = pdf_dict_put_dict(CTX, res, PDF_NAME(XObject), 1);
+		do
+			fz_snprintf(name, sizeof name, "PgnStamp%s%d", kind, n++);
+		while (pdf_dict_gets(CTX, xobjs, name));
+		pdf_dict_puts(CTX, xobjs, name, xobj);
+
+		/* The drawing is in page space as shown, y down; back to the PDF's own space. */
+		pdf_page_transform(CTX, page, NULL, &ctm);
+		m = fz_concat(fz_make_matrix(1, 0, 0, -1, 0, st->h), fz_invert_matrix(ctm));
+		b = fz_new_buffer(CTX, 256);
+		if (!strcmp(kind, "Watermark"))
+		{
+			pdf_obj *props = pdf_dict_get(CTX, res, PDF_NAME(Properties));
+			if (!props)
+				props = pdf_dict_put_dict(CTX, res, PDF_NAME(Properties), 1);
+			pdf_dict_puts(CTX, props, "PgnWM", watermark_layer(CTX, doc));
+			fz_append_string(CTX, b, "/OC /PgnWM BDC ");
+		}
+		fz_append_printf(CTX, b, "/Artifact <</Type /Pagination /Subtype /%s>> BDC q %g %g %g %g %g %g cm /%s Do Q EMC",
+			stamp_subtype(kind), m.a, m.b, m.c, m.d, m.e, m.f, name);
+		if (!strcmp(kind, "Watermark"))
+			fz_append_string(CTX, b, " EMC");
+		fz_append_byte(CTX, b, '\n');
+
+		if (pdf_is_array(CTX, contents))
+			arr = contents;
+		else
+		{
+			arr = pdf_new_array(CTX, doc, 3);
+			if (contents)
+				pdf_array_push(CTX, arr, contents);
+			pdf_dict_put_drop(CTX, pobj, PDF_NAME(Contents), arr);
+		}
+		if (behind)
+		{
+			post = add_stamp_stream(CTX, doc, kind, b);
+			pdf_array_insert(CTX, arr, post, 0);
+		}
+		else
+		{
+			/* The page's own content runs inside q … Q, so the state it leaves can't move the stamp. */
+			fz_buffer *q = fz_new_buffer_from_copied_data(CTX, (const unsigned char *)"q\n", 2);
+			fz_try(CTX)
+				pre = add_stamp_stream(CTX, doc, kind, q);
+			fz_always(CTX)
+				fz_drop_buffer(CTX, q);
+			fz_catch(CTX)
+				fz_rethrow(CTX);
+			fz_drop_buffer(CTX, b);
+			b = NULL;
+			b = fz_new_buffer(CTX, 256);
+			fz_append_string(CTX, b, "Q\n");
+			if (!strcmp(kind, "Watermark"))
+				fz_append_string(CTX, b, "/OC /PgnWM BDC ");
+			fz_append_printf(CTX, b, "/Artifact <</Type /Pagination /Subtype /%s>> BDC q %g %g %g %g %g %g cm /%s Do Q EMC",
+				stamp_subtype(kind), m.a, m.b, m.c, m.d, m.e, m.f, name);
+			if (!strcmp(kind, "Watermark"))
+				fz_append_string(CTX, b, " EMC");
+			fz_append_byte(CTX, b, '\n');
+			post = add_stamp_stream(CTX, doc, kind, b);
+			pdf_array_insert(CTX, arr, pre, 0);
+			pdf_array_push(CTX, arr, post);
+		}
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, xobj);
+		pdf_drop_obj(CTX, pre);
+		pdf_drop_obj(CTX, post);
+		fz_drop_buffer(CTX, b);
+		fz_drop_device(CTX, st->dev);
+		st->dev = NULL;
+		pdf_drop_obj(CTX, st->res);
+		fz_drop_buffer(CTX, st->contents);
+		fz_free(CTX, st);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* Removes the stamps of one kind from a page. Returns how many were there. */
+int fo_stamp_remove(fo_ctx *c, fo_page *p, const char *kind)
+{
+	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
+	int count = 0;
+	if (!page)
+		return 0;
+	fz_try(CTX)
+	{
+		pdf_obj *contents = pdf_dict_get(CTX, page->obj, PDF_NAME(Contents));
+		pdf_obj *xobjs = pdf_dict_getp(CTX, page->obj, "Resources/XObject");
+		char prefix[64];
+		fz_snprintf(prefix, sizeof prefix, "PgnStamp%s", kind);
+		for (int i = pdf_array_len(CTX, contents) - 1; i >= 0; i--)
+		{
+			pdf_obj *k = pdf_dict_gets(CTX, pdf_array_get(CTX, contents, i), "PaginautStamp");
+			if (k && !strcmp(pdf_to_name(CTX, k), kind))
+			{
+				pdf_array_delete(CTX, contents, i);
+				count++;
+			}
+		}
+		for (int i = pdf_dict_len(CTX, xobjs) - 1; count && i >= 0; i--)
+			if (!strncmp(pdf_to_name(CTX, pdf_dict_get_key(CTX, xobjs, i)), prefix, strlen(prefix)))
+				pdf_dict_del(CTX, xobjs, pdf_dict_get_key(CTX, xobjs, i));
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return count;
+}
+
 /* ---------------------------------------------------------------- text */
 
 fo_text *fo_text_new(fo_ctx *c, fo_list *l)

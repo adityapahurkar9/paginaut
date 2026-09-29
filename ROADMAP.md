@@ -274,11 +274,19 @@ Strike-through in both places (highlight stays in the Comment tab only):
 - [x] Night mode on scans and pages that are one big picture (screenshots, web pages printed as images): the photos in
       them are found in the rendered page (cells of mostly mid-tones or colour, joined into regions, paper edges
       trimmed) and keep their real colours, while text stays dark. Text-only scans get none
-Stamped on pages (marked streams like /PaginautOCR, so they can be removed or redone):
-- [ ] Page numbers, headers and footers: position, font, "Page {n} of {N}", date, file name, page range, skip first page
-- [ ] Bates numbering
-- [ ] Watermark: text or picture, opacity, angle, behind or in front, which pages; in its own layer (Adobe shows it
-      as a watermark)
+Stamped on pages (Tools › Organize, command palette). Each is one piece of content drawn from a form object,
+marked as a pagination artifact (header/footer or watermark) in a flagged content stream, so Remove takes it off
+again and adding again replaces it. Text is laid out by MuPDF's HTML engine with its built-in fonts, so Marathi and
+Hindi are shaped properly. Placed on the page as shown (turned pages get them at the top as you see it):
+- [x] Page numbers, headers and footers: six boxes (header/footer left, centre, right) with fill-ins {page} {pages}
+      {label} {date} {file} {bates}; one-click styles (1, Page 1 of N, 1 / N, Bates); font, size, colour, bold;
+      margins; page range and starting number (a cover left out with "2-"). 1000 pages in about 0.6 s
+- [x] Bates numbering: prefix, digits, first number, suffix
+- [x] Watermark: text (font, size, colour, bold) or a picture (width as % of the page), angle 0/45/-45/90, top, middle
+      or bottom, in front or behind, opacity, which pages; in its own "Watermark" layer (optional content), marked
+      as a watermark for Acrobat (src-tauri/examples/stamp_test.rs)
+- [ ] Copy and search of stamped Devanagari text: conjunct letters come out as unknown characters (the shaped
+      glyphs have no text mapping); they look right
 
 Document details:
 - [ ] Bookmarks editor: add, rename, drag to reorder, build from headings

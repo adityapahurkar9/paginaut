@@ -24,6 +24,23 @@ export interface InsertSource {
   password?: string;
 }
 
+/** One piece of a stamp: text laid out in a box, or a picture filling it; matrix places the box on the page. */
+export interface StampPart {
+  text?: string;
+  image?: string;
+  font?: "sans-serif" | "serif" | "monospace";
+  size?: number;
+  color?: [number, number, number];
+  bold?: boolean;
+  align?: "left" | "center" | "right";
+  width: number;
+  height?: number;
+  /** Text: the box's top (0), middle (1) or bottom (2) is at y = 0. */
+  valign?: 0 | 1 | 2;
+  matrix: [number, number, number, number, number, number];
+  opacity?: number;
+}
+
 /** A file's page count and kind; `locked`: it needs a password (none or a wrong one given). */
 export interface Peek {
   pages: number;
@@ -178,6 +195,12 @@ export const api = {
   ) => invoke<[number, number][]>("page_size", { doc, ops, opts }),
   contentBox: (doc: number, page: number) => invoke<[number, number, number, number] | null>("content_box", { doc, page }),
   pageSizesOf: (doc: number, pages: number[]) => invoke<[number, number][]>("page_sizes_of", { doc, pages }),
+  /** Stamps pages (page numbers, headers, watermarks) as one undo step. */
+  stampPages: (doc: number, pages: { page: number; parts: StampPart[] }[], kind: string, behind: boolean, replace: boolean) =>
+    invoke<number>("stamp_pages", { doc, pages, kind, behind, replace }),
+  /** Takes stamps of one kind off the pages; returns how many pages had some. */
+  removeStamps: (doc: number, kind: string, pages: number[] | null) => invoke<number>("remove_stamps", { doc, kind, pages }),
+  firstPageSize: (path: string) => invoke<[number, number]>("first_page_size", { path }),
   existingFiles: (paths: string[]) => invoke<string[]>("existing_files", { paths }),
   peekFile: (path: string, password?: string) => invoke<Peek>("peek_file", { path, password: password ?? null }),
   pageLabel: (doc: number, page: number) => invoke<string>("page_label", { doc, page }),

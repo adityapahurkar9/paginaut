@@ -169,6 +169,78 @@ impl Drop for Cookie {
 
 // ---------------------------------------------------------------- Document
 
+/// One piece of a stamp: text (plain, laid out with shaping) or a picture, in
+/// a box placed on the page by `matrix` (box space → page coordinates).
+#[derive(serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StampPart {
+    #[serde(default)]
+    pub text: Option<String>,
+    /// A picture file (PNG, JPEG…).
+    #[serde(default)]
+    pub image: Option<String>,
+    /// CSS font family: "sans-serif", "serif" or "monospace".
+    #[serde(default)]
+    pub font: Option<String>,
+    #[serde(default)]
+    pub size: f32,
+    #[serde(default)]
+    pub color: [f32; 3],
+    #[serde(default)]
+    pub bold: bool,
+    /// "left", "center" or "right" within the box.
+    #[serde(default)]
+    pub align: Option<String>,
+    pub width: f32,
+    #[serde(default)]
+    pub height: f32,
+    /// Text: the box's top (0), middle (1) or bottom (2) is at y = 0.
+    #[serde(default)]
+    pub valign: u8,
+    pub matrix: [f32; 6],
+    #[serde(default = "full")]
+    pub opacity: f32,
+}
+
+fn full() -> f32 {
+    1.0
+}
+
+impl StampPart {
+    /// The text as HTML and CSS for MuPDF's layout engine.
+    fn html(&self) -> (String, String) {
+        let text = self.text.as_deref().unwrap_or("");
+        let mut esc = String::with_capacity(text.len() + 16);
+        for ch in text.chars() {
+            match ch {
+                '&' => esc.push_str("&amp;"),
+                '<' => esc.push_str("&lt;"),
+                '>' => esc.push_str("&gt;"),
+                '\n' => esc.push_str("<br/>"),
+                _ => esc.push(ch),
+            }
+        }
+        let align = match self.align.as_deref() {
+            Some("center") => "center",
+            Some("right") => "right",
+            _ => "left",
+        };
+        let font = match self.font.as_deref() {
+            Some("serif") => "serif",
+            Some("monospace") => "monospace",
+            _ => "sans-serif",
+        };
+        let [r, g, b] = self.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let html = format!("<p>{esc}</p>");
+        let css = format!(
+            "p {{ margin: 0; text-align: {align}; line-height: 1.2; font-family: {font}; font-size: {}pt; color: rgb({r},{g},{b}); font-weight: {}; }}",
+            self.size.max(1.0),
+            if self.bold { "bold" } else { "normal" }
+        );
+        (html, css)
+    }
+}
+
 /// How pages are resized (see fo_pdf_page_size).
 #[derive(serde::Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
@@ -723,6 +795,44 @@ impl Page {
                 fo_pdf_page_size(c, self.0, crop.as_ptr(), size.as_ptr(), o.fit as c_int, o.anchor[0], o.anchor[1], o.remove as c_int, o.fill as c_int, o.color.as_ptr())
             };
             if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
+    /// Draws `parts` on the page as one stamp of `kind` ("Header", "Watermark"),
+    /// behind or in front of its content, inside the current operation.
+    /// `images` holds the bytes of picture files by path.
+    pub fn stamp(&self, parts: &[StampPart], images: &std::collections::HashMap<String, Vec<u8>>, kind: &str, behind: bool) -> Result<()> {
+        let kind = CString::new(kind).map_err(|e| e.to_string())?;
+        with_kind(self.1, |c| {
+            let st = unsafe { fo_stamp_begin(c, self.0) };
+            if st.is_null() {
+                return Err(last_error(c));
+            }
+            for part in parts {
+                let rc = if let Some(path) = &part.image {
+                    let data = images.get(path).ok_or("picture missing")?;
+                    unsafe { fo_stamp_image(c, st, data.as_ptr(), data.len(), part.width, part.height, part.matrix.as_ptr(), part.opacity) }
+                } else {
+                    let (html, css) = part.html();
+                    let (html, css) = (CString::new(html).unwrap_or_default(), CString::new(css).unwrap_or_default());
+                    unsafe { fo_stamp_text(c, st, html.as_ptr(), css.as_ptr(), part.width, part.valign as c_int, part.matrix.as_ptr(), part.opacity) }
+                };
+                if rc != 0 {
+                    let e = last_error(c);
+                    unsafe { fo_stamp_drop(c, st) };
+                    return Err(e);
+                }
+            }
+            if unsafe { fo_stamp_end(c, st, kind.as_ptr(), behind as c_int) } == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
+    /// Removes the page's stamps of one kind; returns whether there were any.
+    pub fn remove_stamps(&self, kind: &str) -> Result<bool> {
+        let kind = CString::new(kind).map_err(|e| e.to_string())?;
+        with_kind(self.1, |c| match unsafe { fo_stamp_remove(c, self.0, kind.as_ptr()) } {
+            n if n < 0 => Err(last_error(c)),
+            n => Ok(n > 0),
         })
     }
 

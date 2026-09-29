@@ -122,6 +122,17 @@ int fo_page_content_box(fo_ctx *c, fo_page *p, float out[4]);
  * new space: 0 nothing, 1 the colour rgb (0..1), 2 the edges stretched out.
  * Comments, links and form fields move with the content. */
 int fo_pdf_page_size(fo_ctx *c, fo_page *p, const float crop[4], const float size[2], int fit, float ax, float ay, int remove, int fill, const float rgb[3]);
+/* Stamps: page numbers, headers and footers, watermarks. Drawn in page space
+ * (as shown, y down) between fo_stamp_begin and fo_stamp_end, which puts them
+ * on the page (behind or in front) as one marked piece that fo_stamp_remove
+ * takes out again. fo_stamp_end frees st; fo_stamp_drop frees it otherwise. */
+typedef struct fo_stamp fo_stamp;
+fo_stamp *fo_stamp_begin(fo_ctx *c, fo_page *p);
+int fo_stamp_text(fo_ctx *c, fo_stamp *st, const char *html, const char *css, float width, int valign, const float m[6], float opacity);
+int fo_stamp_image(fo_ctx *c, fo_stamp *st, const unsigned char *data, size_t len, float w, float h, const float m[6], float opacity);
+int fo_stamp_end(fo_ctx *c, fo_stamp *st, const char *kind, int behind);
+void fo_stamp_drop(fo_ctx *c, fo_stamp *st);
+int fo_stamp_remove(fo_ctx *c, fo_page *p, const char *kind);
 /* A new, empty PDF in memory. */
 fo_doc *fo_pdf_new(fo_ctx *c);
 /* Adds a bookmark titled `title` at the end of d's outline, pointing at page
