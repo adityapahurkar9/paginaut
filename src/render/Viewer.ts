@@ -242,6 +242,8 @@ export class Viewer {
   private night = false;
   /** Image rectangles per original page (for night mode), or "loading". */
   private imageRects = new Map<number, [number, number, number, number][] | "loading">();
+  /** Photos found inside scanned pages (fractions of the page as shown), by "page:rotation". */
+  private scanPhotos = new Map<string, [number, number, number, number][]>();
   private animating = false;
   private layers: PageLayer[] = [];
   private fieldsDrawn = false;
@@ -410,6 +412,7 @@ export class Viewer {
     this.sharpScale = 0;
     this.links.clear();
     this.imageRects.clear();
+    this.scanPhotos.clear();
     if (this.selection) this.clearSelection();
     st.page = Math.min(st.page, Math.max(0, pages.length - 1));
     this.layout();
@@ -1305,15 +1308,36 @@ export class Viewer {
     if (rects === "loading" || !rects.length) return;
     const [W, H] = origSize(spec);
     const area = rects.reduce((a, r) => a + Math.max(0, r[2] - r[0]) * Math.max(0, r[3] - r[1]), 0);
-    if (area > 0.6 * W * H) return; // a scan: keep it inverted
+    // Bitmap boxes [x, y, w, h] to show in their real colours.
+    const boxes: [number, number, number, number][] = [];
+    if (area > 0.6 * W * H) {
+      // A scan (or a page that is one big picture, like a screenshot): its text
+      // stays inverted, and the photos in it are found in the bitmap itself.
+      const key = `${spec.src}:${spec.rot}`;
+      let found = this.scanPhotos.get(key);
+      if (!found) {
+        // Small text looks like grey mush at low resolution: wait for a sharp render.
+        if (bmp.scale < 0.9) return;
+        found = findPhotos(bmp.image);
+        this.scanPhotos.set(key, found);
+      }
+      for (const [f0, g0, f1, g1] of found) {
+        const sx = Math.floor(f0 * bmp.width), sy = Math.floor(g0 * bmp.height);
+        boxes.push([sx, sy, Math.ceil(f1 * bmp.width) - sx, Math.ceil(g1 * bmp.height) - sy]);
+      }
+    } else {
+      const k = bmp.width / spec.w; // bitmap px per displayed point
+      for (const r of rects) {
+        const q = [r[0], r[1], r[2], r[1], r[0], r[3], r[2], r[3]];
+        const [x0, y0, x1, y1] = quadBox(spec, q);
+        const sx = Math.max(0, Math.floor(x0 * k)), sy = Math.max(0, Math.floor(y0 * k));
+        boxes.push([sx, sy, Math.min(bmp.width, Math.ceil(x1 * k)) - sx, Math.min(bmp.height, Math.ceil(y1 * k)) - sy]);
+      }
+    }
+    if (!boxes.length) return;
     const layer = document.createElement("div");
     layer.className = "pg-photos";
-    const k = bmp.width / spec.w; // bitmap px per displayed point
-    for (const r of rects) {
-      const q = [r[0], r[1], r[2], r[1], r[0], r[3], r[2], r[3]];
-      const [x0, y0, x1, y1] = quadBox(spec, q);
-      const sx = Math.max(0, Math.floor(x0 * k)), sy = Math.max(0, Math.floor(y0 * k));
-      const sw = Math.min(bmp.width, Math.ceil(x1 * k)) - sx, sh = Math.min(bmp.height, Math.ceil(y1 * k)) - sy;
+    for (const [sx, sy, sw, sh] of boxes) {
       if (sw < 2 || sh < 2) continue;
       const c = document.createElement("canvas");
       c.width = sw;
@@ -1352,6 +1376,98 @@ export class Viewer {
     if (this.selection?.view === pv.index) for (const q of this.selQuads) box(q, "mark-sel");
     pv.marks.replaceChildren(...boxes);
   }
+}
+
+/**
+ * Photos inside a scanned page, as boxes [x0, y0, x1, y1] in fractions of the
+ * bitmap. The page is cut into small cells: a photo's cells are mostly
+ * mid-tones or colour, while text on paper is mostly paper and ink (black and
+ * white with a few grey edge pixels). Neighbouring photo cells are joined into
+ * regions; small or ragged ones (a coloured word, a logo) are dropped.
+ */
+export function findPhotos(img: ImageData): [number, number, number, number][] {
+  const { width: w, height: h, data } = img;
+  const cell = Math.max(6, Math.round(w / 64));
+  const cols = Math.ceil(w / cell), rows = Math.ceil(h / cell);
+  const step = Math.max(1, Math.floor(cell / 6));
+  const photo = new Uint8Array(cols * rows);
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      let n = 0, mid = 0, sat = 0;
+      const y1 = Math.min(h, (cy + 1) * cell), x1 = Math.min(w, (cx + 1) * cell);
+      for (let y = cy * cell; y < y1; y += step) {
+        for (let x = cx * cell; x < x1; x += step) {
+          const i = (y * w + x) * 4;
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const lum = (r * 299 + g * 587 + b * 114) / 1000;
+          n++;
+          if (lum > 45 && lum < 210) mid++;
+          sat += Math.max(r, g, b) - Math.min(r, g, b);
+        }
+      }
+      const midF = mid / n, satF = sat / n / 255;
+      photo[cy * cols + cx] = midF > 0.55 || (satF > 0.2 && midF > 0.3) ? 1 : 0;
+    }
+  }
+  // Close small gaps (very dark or bright patches in a photo) before joining cells.
+  const grown = new Uint8Array(photo);
+  for (let cy = 0; cy < rows; cy++)
+    for (let cx = 0; cx < cols; cx++)
+      if (!photo[cy * cols + cx]) {
+        const l = cx > 0 && photo[cy * cols + cx - 1], r = cx < cols - 1 && photo[cy * cols + cx + 1];
+        const t = cy > 0 && photo[(cy - 1) * cols + cx], b = cy < rows - 1 && photo[(cy + 1) * cols + cx];
+        if ((l && r) || (t && b)) grown[cy * cols + cx] = 1;
+      }
+  const seen = new Uint8Array(cols * rows);
+  const out: [number, number, number, number][] = [];
+  const stack: number[] = [];
+  for (let start = 0; start < cols * rows; start++) {
+    if (!grown[start] || seen[start]) continue;
+    let x0 = cols, y0 = rows, x1 = -1, y1 = -1, count = 0;
+    seen[start] = 1;
+    stack.push(start);
+    while (stack.length) {
+      const c = stack.pop()!;
+      const cx = c % cols, cy = (c - cx) / cols;
+      count++;
+      x0 = Math.min(x0, cx); x1 = Math.max(x1, cx); y0 = Math.min(y0, cy); y1 = Math.max(y1, cy);
+      for (const d of [c - 1, c + 1, c - cols, c + cols]) {
+        if (d < 0 || d >= cols * rows || seen[d] || !grown[d]) continue;
+        if ((d === c - 1 && cx === 0) || (d === c + 1 && cx === cols - 1)) continue;
+        seen[d] = 1;
+        stack.push(d);
+      }
+    }
+    const boxCells = (x1 - x0 + 1) * (y1 - y0 + 1);
+    if (count < 12 || count < boxCells * 0.5) continue;
+    const box = trimPaper(img, x0 * cell, y0 * cell, Math.min(w, (x1 + 1) * cell), Math.min(h, (y1 + 1) * cell), cell);
+    out.push([box[0] / w, box[1] / h, box[2] / w, box[3] / h]);
+  }
+  return out;
+}
+
+/** Moves a box's edges inwards (at most `limit` px) past rows and columns that are nearly all paper. */
+function trimPaper(img: ImageData, x0: number, y0: number, x1: number, y1: number, limit: number): [number, number, number, number] {
+  const { width: w, data } = img;
+  const paper = (x: number, y: number) => {
+    const i = (y * w + x) * 4;
+    return data[i] > 225 && data[i + 1] > 225 && data[i + 2] > 225;
+  };
+  const rowPaper = (y: number) => {
+    let n = 0;
+    for (let x = x0; x < x1; x++) n += paper(x, y) ? 1 : 0;
+    return n > (x1 - x0) * 0.9;
+  };
+  const colPaper = (x: number) => {
+    let n = 0;
+    for (let y = y0; y < y1; y++) n += paper(x, y) ? 1 : 0;
+    return n > (y1 - y0) * 0.9;
+  };
+  for (let k = 0; k < limit && y1 - y0 > 2 && rowPaper(y0); k++) y0++;
+  for (let k = 0; k < limit && y1 - y0 > 2 && rowPaper(y1 - 1); k++) y1--;
+  for (let k = 0; k < limit && x1 - x0 > 2 && colPaper(x0); k++) x0++;
+  for (let k = 0; k < limit && x1 - x0 > 2 && colPaper(x1 - 1); k++) x1--;
+  return [x0, y0, x1, y1];
 }
 
 function clampZoom(z: number) {

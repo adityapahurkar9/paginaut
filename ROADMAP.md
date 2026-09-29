@@ -271,6 +271,9 @@ Strike-through in both places (highlight stays in the Comment tab only):
 - [x] Placeholder: Tools › Organize › "Edit PDF" shown as coming in 6.3
 
 ### Phase 6.2 (0.6.20): Stamp, protect, extract
+- [x] Night mode on scans and pages that are one big picture (screenshots, web pages printed as images): the photos in
+      them are found in the rendered page (cells of mostly mid-tones or colour, joined into regions, paper edges
+      trimmed) and keep their real colours, while text stays dark. Text-only scans get none
 Stamped on pages (marked streams like /PaginautOCR, so they can be removed or redone):
 - [ ] Page numbers, headers and footers: position, font, "Page {n} of {N}", date, file name, page range, skip first page
 - [ ] Bates numbering
