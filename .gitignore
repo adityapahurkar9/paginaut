@@ -1,0 +1,12 @@
+node_modules/
+out/
+dist/
+testfiles/
+*.log
+
+# Rust build output and Tauri's generated schemas
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# MuPDF 1.28.5 source and its built libraries (third-party; see native/build-mupdf.ps1)
+native/mupdf/

@@ -1,0 +1,732 @@
+//! Safe wrappers over the C layer.
+//!
+//! Two kinds of MuPDF context exist on every thread, both created lazily:
+//! - **Shared**: a clone of the global base context. All clones share one
+//!   resource store (decoded images, fonts) and one set of locks, so objects
+//!   can move between threads. Used for interactive viewing.
+//! - **Private**: a fully independent context with its own store, font engine
+//!   and glyph cache and no locks. Background jobs use it so they scale across
+//!   cores instead of queueing on MuPDF's global locks. Objects made with it
+//!   must be used and dropped on the thread that made them.
+//!
+//! Every handle remembers its kind and always uses the matching context.
+
+use super::ffi::*;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int};
+
+pub type Result<T> = std::result::Result<T, String>;
+
+struct Ctx(*mut fo_ctx);
+
+impl Drop for Ctx {
+    fn drop(&mut self) {
+        unsafe { fo_ctx_drop(self.0) }
+    }
+}
+
+/// Store size for each thread's private context. Background jobs read text and
+/// don't need decoded images cached, so this stays small.
+const PRIVATE_STORE: usize = 8 << 20;
+
+thread_local! {
+    static CTX: Ctx = {
+        let p = unsafe { fo_ctx_new() };
+        assert!(!p.is_null(), "MuPDF is not initialised");
+        Ctx(p)
+    };
+    static PRIVATE_CTX: Ctx = {
+        let p = unsafe { fo_ctx_new_private(PRIVATE_STORE) };
+        assert!(!p.is_null(), "could not create a private MuPDF context");
+        Ctx(p)
+    };
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Shared,
+    Private,
+}
+
+fn with_kind<R>(kind: Kind, f: impl FnOnce(*mut fo_ctx) -> R) -> R {
+    match kind {
+        Kind::Shared => CTX.with(|c| f(c.0)),
+        Kind::Private => PRIVATE_CTX.with(|c| f(c.0)),
+    }
+}
+
+fn with_ctx<R>(f: impl FnOnce(*mut fo_ctx) -> R) -> R {
+    with_kind(Kind::Shared, f)
+}
+
+/// For destructors: if the thread's context is already gone (thread exit),
+/// skip the free; the context's own teardown reclaims its memory.
+fn drop_with(kind: Kind, f: impl FnOnce(*mut fo_ctx)) {
+    let _ = match kind {
+        Kind::Shared => CTX.try_with(|c| f(c.0)),
+        Kind::Private => PRIVATE_CTX.try_with(|c| f(c.0)),
+    };
+}
+
+fn last_error(c: *mut fo_ctx) -> String {
+    unsafe { CStr::from_ptr(fo_error(c)).to_string_lossy().into_owned() }
+}
+
+/// Takes ownership of a MuPDF-allocated C string.
+fn take_string(c: *mut fo_ctx, p: *mut c_char) -> Option<String> {
+    if p.is_null() {
+        return None;
+    }
+    let s = unsafe { CStr::from_ptr(p).to_string_lossy().into_owned() };
+    unsafe { fo_free(c, p.cast()) };
+    Some(s)
+}
+
+pub fn init(store_bytes: usize) -> Result<()> {
+    if unsafe { fo_global_init(store_bytes) } == 0 {
+        Ok(())
+    } else {
+        Err("could not initialise MuPDF".into())
+    }
+}
+
+/// Frees `percent`% of the shared resource store (100 = empty it).
+pub fn shrink_store(percent: i32) {
+    with_ctx(|c| unsafe { fo_store_shrink(c, percent) })
+}
+
+/// Empties this thread's private store, if the thread has created one.
+pub fn empty_private_store() {
+    let _ = PRIVATE_CTX.try_with(|c| unsafe { fo_store_shrink(c.0, 100) });
+}
+
+#[cfg(windows)]
+extern "C" {
+    fn _heapmin() -> i32;
+}
+
+/// Asks the C runtime to hand free heap memory back to Windows. MuPDF frees
+/// through the CRT heap, which otherwise keeps memory reserved after big jobs.
+pub fn release_heap() {
+    #[cfg(windows)]
+    unsafe {
+        _heapmin();
+    }
+}
+
+// ---------------------------------------------------------------- Cookie
+
+pub struct Cookie(*mut fo_cookie);
+unsafe impl Send for Cookie {}
+unsafe impl Sync for Cookie {}
+
+impl Cookie {
+    pub fn new() -> Self {
+        Cookie(unsafe { fo_cookie_new() })
+    }
+    pub fn abort(&self) {
+        unsafe { fo_cookie_abort(self.0) }
+    }
+}
+
+impl Drop for Cookie {
+    fn drop(&mut self) {
+        unsafe { fo_cookie_drop(self.0) }
+    }
+}
+
+// ---------------------------------------------------------------- Document
+
+pub struct Document(*mut fo_doc, Kind);
+unsafe impl Send for Document {}
+
+impl Document {
+    pub fn open(path: &str) -> Result<Self> {
+        Self::open_kind(path, Kind::Shared)
+    }
+
+    /// Opens with this thread's private context (see module docs).
+    pub fn open_private(path: &str) -> Result<Self> {
+        Self::open_kind(path, Kind::Private)
+    }
+
+    fn open_kind(path: &str, kind: Kind) -> Result<Self> {
+        let cpath = CString::new(path).map_err(|e| e.to_string())?;
+        with_kind(kind, |c| {
+            let d = unsafe { fo_open(c, cpath.as_ptr()) };
+            if d.is_null() {
+                Err(last_error(c))
+            } else {
+                Ok(Document(d, kind))
+            }
+        })
+    }
+
+    pub fn needs_password(&self) -> bool {
+        with_kind(self.1, |c| unsafe { fo_needs_password(c, self.0) } != 0)
+    }
+
+    pub fn authenticate(&self, password: &str) -> bool {
+        let pw = CString::new(password).unwrap_or_default();
+        with_kind(self.1, |c| unsafe { fo_authenticate(c, self.0, pw.as_ptr()) } > 0)
+    }
+
+    pub fn is_reflowable(&self) -> bool {
+        with_kind(self.1, |c| unsafe { fo_is_reflowable(c, self.0) } != 0)
+    }
+
+    pub fn layout(&self, w: f32, h: f32, em: f32) -> Result<()> {
+        with_kind(self.1, |c| {
+            if unsafe { fo_layout(c, self.0, w, h, em) } == 0 {
+                Ok(())
+            } else {
+                Err(last_error(c))
+            }
+        })
+    }
+
+    pub fn is_pdf(&self) -> bool {
+        with_kind(self.1, |c| unsafe { fo_is_pdf(c, self.0) } != 0)
+    }
+
+    pub fn page_count(&self) -> Result<usize> {
+        with_kind(self.1, |c| {
+            let n = unsafe { fo_count_pages(c, self.0) };
+            if n < 0 {
+                Err(last_error(c))
+            } else {
+                Ok(n as usize)
+            }
+        })
+    }
+
+    pub fn metadata(&self, key: &str) -> Option<String> {
+        let k = CString::new(key).ok()?;
+        let mut buf = vec![0u8; 1024];
+        with_kind(self.1, |c| {
+            let n = unsafe { fo_metadata(c, self.0, k.as_ptr(), buf.as_mut_ptr().cast(), buf.len() as c_int) };
+            if n <= 0 {
+                return None;
+            }
+            let s = unsafe { CStr::from_ptr(buf.as_ptr().cast()) }.to_string_lossy().trim().to_string();
+            (!s.is_empty()).then_some(s)
+        })
+    }
+
+    pub fn outline_json(&self) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_outline_json(c, self.0) }).ok_or_else(|| last_error(c)))
+    }
+
+    pub fn load_page(&self, index: usize) -> Result<Page> {
+        with_kind(self.1, |c| {
+            let p = unsafe { fo_page_load(c, self.0, index as c_int) };
+            if p.is_null() {
+                Err(last_error(c))
+            } else {
+                Ok(Page(p, self.1))
+            }
+        })
+    }
+
+    /// Applies rotations (per original page) and a new page order to a PDF in memory.
+    pub fn apply_page_edits(&self, rot: &[i32], order: &[usize]) -> Result<()> {
+        let order: Vec<c_int> = order.iter().map(|&x| x as c_int).collect();
+        with_kind(self.1, |c| {
+            let rc = unsafe {
+                fo_pdf_apply_page_edits(c, self.0, rot.as_ptr(), rot.len() as c_int, order.as_ptr(), order.len() as c_int)
+            };
+            if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
+    pub fn can_save_incrementally(&self) -> bool {
+        with_kind(self.1, |c| unsafe { fo_pdf_can_save_incrementally(c, self.0) } != 0)
+    }
+
+    /// Saves a PDF. `incremental` appends changes to this document's own file.
+    pub fn save_pdf(&self, path: &str, incremental: bool) -> Result<()> {
+        let p = CString::new(path).map_err(|e| e.to_string())?;
+        with_kind(self.1, |c| {
+            if unsafe { fo_pdf_save(c, self.0, p.as_ptr(), incremental as c_int) } == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
+    /// Writes any document (EPUB, images, XPS…) as a PDF with the given order and rotations.
+    pub fn convert_to_pdf(&self, path: &str, order: &[usize], rot: &[i32]) -> Result<()> {
+        let p = CString::new(path).map_err(|e| e.to_string())?;
+        let order: Vec<c_int> = order.iter().map(|&x| x as c_int).collect();
+        with_kind(self.1, |c| {
+            let rc = unsafe { fo_convert_to_pdf(c, self.0, p.as_ptr(), order.as_ptr(), order.len() as c_int, rot.as_ptr()) };
+            if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
+    /// Turns on undo (and form scripts if there are fields). Returns (fields, has XFA).
+    pub fn forms_init(&self) -> Result<(usize, bool)> {
+        let mut xfa: c_int = 0;
+        with_kind(self.1, |c| {
+            let n = unsafe { fo_pdf_forms_init(c, self.0, &mut xfa) };
+            if n < 0 { Err(last_error(c)) } else { Ok((n as usize, xfa != 0)) }
+        })
+    }
+
+    /// Undoes (or redoes) one edit. Ok(false) when there was nothing to undo.
+    pub fn undo(&self, redo: bool) -> Result<bool> {
+        with_kind(self.1, |c| match unsafe { fo_pdf_undo(c, self.0, redo as c_int) } {
+            n if n < 0 => Err(last_error(c)),
+            n => Ok(n == 1),
+        })
+    }
+
+    pub fn has_changes(&self) -> bool {
+        with_kind(self.1, |c| unsafe { fo_pdf_has_changes(c, self.0) } != 0)
+    }
+
+    pub fn reset_form(&self) -> Result<()> {
+        with_kind(self.1, |c| if unsafe { fo_pdf_reset_form(c, self.0) } < 0 { Err(last_error(c)) } else { Ok(()) })
+    }
+
+    /// Makes fields (and annotations, if asked) plain page content.
+    pub fn bake(&self, annots: bool) -> Result<()> {
+        with_kind(self.1, |c| if unsafe { fo_pdf_bake(c, self.0, annots as c_int) } < 0 { Err(last_error(c)) } else { Ok(()) })
+    }
+
+    /// Writes a full copy without cleaning up objects, leaving this document untouched.
+    pub fn save_copy(&self, path: &str) -> Result<()> {
+        let p = CString::new(path).map_err(|e| e.to_string())?;
+        with_kind(self.1, |c| if unsafe { fo_pdf_save(c, self.0, p.as_ptr(), 2) } == 0 { Ok(()) } else { Err(last_error(c)) })
+    }
+
+    /// Everything between begin_op and end_op is one undo step.
+    pub fn begin_op(&self, name: &str) {
+        let n = CString::new(name).unwrap_or_default();
+        with_kind(self.1, |c| unsafe { fo_pdf_begin_op(c, self.0, n.as_ptr()) })
+    }
+
+    pub fn end_op(&self) {
+        with_kind(self.1, |c| unsafe { fo_pdf_end_op(c, self.0) })
+    }
+
+    pub fn doc_annots_json(&self) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_doc_annots_json(c, self.0) }).ok_or_else(|| last_error(c)))
+    }
+
+    pub fn links_json(&self, page: &Page) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_links_json(c, self.0, page.0) }).ok_or_else(|| last_error(c)))
+    }
+}
+
+/// What a new digital signature looks like and says.
+pub struct SignRequest {
+    /// An empty signature field of the form to sign in (its object number), or -1 for a new one at `rect`.
+    pub field: i32,
+    /// Page space; all zero for an invisible signature.
+    pub rect: [f32; 4],
+    /// CN, O, OU, email, country.
+    pub dn: [String; 5],
+    pub reason: String,
+    pub location: String,
+    /// A picture for the left half of the box (PNG/JPEG), e.g. your handwritten signature.
+    pub image: Option<Vec<u8>>,
+    /// PDF_SIGNATURE_SHOW_* flags.
+    pub flags: i32,
+    /// Lock every form field.
+    pub lock: bool,
+    /// Room reserved for the signature, in bytes.
+    pub max: usize,
+}
+
+/// The signing step MuPDF calls back into during the save.
+pub struct Signing<'a> {
+    pub sign: Box<dyn FnMut(&[u8]) -> std::result::Result<Vec<u8>, String> + 'a>,
+    /// Why it failed, when it did (MuPDF only reports a generic error).
+    pub error: Option<String>,
+}
+
+extern "C" fn sign_trampoline(user: *mut std::ffi::c_void, data: *const u8, len: usize, out: *mut u8, cap: usize) -> isize {
+    let st = unsafe { &mut *(user as *mut Signing) };
+    let data = unsafe { std::slice::from_raw_parts(data, len) };
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (st.sign)(data)));
+    match res {
+        Ok(Ok(v)) if v.len() <= cap => {
+            unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, v.len()) };
+            v.len() as isize
+        }
+        Ok(Ok(v)) => {
+            st.error = Some(format!("The signature ({} bytes) is larger than the room reserved for it ({cap} bytes).", v.len()));
+            -1
+        }
+        Ok(Err(e)) => {
+            st.error = Some(e);
+            -1
+        }
+        Err(_) => {
+            st.error = Some("Signing failed unexpectedly.".into());
+            -1
+        }
+    }
+}
+
+impl Document {
+    /// Signature fields as JSON (see fo_sigs_json).
+    pub fn sigs_json(&self) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_sigs_json(c, self.0) }).ok_or_else(|| last_error(c)))
+    }
+
+    /// The bytes signature `i` covers, and its CMS blob.
+    pub fn sig_data(&self, i: usize) -> Result<(Vec<u8>, Vec<u8>)> {
+        with_kind(self.1, |c| {
+            let (mut d, mut dl, mut s, mut sl) = (std::ptr::null_mut(), 0usize, std::ptr::null_mut(), 0usize);
+            if unsafe { fo_sig_data(c, self.0, i as c_int, &mut d, &mut dl, &mut s, &mut sl) } != 0 {
+                return Err(last_error(c));
+            }
+            let out = unsafe { (std::slice::from_raw_parts(d, dl).to_vec(), std::slice::from_raw_parts(s, sl).to_vec()) };
+            unsafe {
+                fo_free(c, d.cast());
+                fo_free(c, s.cast());
+            }
+            Ok(out)
+        })
+    }
+}
+
+impl Page {
+    /// Adds a signed signature field. The signature itself is made by
+    /// `signing` during the next incremental save, which must happen while
+    /// `signing` is alive.
+    pub fn sign(&self, req: &SignRequest, signing: &mut Signing) -> Result<()> {
+        let dn: Vec<CString> = req.dn.iter().map(|s| CString::new(s.as_str()).unwrap_or_default()).collect();
+        let dn_ptrs: Vec<*const c_char> = dn.iter().map(|s| s.as_ptr()).collect();
+        let reason = CString::new(req.reason.as_str()).unwrap_or_default();
+        let location = CString::new(req.location.as_str()).unwrap_or_default();
+        let (img, img_len) = req.image.as_deref().map_or((std::ptr::null(), 0), |b| (b.as_ptr(), b.len()));
+        with_kind(self.1, |c| {
+            let rc = unsafe {
+                fo_sign_page(
+                    c,
+                    self.0,
+                    req.field as c_int,
+                    req.rect.as_ptr(),
+                    sign_trampoline,
+                    signing as *mut Signing as *mut std::ffi::c_void,
+                    req.max,
+                    dn_ptrs.as_ptr(),
+                    reason.as_ptr(),
+                    location.as_ptr(),
+                    img,
+                    img_len,
+                    req.flags as c_int,
+                    req.lock as c_int,
+                )
+            };
+            if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+}
+
+impl Drop for Document {
+    fn drop(&mut self) {
+        drop_with(self.1, |c| unsafe { fo_doc_drop(c, self.0) })
+    }
+}
+
+// ---------------------------------------------------------------- Page
+
+/// Properties to set on an annotation (all optional; coordinates in page space).
+#[derive(Default)]
+pub struct AnnotEdit {
+    pub rect: Option<[f32; 4]>,
+    pub quads: Option<Vec<f32>>,
+    pub ink: Option<Vec<Vec<f32>>>,
+    pub line: Option<[f32; 4]>,
+    pub line_endings: Option<[i32; 2]>,
+    pub color: Option<Vec<f32>>,
+    pub interior: Option<Vec<f32>>,
+    pub opacity: Option<f32>,
+    pub border: Option<f32>,
+    pub icon: Option<String>,
+    pub font: Option<(String, f32, Vec<f32>)>,
+    /// PNG or JPEG bytes (signatures, image stamps).
+    pub image: Option<Vec<u8>>,
+    pub contents: Option<String>,
+}
+
+pub struct Page(*mut fo_page, Kind);
+unsafe impl Send for Page {}
+// Pages are only ever used while holding their document's lock (see
+// `engine::Doc`), which serialises all access.
+unsafe impl Sync for Page {}
+
+impl Page {
+    pub fn bounds(&self) -> Result<[f32; 4]> {
+        let mut out = [0f32; 4];
+        with_kind(self.1, |c| {
+            if unsafe { fo_page_bounds(c, self.0, out.as_mut_ptr()) } == 0 {
+                Ok(out)
+            } else {
+                Err(last_error(c))
+            }
+        })
+    }
+
+    /// Annotations on this page as JSON (see fo_annots_json).
+    pub fn annots_json(&self, bounds: &[f32; 4]) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_annots_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c)))
+    }
+
+    pub fn annot_create(&self, kind: &str, author: &str) -> Result<i32> {
+        let k = CString::new(kind).map_err(|e| e.to_string())?;
+        let a = CString::new(author).unwrap_or_default();
+        with_kind(self.1, |c| match unsafe { fo_annot_create(c, self.0, k.as_ptr(), a.as_ptr()) } {
+            n if n < 0 => Err(last_error(c)),
+            n => Ok(n),
+        })
+    }
+
+    /// Applies properties to annotation `num` (coordinates in page space), then redraws it.
+    pub fn annot_apply(&self, num: i32, e: &AnnotEdit) -> Result<()> {
+        with_kind(self.1, |c| {
+            let ok = |rc: c_int| if rc < 0 { Err(last_error(c)) } else { Ok(()) };
+            unsafe {
+                if let Some(r) = &e.rect {
+                    ok(fo_annot_set_rect(c, self.0, num, r.as_ptr()))?;
+                }
+                if let Some(q) = &e.quads {
+                    ok(fo_annot_set_quads(c, self.0, num, q.as_ptr(), (q.len() / 8) as c_int))?;
+                }
+                if let Some(ink) = &e.ink {
+                    let counts: Vec<c_int> = ink.iter().map(|s| (s.len() / 2) as c_int).collect();
+                    let pts: Vec<f32> = ink.iter().flatten().copied().collect();
+                    ok(fo_annot_set_ink(c, self.0, num, counts.as_ptr(), counts.len() as c_int, pts.as_ptr()))?;
+                }
+                if let Some(l) = &e.line {
+                    let [s, t] = e.line_endings.unwrap_or([0, 0]);
+                    ok(fo_annot_set_line(c, self.0, num, l.as_ptr(), s, t))?;
+                }
+                if let Some(col) = &e.color {
+                    ok(fo_annot_set_color(c, self.0, num, col.len() as c_int, col.as_ptr()))?;
+                }
+                if let Some(col) = &e.interior {
+                    ok(fo_annot_set_interior(c, self.0, num, col.len() as c_int, col.as_ptr()))?;
+                }
+                if let Some(o) = e.opacity {
+                    ok(fo_annot_set_opacity(c, self.0, num, o))?;
+                }
+                if let Some(w) = e.border {
+                    ok(fo_annot_set_border(c, self.0, num, w))?;
+                }
+                if let Some(icon) = &e.icon {
+                    let s = CString::new(icon.as_str()).unwrap_or_default();
+                    ok(fo_annot_set_icon(c, self.0, num, s.as_ptr()))?;
+                }
+                if let Some((font, size, rgb)) = &e.font {
+                    let f = CString::new(font.as_str()).unwrap_or_default();
+                    let rgb = [rgb.first().copied().unwrap_or(0.0), rgb.get(1).copied().unwrap_or(0.0), rgb.get(2).copied().unwrap_or(0.0)];
+                    ok(fo_annot_set_font(c, self.0, num, f.as_ptr(), *size, rgb.as_ptr()))?;
+                }
+                if let Some(img) = &e.image {
+                    ok(fo_annot_set_image(c, self.0, num, img.as_ptr(), img.len()))?;
+                }
+                if let Some(t) = &e.contents {
+                    let s = CString::new(t.replace('\0', "")).unwrap_or_default();
+                    ok(fo_annot_set_contents(c, self.0, num, s.as_ptr()))?;
+                }
+                ok(fo_annot_update(c, self.0, num))
+            }
+        })
+    }
+
+    pub fn annot_delete(&self, num: i32) -> Result<()> {
+        with_kind(self.1, |c| if unsafe { fo_annot_delete(c, self.0, num) } < 0 { Err(last_error(c)) } else { Ok(()) })
+    }
+
+    /// Form fields on this page as JSON (see fo_widgets_json).
+    pub fn widgets_json(&self, bounds: &[f32; 4]) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_widgets_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c)))
+    }
+
+    /// Sets a text/choice field. Ok(false) if the form's own rules rejected the value.
+    pub fn widget_set(&self, num: i32, value: &str) -> Result<bool> {
+        let v = CString::new(value).map_err(|e| e.to_string())?;
+        with_kind(self.1, |c| match unsafe { fo_widget_set(c, self.0, num, v.as_ptr()) } {
+            n if n < 0 => Err(last_error(c)),
+            n => Ok(n == 1),
+        })
+    }
+
+    pub fn widget_toggle(&self, num: i32) -> Result<()> {
+        with_kind(self.1, |c| if unsafe { fo_widget_toggle(c, self.0, num) } < 0 { Err(last_error(c)) } else { Ok(()) })
+    }
+
+    pub fn label(&self) -> String {
+        let mut buf = vec![0u8; 64];
+        with_kind(self.1, |c| unsafe { fo_page_label(c, self.0, buf.as_mut_ptr().cast(), buf.len() as c_int) });
+        unsafe { CStr::from_ptr(buf.as_ptr().cast()) }.to_string_lossy().into_owned()
+    }
+
+    /// `extras`: 0 contents only, 1 with annotations and fields, 2 without fillable fields.
+    pub fn display_list(&self, extras: u8) -> Result<List> {
+        with_kind(self.1, |c| {
+            let l = unsafe { fo_list_new(c, self.0, extras as c_int) };
+            if l.is_null() {
+                Err(last_error(c))
+            } else {
+                Ok(List(l, self.1))
+            }
+        })
+    }
+}
+
+impl Drop for Page {
+    fn drop(&mut self) {
+        drop_with(self.1, |c| unsafe { fo_page_drop(c, self.0) })
+    }
+}
+
+// ---------------------------------------------------------------- Display list
+
+/// Immutable recording of a page; safe to render from many threads at once.
+pub struct List(*mut fo_list, Kind);
+unsafe impl Send for List {}
+unsafe impl Sync for List {}
+
+pub enum RenderOutcome {
+    Done,
+    Aborted,
+}
+
+pub fn render_size(bounds: &[f32; 4], scale: f32, rotate: i32) -> (u32, u32) {
+    let (mut w, mut h) = (0, 0);
+    unsafe { fo_render_size(bounds.as_ptr(), scale, rotate, &mut w, &mut h) };
+    (w.max(0) as u32, h.max(0) as u32)
+}
+
+impl List {
+    /// Renders `clip` (device px, relative to the page's top-left) into `out` as RGBA.
+    pub fn render(
+        &self,
+        bounds: &[f32; 4],
+        scale: f32,
+        rotate: i32,
+        clip: [i32; 4],
+        out: &mut [u8],
+        cookie: Option<&Cookie>,
+    ) -> Result<RenderOutcome> {
+        let need = ((clip[2] - clip[0]).max(0) as usize) * ((clip[3] - clip[1]).max(0) as usize) * 4;
+        if out.len() < need || need == 0 {
+            return Err("render buffer too small".into());
+        }
+        with_kind(self.1, |c| {
+            let rc = unsafe {
+                fo_render(
+                    c,
+                    self.0,
+                    bounds.as_ptr(),
+                    scale,
+                    rotate,
+                    clip.as_ptr(),
+                    out.as_mut_ptr(),
+                    cookie.map_or(std::ptr::null_mut(), |k| k.0),
+                )
+            };
+            match rc {
+                0 => Ok(RenderOutcome::Done),
+                1 => Ok(RenderOutcome::Aborted),
+                _ => Err(last_error(c)),
+            }
+        })
+    }
+
+    /// Where images are drawn on the page: [x0, y0, x1, y1] relative to its origin.
+    pub fn image_rects(&self, bounds: &[f32; 4]) -> Result<Vec<[f32; 4]>> {
+        let json = with_kind(self.1, |c| {
+            take_string(c, unsafe { fo_image_rects_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c))
+        })?;
+        serde_json::from_str(&json).map_err(|e| e.to_string())
+    }
+
+    /// Page content for reflowing, as JSON (see fo_reflow_json).
+    pub fn reflow(&self, bounds: &[f32; 4]) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_reflow_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c)))
+    }
+
+    pub fn text(&self) -> Result<Text> {
+        with_kind(self.1, |c| {
+            let t = unsafe { fo_text_new(c, self.0) };
+            if t.is_null() {
+                Err(last_error(c))
+            } else {
+                Ok(Text(t, self.1))
+            }
+        })
+    }
+}
+
+impl Drop for List {
+    fn drop(&mut self) {
+        drop_with(self.1, |c| unsafe { fo_list_drop(c, self.0) })
+    }
+}
+
+// ---------------------------------------------------------------- Structured text
+
+/// Structured text of one page. Read-only after creation; callers still
+/// serialise access through a mutex to stay on the safe side of MuPDF.
+pub struct Text(*mut fo_text, Kind);
+unsafe impl Send for Text {}
+
+pub type QuadF = [f32; 8];
+
+impl Text {
+    pub fn highlight(&self, bounds: &[f32; 4], a: [f32; 2], b: [f32; 2]) -> Vec<QuadF> {
+        const MAX: usize = 4096;
+        let mut out = vec![0f32; MAX * 8];
+        let n = with_kind(self.1, |c| unsafe {
+            fo_text_highlight(c, self.0, bounds.as_ptr(), a[0], a[1], b[0], b[1], out.as_mut_ptr(), MAX as c_int)
+        });
+        (0..n.max(0) as usize).map(|i| out[i * 8..i * 8 + 8].try_into().unwrap()).collect()
+    }
+
+    pub fn snap(&self, bounds: &[f32; 4], a: [f32; 2], b: [f32; 2], mode: i32) -> Option<QuadF> {
+        let mut q = [0f32; 8];
+        let n = with_kind(self.1, |c| unsafe { fo_text_snap(c, self.0, bounds.as_ptr(), a[0], a[1], b[0], b[1], mode, q.as_mut_ptr()) });
+        (n > 0 && q.iter().any(|v| *v != 0.0)).then_some(q)
+    }
+
+    pub fn copy(&self, bounds: &[f32; 4], a: [f32; 2], b: [f32; 2]) -> String {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_text_copy(c, self.0, bounds.as_ptr(), a[0], a[1], b[0], b[1]) }))
+            .unwrap_or_default()
+    }
+
+    pub fn all(&self) -> String {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_text_all(c, self.0) })).unwrap_or_default()
+    }
+
+    pub fn char_count(&self) -> usize {
+        with_kind(self.1, |c| unsafe { fo_text_char_count(c, self.0) }).max(0) as usize
+    }
+
+    /// Search with options (see `SearchOptions`). Returns JSON: [{"q":[...], "s":"line"}].
+    pub fn find(&self, bounds: &[f32; 4], needle: &str, flags: i32, snippets: bool) -> Result<String> {
+        let n = CString::new(needle).map_err(|e| e.to_string())?;
+        with_kind(self.1, |c| {
+            take_string(c, unsafe { fo_text_match_json(c, self.0, bounds.as_ptr(), n.as_ptr(), flags, snippets as c_int) })
+                .ok_or_else(|| last_error(c))
+        })
+    }
+
+    /// One `Vec` of quad coordinates (8 floats per quad) per hit.
+    pub fn search(&self, bounds: &[f32; 4], needle: &str) -> Result<Vec<Vec<f32>>> {
+        let n = CString::new(needle).map_err(|e| e.to_string())?;
+        let json = with_kind(self.1, |c| {
+            take_string(c, unsafe { fo_text_search_json(c, self.0, bounds.as_ptr(), n.as_ptr()) }).ok_or_else(|| last_error(c))
+        })?;
+        serde_json::from_str(&json).map_err(|e| e.to_string())
+    }
+}
+
+impl Drop for Text {
+    fn drop(&mut self) {
+        drop_with(self.1, |c| unsafe { fo_text_drop(c, self.0) })
+    }
+}

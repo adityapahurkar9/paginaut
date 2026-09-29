@@ -1,0 +1,129 @@
+pub mod engine;
+mod app;
+mod base64;
+mod sigstore;
+pub mod dsc;
+
+use app::AppState;
+use parking_lot::Mutex;
+use tauri::Manager;
+
+/// Worker threads: leave two cores for the UI and the OS, cap at 16.
+fn worker_count() -> usize {
+    let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    cpus.saturating_sub(2).clamp(2, 16)
+}
+
+/// MuPDF's shared cache for decoded images and fonts: 1/128 of RAM, 64–128 MB.
+/// Rendered pages are cached by the UI, so this mostly serves re-renders at a new zoom.
+fn store_bytes() -> usize {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let total = sys.total_memory() as usize;
+    (total / 128).clamp(64 << 20, 128 << 20)
+}
+
+/// Tauri turns WebView2 pinch-zoom off together with its zoom shortcuts, and
+/// with it off, touchpad pinches never reach the page at all. Turn pinches back
+/// on: the page receives them as Ctrl+wheel events and zooms the document
+/// itself (it cancels them, so the UI never zooms). Ctrl+wheel/Ctrl+= browser
+/// zoom stays off.
+#[cfg(windows)]
+fn enable_touchpad_pinch(win: &tauri::WebviewWindow) {
+    let _ = win.with_webview(|w| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings5;
+        use windows_core::Interface;
+        let settings = w.controller().CoreWebView2().and_then(|c| c.Settings());
+        if let Ok(s) = settings.and_then(|s| s.cast::<ICoreWebView2Settings5>()) {
+            let _ = s.SetIsPinchZoomEnabled(true);
+        }
+    });
+}
+
+/// Low asks WebView2 to give memory back: it collects garbage and frees the
+/// GPU process's leftovers from pages drawn earlier (several hundred MB after a
+/// long scroll). Used while minimized and briefly after a tab closes.
+#[tauri::command]
+fn memory_level(win: tauri::WebviewWindow, low: bool) {
+    #[cfg(windows)]
+    let _ = win.with_webview(move |w| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{
+            ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+        };
+        use windows_core::Interface;
+        if let Ok(wv) = w.controller().CoreWebView2().and_then(|c| c.cast::<ICoreWebView2_19>()) {
+            let level = if low { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL };
+            let _ = wv.SetMemoryUsageTargetLevel(level);
+        }
+    });
+    #[cfg(not(windows))]
+    let _ = (win, low);
+}
+
+pub fn run() {
+    let engine = engine::Engine::new(worker_count(), store_bytes()).expect("MuPDF failed to start");
+    let args: Vec<String> = std::env::args().collect();
+    let launch = app::files_from_args(&args, None);
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            let files = app::files_from_args(&argv, Some(&cwd));
+            app::forward_files(app, files);
+        }))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .manage(AppState { engine, launch_files: Mutex::new(launch), started: std::time::Instant::now() })
+        .register_asynchronous_uri_scheme_protocol("folio", app::protocol)
+        .invoke_handler(tauri::generate_handler![
+            app::open_document,
+            app::unlock_document,
+            app::close_document,
+            app::trim_document,
+            app::save_document,
+            app::page_sizes,
+            app::page_label,
+            app::page_labels,
+            app::outline,
+            app::page_links,
+            app::page_images,
+            app::text_select,
+            app::text_copy,
+            app::page_text,
+            app::page_text_stats,
+            app::search,
+            app::reflow,
+            app::forms_init,
+            app::widgets,
+            app::widget_set,
+            app::widget_toggle,
+            app::doc_undo,
+            app::form_reset,
+            app::save_flattened,
+            app::annots,
+            app::doc_annots,
+            app::annot_edit,
+            app::user_name,
+            app::sig_list,
+            app::read_picture,
+            app::certs,
+            app::sign_document,
+            app::signatures,
+            app::signed_version,
+            app::sig_add,
+            app::sig_delete,
+            app::cancel,
+            app::system_info,
+            app::take_launch_files,
+            memory_level,
+        ])
+        .setup(|app| {
+            // Shown by the UI once the first frame is painted, so there's no white flash.
+            #[cfg(windows)]
+            if let Some(win) = app.get_webview_window("main") {
+                enable_touchpad_pinch(&win);
+            }
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running Folio");
+}
