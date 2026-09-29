@@ -55,6 +55,25 @@ export interface Inserted {
   sizes: [number, number][];
 }
 
+/** Page labels from page index s: style D (1, 2), r (i, ii), R (I, II), a (a, b), A (A, B) or "" (prefix only). */
+export interface LabelRange {
+  s: number;
+  st: "D" | "r" | "R" | "a" | "A" | "";
+  p: string;
+  n: number;
+}
+
+export interface Properties {
+  title: string;
+  author: string;
+  subject: string;
+  keywords: string;
+  creator?: string;
+  producer?: string;
+  created?: string;
+  modified?: string;
+}
+
 export interface OutlineItem {
   t: string;
   p: number;
@@ -201,6 +220,14 @@ export const api = {
   /** Takes stamps of one kind off the pages; returns how many pages had some. */
   removeStamps: (doc: number, kind: string, pages: number[] | null) => invoke<number>("remove_stamps", { doc, kind, pages }),
   firstPageSize: (path: string) => invoke<[number, number]>("first_page_size", { path }),
+  /** Replaces the bookmarks (one undo step). */
+  setOutline: (doc: number, items: OutlineItem[]) => invoke<void>("set_outline", { doc, items }),
+  pageLabelRanges: (doc: number) => invoke<LabelRange[]>("page_label_ranges", { doc }),
+  /** Replaces the page labels (one undo step). */
+  setPageLabels: (doc: number, ranges: LabelRange[]) => invoke<void>("set_page_labels", { doc, ranges }),
+  properties: (doc: number) => invoke<Properties>("properties", { doc }),
+  /** Sets title, author, subject and keywords (one undo step). */
+  setProperties: (doc: number, props: Properties) => invoke<void>("set_properties", { doc, props }),
   existingFiles: (paths: string[]) => invoke<string[]>("existing_files", { paths }),
   peekFile: (path: string, password?: string) => invoke<Peek>("peek_file", { path, password: password ?? null }),
   pageLabel: (doc: number, page: number) => invoke<string>("page_label", { doc, page }),

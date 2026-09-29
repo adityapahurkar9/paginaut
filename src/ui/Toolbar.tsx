@@ -26,6 +26,7 @@ import { extractPages, insertBlankPage, startInsert, startMerge, startSplit } fr
 import { toggleGrid } from "./PageGrid";
 import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
+import { startLabels, startProperties } from "./MetaUI";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -61,6 +62,8 @@ function fileItems(): MenuItem[] {
     { label: "Open…", hint: "Ctrl+O", icon: <FolderOpen size={15} />, run: A.openDialog },
     { label: isPdf || !ready ? "Save" : "Save as PDF…", hint: "Ctrl+S", icon: <Save size={15} />, disabled: !ready || (isPdf && !ready.dirty.value), run: () => ready && void P.save(ready) },
     { label: "Save as…", hint: "Ctrl+Shift+S", icon: <FileOutput size={15} />, disabled: !ready, run: () => ready && void P.save(ready, true) },
+    { sep: true },
+    { label: "Document properties…", hint: "Ctrl+D", disabled: !ready, run: () => ready && startProperties(ready) },
     { sep: true },
     { label: "Auto-save rotations", check: settings.value.autoSaveRotations, run: () => updateSettings({ autoSaveRotations: !settings.value.autoSaveRotations }) },
     ...(files.length ? [{ sep: true } as MenuItem, { head: "Recent" } as MenuItem] : []),
@@ -498,8 +501,10 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { sep: true },
         { label: "Page numbers, headers and footers…", disabled: !tab?.info.value?.isPdf, run: () => tab && startHeaders(tab) },
         { label: "Watermark…", disabled: !tab?.info.value?.isPdf, run: () => tab && startWatermark(tab) },
+        { label: "Page labels…", disabled: !tab?.info.value?.isPdf, run: () => tab && startLabels(tab) },
+        { label: "Document properties…", hint: "Ctrl+D", disabled: !tab, run: () => tab && startProperties(tab) },
         { sep: true },
-        
+
         soon("Protect / unlock", 6.2), soon("Compress", 6.2), soon("Repair", 6.2), soon("Extract pictures and tables", 6.2),
         soon("Edit PDF", 6.3), soon("Redact", 6.5), soon("Compare", 7.5),
       ], "left", 280)} />

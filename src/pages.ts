@@ -80,9 +80,17 @@ async function docStep(tab: Tab, redo: boolean) {
   if (!info) return;
   try {
     const r = await api.docUndo(info.docId, redo);
-    // The step may have been recognised text.
+    // The step may have been recognised text, bookmarks or page labels.
     tab.textRev.value++;
     formsChanged(tab, r.changed);
+    if (info.isPdf) {
+      api.outline(info.docId).then((o) => (tab.outline.value = o)).catch(() => {});
+      api.pageLabels(info.docId).then((l) => (tab.labels.value = l)).catch(() => {});
+      api.properties(info.docId).then((p) => {
+        const cur = tab.info.value;
+        if (cur?.docId === info.docId && (cur.title !== p.title || cur.author !== p.author)) tab.info.value = { ...cur, title: p.title, author: p.author };
+      }).catch(() => {});
+    }
   } catch (e) {
     showToast(`Couldn't ${redo ? "redo" : "undo"}: ${e}`);
   }

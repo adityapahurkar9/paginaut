@@ -214,6 +214,24 @@ pub struct StampPage {
     pub parts: Vec<mupdf::StampPart>,
 }
 
+/// The document information shown and edited in Document properties.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Properties {
+    pub title: String,
+    pub author: String,
+    pub subject: String,
+    pub keywords: String,
+    #[serde(default)]
+    pub creator: String,
+    #[serde(default)]
+    pub producer: String,
+    #[serde(default)]
+    pub created: String,
+    #[serde(default)]
+    pub modified: String,
+}
+
 /// One file to write: these pages (document indices, in order) at `path`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -512,6 +530,65 @@ impl Doc {
         self.content_edited.store(true, Ordering::Release);
         self.edited();
         ops.iter().map(|op| self.bounds(op.page).map(|b| [b[2] - b[0], b[3] - b[1]])).collect()
+    }
+
+    // ------------------------------------------------------------ bookmarks, labels, properties
+
+    /// Runs `f` on the PDF as one undo step named `name`.
+    fn doc_op(&self, name: &str, f: impl FnOnce(&Document) -> Result<(), String>) -> Result<(), String> {
+        let inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Err("Only PDFs can be changed this way. Save this file as a PDF first (Save as).".into());
+        }
+        inner.doc.begin_op(name);
+        if let Err(e) = f(&inner.doc) {
+            inner.doc.abandon_op();
+            return Err(e);
+        }
+        inner.doc.end_op();
+        drop(inner);
+        self.edited();
+        Ok(())
+    }
+
+    pub fn set_outline(&self, items: &[mupdf::OutlineNode]) -> Result<(), String> {
+        self.doc_op("Bookmarks", |doc| doc.set_outline(items))
+    }
+
+    pub fn page_label_ranges(&self) -> Result<Vec<mupdf::LabelRange>, String> {
+        let json = self.inner.lock().doc.page_label_ranges_json()?;
+        serde_json::from_str(&json).map_err(|e| e.to_string())
+    }
+
+    pub fn set_page_labels(&self, ranges: &[mupdf::LabelRange]) -> Result<(), String> {
+        for r in ranges {
+            self.check(r.s)?;
+        }
+        self.doc_op("Page labels", |doc| doc.set_page_labels(ranges))
+    }
+
+    pub fn properties(&self) -> Properties {
+        let inner = self.inner.lock();
+        let m = |k: &str| inner.doc.metadata(k).unwrap_or_default();
+        Properties {
+            title: m("info:Title"),
+            author: m("info:Author"),
+            subject: m("info:Subject"),
+            keywords: m("info:Keywords"),
+            creator: m("info:Creator"),
+            producer: m("info:Producer"),
+            created: m("info:CreationDate"),
+            modified: m("info:ModDate"),
+        }
+    }
+
+    pub fn set_properties(&self, p: &Properties) -> Result<(), String> {
+        self.doc_op("Properties", |doc| {
+            for (k, v) in [("info:Title", &p.title), ("info:Author", &p.author), ("info:Subject", &p.subject), ("info:Keywords", &p.keywords)] {
+                doc.set_metadata(k, v.trim())?;
+            }
+            Ok(())
+        })
     }
 
     // ------------------------------------------------------------ stamps

@@ -241,6 +241,32 @@ impl StampPart {
     }
 }
 
+/// A bookmark: title, page (document index, -1 for none), top of the view on it, and the ones inside it.
+#[derive(serde::Deserialize, Clone)]
+pub struct OutlineNode {
+    pub t: String,
+    pub p: i32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub k: Vec<OutlineNode>,
+}
+
+/// A range of page labels: from page index `s`, style ("D", "r", "R", "a", "A" or "" for none), prefix, first number.
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+pub struct LabelRange {
+    pub s: usize,
+    pub st: String,
+    #[serde(default)]
+    pub p: String,
+    #[serde(default = "one_i32")]
+    pub n: i32,
+}
+
+fn one_i32() -> i32 {
+    1
+}
+
 /// How pages are resized (see fo_pdf_page_size).
 #[derive(serde::Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
@@ -267,6 +293,53 @@ impl Document {
     /// Opens with this thread's private context (see module docs).
     pub fn open_private(path: &str) -> Result<Self> {
         Self::open_kind(path, Kind::Private)
+    }
+
+    /// Replaces the bookmarks with `items` (inside the current operation).
+    pub fn set_outline(&self, items: &[OutlineNode]) -> Result<()> {
+        fn add(c: *mut fo_ctx, d: *mut fo_doc, parent: c_int, items: &[OutlineNode], depth: usize) -> Result<()> {
+            if depth > 32 {
+                return Ok(());
+            }
+            for it in items {
+                let title = CString::new(it.t.replace('\0', "")).unwrap_or_default();
+                let n = unsafe { fo_pdf_outline_add(c, d, parent, title.as_ptr(), it.p, it.y) };
+                if n < 0 {
+                    return Err(last_error(c));
+                }
+                add(c, d, n, &it.k, depth + 1)?;
+            }
+            Ok(())
+        }
+        with_kind(self.1, |c| {
+            if unsafe { fo_pdf_outline_clear(c, self.0) } != 0 {
+                return Err(last_error(c));
+            }
+            add(c, self.0, 0, items, 0)
+        })
+    }
+
+    /// The page label ranges (see fo_pdf_page_label_ranges_json).
+    pub fn page_label_ranges_json(&self) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_pdf_page_label_ranges_json(c, self.0) }).ok_or_else(|| last_error(c)))
+    }
+
+    /// Replaces the page labels (inside the current operation).
+    pub fn set_page_labels(&self, ranges: &[LabelRange]) -> Result<()> {
+        let starts: Vec<c_int> = ranges.iter().map(|r| r.s as c_int).collect();
+        let firsts: Vec<c_int> = ranges.iter().map(|r| r.n.max(1)).collect();
+        let styles: Vec<c_char> = ranges.iter().map(|r| r.st.bytes().next().filter(|b| b"DrRaA".contains(b)).unwrap_or(0) as c_char).collect();
+        let prefixes = CString::new(ranges.iter().map(|r| r.p.replace(['\n', '\0'], " ")).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+        with_kind(self.1, |c| {
+            let rc = unsafe { fo_pdf_set_page_labels(c, self.0, starts.as_ptr(), styles.as_ptr(), prefixes.as_ptr(), firsts.as_ptr(), ranges.len() as c_int) };
+            if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
+    /// Sets a metadata entry ("info:Title"…); empty removes it.
+    pub fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
+        let (k, v) = (CString::new(key).map_err(|e| e.to_string())?, CString::new(value.replace('\0', "")).unwrap_or_default());
+        with_kind(self.1, |c| if unsafe { fo_set_metadata(c, self.0, k.as_ptr(), v.as_ptr()) } == 0 { Ok(()) } else { Err(last_error(c)) })
     }
 
     /// A new, empty PDF in memory (shared context).

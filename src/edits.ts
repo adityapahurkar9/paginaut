@@ -56,6 +56,14 @@ export function move(e: Edits, views: number[], to: number): Edits {
 
 /** A history entry for an edit the engine undoes itself (form fields, annotations). */
 export const DOC_STEP = "doc" as const;
+
+/** Records a change to the document that doesn't touch how pages look (bookmarks, labels,
+ *  properties): one undo step, unsaved, nothing redrawn. */
+export function metaChanged(tab: { history: { push(e: typeof DOC_STEP): void }; historyVersion: { value: number }; docChanged: { value: boolean } }) {
+  tab.history.push(DOC_STEP);
+  tab.historyVersion.value++;
+  tab.docChanged.value = true;
+}
 /**
  * An engine step that also changed the page list (pages inserted): undoing it
  * undoes the engine step and goes back to these page edits.

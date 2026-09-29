@@ -3344,6 +3344,187 @@ int fo_stamp_remove(fo_ctx *c, fo_page *p, const char *kind)
 	return count;
 }
 
+/* ---------------------------------------------------------------- bookmarks, page labels, properties */
+
+/* Takes the document's bookmarks away (fo_pdf_outline_add then builds new ones). */
+int fo_pdf_outline_clear(fo_ctx *c, fo_doc *d)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	fz_try(CTX)
+		pdf_dict_del(CTX, pdf_dict_get(CTX, pdf_trailer(CTX, pdf), PDF_NAME(Root)), PDF_NAME(Outlines));
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* Adds a bookmark as the last child of `parent` (an object number from an
+ * earlier call, or 0 for the top level). Returns the new one's object number. */
+int fo_pdf_outline_add(fo_ctx *c, fo_doc *d, int parent, const char *title, int page, float y)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_obj *item = NULL, *outlines = NULL;
+	int num = -1;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	fz_var(item);
+	fz_var(outlines);
+	fz_try(CTX)
+	{
+		pdf_obj *root = pdf_dict_get(CTX, pdf_trailer(CTX, pdf), PDF_NAME(Root));
+		pdf_obj *parent_obj;
+		if (parent > 0)
+			parent_obj = outlines = pdf_new_indirect(CTX, pdf, parent, 0);
+		else
+		{
+			parent_obj = pdf_dict_get(CTX, root, PDF_NAME(Outlines));
+			if (!parent_obj)
+			{
+				outlines = pdf_add_new_dict(CTX, pdf, 4);
+				pdf_dict_put(CTX, outlines, PDF_NAME(Type), PDF_NAME(Outlines));
+				pdf_dict_put(CTX, root, PDF_NAME(Outlines), outlines);
+				parent_obj = outlines;
+			}
+		}
+		if (page >= pdf_count_pages(CTX, pdf))
+			page = -1;
+		item = outline_add(CTX, pdf, parent_obj, parent <= 0, title, page, y);
+		num = pdf_to_num(CTX, item);
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, item);
+		pdf_drop_obj(CTX, outlines);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return num;
+}
+
+/* The page label ranges: JSON [{"s":first page index,"st":"D"|"r"|"R"|"a"|"A"|"","p":prefix,"n":first number}...]. */
+char *fo_pdf_page_label_ranges_json(fo_ctx *c, fo_doc *d)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_obj *starts = NULL, *dicts = NULL;
+	fz_buffer *b = NULL;
+	char *s = NULL;
+	fz_var(starts);
+	fz_var(dicts);
+	fz_var(b);
+	fz_try(CTX)
+	{
+		b = fz_new_buffer(CTX, 128);
+		fz_append_byte(CTX, b, '[');
+		if (pdf)
+		{
+			pdf_obj *tree = pdf_dict_getp(CTX, pdf_trailer(CTX, pdf), "Root/PageLabels");
+			starts = pdf_new_array(CTX, pdf, 8);
+			dicts = pdf_new_array(CTX, pdf, 8);
+			label_ranges(CTX, tree, starts, dicts, 0);
+			for (int i = 0; i < pdf_array_len(CTX, starts); i++)
+			{
+				pdf_obj *dd = pdf_array_get(CTX, dicts, i);
+				pdf_obj *st = pdf_dict_get(CTX, dd, PDF_NAME(St));
+				if (i)
+					fz_append_byte(CTX, b, ',');
+				fz_append_printf(CTX, b, "{\"s\":%d,\"st\":", pdf_array_get_int(CTX, starts, i));
+				json_str(CTX, b, pdf_to_name(CTX, pdf_dict_get(CTX, dd, PDF_NAME(S))));
+				fz_append_string(CTX, b, ",\"p\":");
+				json_str(CTX, b, pdf_dict_get_text_string(CTX, dd, PDF_NAME(P)));
+				fz_append_printf(CTX, b, ",\"n\":%d}", st ? pdf_to_int(CTX, st) : 1);
+			}
+		}
+		fz_append_byte(CTX, b, ']');
+		s = buffer_to_string(CTX, b);
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, starts);
+		pdf_drop_obj(CTX, dicts);
+		fz_drop_buffer(CTX, b);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
+/* Replaces the page labels with ranges: starting at page index starts[i], style
+ * styles[i] ('D', 'r', 'R', 'a', 'A' or 0 for none), prefix, first number.
+ * Prefixes are separated by '\n'. count 0 removes the labels. */
+int fo_pdf_set_page_labels(fo_ctx *c, fo_doc *d, const int *starts, const char *styles, const char *prefixes, const int *firsts, int count)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	char *copy = NULL;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	fz_var(copy);
+	fz_try(CTX)
+	{
+		char *prefix, *next;
+		pdf_dict_del(CTX, pdf_dict_get(CTX, pdf_trailer(CTX, pdf), PDF_NAME(Root)), PDF_NAME(PageLabels));
+		copy = fz_strdup(CTX, prefixes ? prefixes : "");
+		prefix = copy;
+		for (int i = 0; i < count; i++)
+		{
+			next = prefix ? strchr(prefix, '\n') : NULL;
+			if (next)
+				*next = 0;
+			pdf_set_page_labels(CTX, pdf, starts[i], (pdf_page_label_style)(unsigned char)styles[i], prefix && prefix[0] ? prefix : NULL, firsts[i]);
+			prefix = next ? next + 1 : NULL;
+		}
+	}
+	fz_always(CTX)
+		fz_free(CTX, copy);
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* Sets an entry of the document information ("info:Title", "info:Author"…); empty removes it. */
+int fo_set_metadata(fo_ctx *c, fo_doc *d, const char *key, const char *value)
+{
+	fz_try(CTX)
+	{
+		pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+		if (pdf && !value[0] && !strncmp(key, "info:", 5))
+		{
+			pdf_obj *info = pdf_dict_get(CTX, pdf_trailer(CTX, pdf), PDF_NAME(Info));
+			if (pdf_is_dict(CTX, info))
+				pdf_dict_dels(CTX, info, key + 5);
+		}
+		else
+			fz_set_metadata(CTX, (fz_document *)d, key, value);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
 /* ---------------------------------------------------------------- text */
 
 fo_text *fo_text_new(fo_ctx *c, fo_list *l)

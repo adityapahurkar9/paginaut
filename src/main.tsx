@@ -16,6 +16,7 @@ import { helpPanel } from "./ui/HelpDialogs";
 import { creating, droppedPicture } from "./sign";
 import { fileMenuOpen } from "./ui/Toolbar";
 import { toggleGrid } from "./ui/PageGrid";
+import { startProperties } from "./ui/MetaUI";
 import { endPageSize, pageSizeEdit } from "./pagesize";
 
 render(<App />, document.getElementById("app")!);
@@ -107,6 +108,7 @@ window.addEventListener("keydown", (e) => {
       case "2": handled(); return A.fitWidth();
       case "tab": handled(); return A.nextTab();
       case "h": if (ready) { handled(); A.toggleMode("read"); } return;
+      case "d": if (ready) { handled(); startProperties(ready); } return;
       case "c": if (!typing && activeTab.value?.hasSelection.value) { handled(); return A.copySelection(); } return;
       case "a":
         if (!typing && ready?.grid.value) { handled(); ready.pageSel.value = new Set(ready.edits.value?.order.map((_, i) => i)); return; }

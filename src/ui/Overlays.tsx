@@ -12,6 +12,8 @@ import { extractPages, insertBlankPage, startInsert, startMerge, startSplit } fr
 import { toggleGrid } from "./PageGrid";
 import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
+import { startLabels, startProperties } from "./MetaUI";
+import { addBookmarkHere } from "./Sidebar";
 import { removeStamps } from "../stamps";
 import { helpPanel } from "./HelpDialogs";
 import { activeTab, baseName, dialog, findOpen, openFiles, paletteOpen, recent, settings, toast, unlockTab, updateSettings, type Tab } from "../store";
@@ -223,6 +225,9 @@ function commands(): Item[] {
     c("Crop and resize pages (page size)…", withTab((t) => startPageSize(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Page numbers, headers and footers…", withTab((t) => startHeaders(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Watermark…", withTab((t) => startWatermark(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Page labels (how pages are numbered)…", withTab((t) => startLabels(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Document properties (title, author)…", withTab((t) => startProperties(t)), "Ctrl+D", hasDoc),
+    c("Add a bookmark for this page", withTab((t) => void addBookmarkHere(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Remove page numbers, headers and footers", withTab((t) => void removeStamps(t, "Header")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Remove watermark", withTab((t) => void removeStamps(t, "Watermark")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Split into files…", withTab((t) => startSplit(t)), "", hasDoc),

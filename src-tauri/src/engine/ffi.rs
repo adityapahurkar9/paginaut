@@ -101,6 +101,11 @@ extern "C" {
     pub fn fo_convert_to_pdf(c: *mut fo_ctx, d: *mut fo_doc, path: *const c_char, order: *const c_int, count: c_int, rot: *const c_int) -> c_int;
     pub fn fo_pdf_insert_pages(c: *mut fo_ctx, d: *mut fo_doc, src: *mut fo_doc, pages: *const c_int, count: c_int, fit: *const c_float) -> c_int;
     pub fn fo_pdf_new(c: *mut fo_ctx) -> *mut fo_doc;
+    pub fn fo_pdf_outline_clear(c: *mut fo_ctx, d: *mut fo_doc) -> c_int;
+    pub fn fo_pdf_outline_add(c: *mut fo_ctx, d: *mut fo_doc, parent: c_int, title: *const c_char, page: c_int, y: c_float) -> c_int;
+    pub fn fo_pdf_page_label_ranges_json(c: *mut fo_ctx, d: *mut fo_doc) -> *mut c_char;
+    pub fn fo_pdf_set_page_labels(c: *mut fo_ctx, d: *mut fo_doc, starts: *const c_int, styles: *const c_char, prefixes: *const c_char, firsts: *const c_int, count: c_int) -> c_int;
+    pub fn fo_set_metadata(c: *mut fo_ctx, d: *mut fo_doc, key: *const c_char, value: *const c_char) -> c_int;
     pub fn fo_stamp_begin(c: *mut fo_ctx, p: *mut fo_page) -> *mut fo_stamp;
     pub fn fo_stamp_text(c: *mut fo_ctx, st: *mut fo_stamp, html: *const c_char, css: *const c_char, width: c_float, valign: c_int, m: *const c_float, opacity: c_float) -> c_int;
     pub fn fo_stamp_image(c: *mut fo_ctx, st: *mut fo_stamp, data: *const u8, len: usize, w: c_float, h: c_float, m: *const c_float, opacity: c_float) -> c_int;

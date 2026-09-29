@@ -20,6 +20,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
   ["Pages", [
     ["Rotate right / left", "R / Shift+R"], ["Delete page", "Delete"], ["Page grid (organize pages)", "Ctrl+Shift+G"], ["Undo / redo", "Ctrl+Z / Ctrl+Y"],
     ["Select several (thumbnails)", "Ctrl+click, Shift+click"],
+    ["Document properties", "Ctrl+D"], ["Rename a bookmark", "F2 · double-click"],
   ]],
   ["Search and text", [
     ["Find", "Ctrl+F"], ["Next / previous match", "Enter / Shift+Enter, F3"], ["Commands and search", "Ctrl+K"],

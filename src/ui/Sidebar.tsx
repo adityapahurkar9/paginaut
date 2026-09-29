@@ -2,13 +2,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import { bookScreen } from "../modes";
 import { selectWhenShown } from "../annots";
 import * as A from "../actions";
-import { ChevronDown, ChevronRight } from "lucide-preact";
+import { ChevronDown, ChevronRight, Plus } from "lucide-preact";
 import { api, type OutlineItem } from "../api";
 import { renderer, renderKey, type Want } from "../render/RenderManager";
 import { LO_SCALE, paint } from "../render/Viewer";
 import { signal } from "@preact/signals";
 import { activeKey, activeTab, settings, showToast, tabs, updateSettings, type Tab } from "../store";
-import { specs } from "../edits";
+import { metaChanged, specs } from "../edits";
 import * as P from "../pages";
 import { openMenuAt } from "./Toolbar";
 import { extractPages, insertBlankPage, startInsert } from "./PagesUI";
@@ -488,28 +488,254 @@ function Comments({ tab }: { tab: Tab }) {
   );
 }
 
+// ---------------------------------------------------------------- outline (bookmarks), editable
+
+type Path = number[];
+
+const clone = (t: OutlineItem[]): OutlineItem[] => t.map((n) => ({ ...n, k: n.k ? clone(n.k) : undefined }));
+const kidsOf = (tree: OutlineItem[], parent: Path): OutlineItem[] => {
+  let list = tree;
+  for (const i of parent) {
+    const n = list[i];
+    n.k = n.k ?? [];
+    list = n.k;
+  }
+  return list;
+};
+const nodeAt = (tree: OutlineItem[], path: Path) => kidsOf(tree, path.slice(0, -1))[path[path.length - 1]];
+const samePath = (a: Path | null, b: Path) => !!a && a.length === b.length && a.every((v, i) => v === b[i]);
+const isInside = (inner: Path, outer: Path) => inner.length > outer.length && outer.every((v, i) => v === inner[i]);
+
+/** Writes the bookmarks (one undo step) and shows them as the document has them now. */
+async function saveOutline(tab: Tab, tree: OutlineItem[]) {
+  const info = tab.info.value;
+  if (!info) return;
+  try {
+    await api.setOutline(info.docId, tree);
+    tab.outline.value = await api.outline(info.docId);
+    metaChanged(tab);
+  } catch (e) {
+    showToast(`Couldn't change the bookmarks: ${e}`, 5000);
+  }
+}
+
+/** How a page (document index) is shown: its label if the file has them, else its position; "–" once deleted. */
+const pageName = (tab: Tab, src: number) => {
+  const at = tab.edits.value?.order.indexOf(src) ?? src;
+  return at < 0 ? "–" : tab.labels.value?.[src] || String(at + 1);
+};
+
+/** Where the view is: the current page (document index). */
+const here = (tab: Tab) => tab.edits.value?.order[tab.page.value] ?? tab.page.value;
+
+/** A new bookmark for the page you're on, titled with the selected text if any. */
+async function newBookmark(tab: Tab): Promise<OutlineItem> {
+  const sel = (await tab.viewer?.copySelection().catch(() => null))?.replace(/\s+/g, " ").trim();
+  return { t: sel && sel.length <= 120 ? sel : `Page ${tab.page.value + 1}`, p: here(tab), y: 0 };
+}
+
+/** Adds a bookmark for the page you're on at the end of the list, and starts renaming it. */
+export async function addBookmarkHere(tab: Tab) {
+  const tree = clone(tab.outline.value ?? []);
+  tree.push(await newBookmark(tab));
+  await saveOutline(tab, tree);
+  renaming.value = { tab, path: [tree.length - 1] };
+  updateSettings({ sidebarOpen: true, sidebarTab: "outline" });
+}
+
+type Drop = { path: Path; where: "before" | "after" | "inside" };
+const renaming = signal<{ tab: Tab; path: Path } | null>(null);
+
 function Outline({ tab }: { tab: Tab }) {
   const items = tab.outline.value;
+  const [drop, setDrop] = useState<Drop | null>(null);
+  const [dragging, setDragging] = useState<Path | null>(null);
+  const editable = !!tab.info.value?.isPdf;
   if (items === null) return <div class="empty-note">Loading…</div>;
-  if (!items.length) return <div class="empty-note">This document has no outline. Scanned files usually don't.</div>;
+
+  const add = async (inside: Path | null) => {
+    const tree = clone(items);
+    const b = await newBookmark(tab);
+    let path: Path;
+    if (inside) {
+      const list = kidsOf(tree, inside);
+      list.push(b);
+      path = [...inside, list.length - 1];
+    } else {
+      tree.push(b);
+      path = [tree.length - 1];
+    }
+    await saveOutline(tab, tree);
+    renaming.value = { tab, path };
+  };
+
+  const move = (from: Path, d: Drop) => {
+    if (samePath(from, d.path) || isInside(d.path, from)) return;
+    const tree = clone(items);
+    const node = nodeAt(tree, from);
+    // Mark, take out, then put in at the target (found again by identity, since indices shift).
+    const target = nodeAt(tree, d.path);
+    const fromList = kidsOf(tree, from.slice(0, -1));
+    fromList.splice(from[from.length - 1], 1);
+    const find = (list: OutlineItem[], parent: Path): Path | null => {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i] === target) return [...parent, i];
+        const inner = list[i].k ? find(list[i].k!, [...parent, i]) : null;
+        if (inner) return inner;
+      }
+      return null;
+    };
+    const at = find(tree, [])!;
+    if (d.where === "inside") kidsOf(tree, at).push(node);
+    else kidsOf(tree, at.slice(0, -1)).splice(at[at.length - 1] + (d.where === "after" ? 1 : 0), 0, node);
+    void saveOutline(tab, tree);
+  };
+
+  const startDrag = (path: Path, e: PointerEvent) => {
+    if (!editable || e.button !== 0 || renaming.value) return;
+    const sx = e.clientX, sy = e.clientY;
+    let active = false;
+    let target: Drop | null = null;
+    const onMove = (ev: PointerEvent) => {
+      if (!active) {
+        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
+        active = true;
+        setDragging(path);
+      }
+      const row = (document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null)?.closest<HTMLElement>("[data-opath]");
+      if (!row) return setDrop((target = null));
+      const p = row.dataset.opath!.split(".").map(Number);
+      const r = row.getBoundingClientRect();
+      const f = (ev.clientY - r.top) / r.height;
+      target = { path: p, where: f < 0.3 ? "before" : f > 0.7 ? "after" : "inside" };
+      setDrop(target);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", up);
+      if (!active) return;
+      setDragging(null);
+      setDrop(null);
+      // The click that ends the drag must not jump to the bookmark.
+      suppress.current = true;
+      setTimeout(() => (suppress.current = false), 0);
+      if (target) move(path, target);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", up);
+  };
+  const suppress = useRef(false);
+
+  const menu = (path: Path, e: MouseEvent) => {
+    e.preventDefault();
+    if (!editable) return;
+    const tree = clone(items);
+    const node = nodeAt(tree, path);
+    const siblings = kidsOf(tree, path.slice(0, -1));
+    const i = path[path.length - 1];
+    openMenuAt(e.clientX, e.clientY, [
+      { label: "Rename", hint: "F2", run: () => (renaming.value = { tab, path }) },
+      { label: `Point to this page (${pageName(tab, here(tab))})`, run: () => { node.p = here(tab); node.y = 0; void saveOutline(tab, tree); } },
+      { label: "Add a bookmark inside", run: () => void add(path) },
+      { sep: true },
+      {
+        label: "Move in (under the one above)",
+        disabled: i === 0,
+        run: () => {
+          siblings.splice(i, 1);
+          const prev = siblings[i - 1];
+          (prev.k = prev.k ?? []).push(node);
+          void saveOutline(tab, tree);
+        },
+      },
+      {
+        label: "Move out",
+        disabled: path.length < 2,
+        run: () => {
+          siblings.splice(i, 1);
+          const parentPath = path.slice(0, -1);
+          kidsOf(tree, parentPath.slice(0, -1)).splice(parentPath[parentPath.length - 1] + 1, 0, node);
+          void saveOutline(tab, tree);
+        },
+      },
+      { sep: true },
+      { label: node.k?.length ? "Delete (with the ones inside)" : "Delete", run: () => { siblings.splice(i, 1); void saveOutline(tab, tree); } },
+    ], 250);
+  };
+
+  const rename = (path: Path, title: string) => {
+    // Enter commits, and the input's blur as it goes away would commit again.
+    if (!renaming.value) return;
+    renaming.value = null;
+    const tree = clone(items);
+    const node = nodeAt(tree, path);
+    if (!title.trim() || title === node.t) return;
+    node.t = title.trim();
+    void saveOutline(tab, tree);
+  };
+
   return (
     <div class="side-scroll" style={{ padding: "2px 6px 12px" }}>
+      {editable && (
+        <div class="outline-bar" title={items.length ? "Drag bookmarks to reorder or nest them · right-click one for more · F2 renames" : undefined}>
+          <button class="btn ghost sm" onClick={() => void add(null)} title="A bookmark for the page you're on (selected text becomes its title)">
+            <Plus size={14} /> Bookmark
+          </button>
+        </div>
+      )}
+      {!items.length && <div class="empty-note">This document has no bookmarks. {editable ? "Add one for the page you're on with + Bookmark." : "Scanned files usually don't."}</div>}
       {items.map((it, i) => (
-        <OutlineNode key={i} item={it} depth={0} tab={tab} />
+        <OutlineNode
+          key={i}
+          item={it}
+          path={[i]}
+          tab={tab}
+          drop={drop}
+          dragging={dragging}
+          onDrag={startDrag}
+          onMenu={menu}
+          onRename={rename}
+          suppress={suppress}
+        />
       ))}
     </div>
   );
 }
 
-function OutlineNode({ item, depth, tab }: { item: OutlineItem; depth: number; tab: Tab }) {
+function OutlineNode(props: {
+  item: OutlineItem;
+  path: Path;
+  tab: Tab;
+  drop: Drop | null;
+  dragging: Path | null;
+  onDrag: (path: Path, e: PointerEvent) => void;
+  onMenu: (path: Path, e: MouseEvent) => void;
+  onRename: (path: Path, title: string) => void;
+  suppress: { current: boolean };
+}) {
+  const { item, path, tab, drop } = props;
+  const depth = path.length - 1;
   const [open, setOpen] = useState(depth === 0 && (item.k?.length ?? 0) < 12);
   const kids = item.k ?? [];
+  const edit = renaming.value;
+  const editing = edit?.tab === tab && samePath(edit.path, path);
+  const mark = drop && samePath(drop.path, path) ? `drop-${drop.where}` : "";
+  const dragged = props.dragging && (samePath(props.dragging, path) || isInside(path, props.dragging));
   return (
     <>
-      <button
-        class="outline-row"
+      <div
+        role="button"
+        tabIndex={0}
+        class={`outline-row ${mark} ${dragged ? "dragged" : ""}`}
+        data-opath={path.join(".")}
         style={{ paddingLeft: depth * 14 }}
-        onClick={() => item.p >= 0 && A.goToSource(item.p, item.y)}
+        onPointerDown={(e) => props.onDrag(path, e)}
+        onClick={() => !props.suppress.current && !editing && item.p >= 0 && A.goToSource(item.p, item.y)}
+        onDblClick={() => tab.info.value?.isPdf && (renaming.value = { tab, path })}
+        onContextMenu={(e) => props.onMenu(path, e)}
+        onKeyDown={(e) => {
+          if (e.key === "F2" && tab.info.value?.isPdf) renaming.value = { tab, path };
+        }}
         title={item.t}
       >
         <span
@@ -522,12 +748,37 @@ function OutlineNode({ item, depth, tab }: { item: OutlineItem; depth: number; t
         >
           {kids.length ? open ? <ChevronDown size={14} /> : <ChevronRight size={14} /> : null}
         </span>
-        <span class="t" style={{ fontWeight: depth === 0 ? 600 : 400 }}>
-          {item.t || "Untitled"}
-        </span>
-        {item.p >= 0 && <span class="pn">{item.p + 1}</span>}
-      </button>
-      {open && kids.map((k, i) => <OutlineNode key={i} item={k} depth={depth + 1} tab={tab} />)}
+        {editing ? (
+          <input
+            class="inp sm outline-edit"
+            value={item.t}
+            ref={(el) => {
+              if (el && el !== document.activeElement)
+                requestAnimationFrame(() => {
+                  el.focus();
+                  el.select();
+                });
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") props.onRename(path, (e.target as HTMLInputElement).value);
+              if (e.key === "Escape") renaming.value = null;
+            }}
+            onBlur={(e) => props.onRename(path, (e.target as HTMLInputElement).value)}
+          />
+        ) : (
+          <span class="t" style={{ fontWeight: depth === 0 ? 600 : 400 }}>
+            {item.t || "Untitled"}
+          </span>
+        )}
+        {item.p >= 0 && <span class="pn">{pageName(tab, item.p)}</span>}
+      </div>
+      {open &&
+        kids.map((k, i) => (
+          <OutlineNode key={i} {...props} item={k} path={[...path, i]} />
+        ))}
     </>
   );
 }

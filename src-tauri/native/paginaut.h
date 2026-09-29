@@ -133,6 +133,15 @@ int fo_stamp_image(fo_ctx *c, fo_stamp *st, const unsigned char *data, size_t le
 int fo_stamp_end(fo_ctx *c, fo_stamp *st, const char *kind, int behind);
 void fo_stamp_drop(fo_ctx *c, fo_stamp *st);
 int fo_stamp_remove(fo_ctx *c, fo_page *p, const char *kind);
+/* Bookmarks: clear, then add (parent: an object number from an earlier add, or 0
+ * for the top level; returns the new bookmark's object number). */
+int fo_pdf_outline_clear(fo_ctx *c, fo_doc *d);
+int fo_pdf_outline_add(fo_ctx *c, fo_doc *d, int parent, const char *title, int page, float y);
+/* Page label ranges as JSON; replacing them (styles 'D','r','R','a','A' or 0, prefixes joined by '\n'). */
+char *fo_pdf_page_label_ranges_json(fo_ctx *c, fo_doc *d);
+int fo_pdf_set_page_labels(fo_ctx *c, fo_doc *d, const int *starts, const char *styles, const char *prefixes, const int *firsts, int count);
+/* Sets a metadata entry ("info:Title"…); an empty value removes it. */
+int fo_set_metadata(fo_ctx *c, fo_doc *d, const char *key, const char *value);
 /* A new, empty PDF in memory. */
 fo_doc *fo_pdf_new(fo_ctx *c);
 /* Adds a bookmark titled `title` at the end of d's outline, pointing at page

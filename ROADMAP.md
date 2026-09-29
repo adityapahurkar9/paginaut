@@ -289,8 +289,12 @@ Hindi are shaped properly. Placed on the page as shown (turned pages get them at
       glyphs have no text mapping); they look right
 
 Document details:
-- [ ] Bookmarks editor: add, rename, drag to reorder, build from headings
-- [ ] Properties (title, author, subject, keywords) and page labels
+- [x] Bookmarks editor in the Outline panel: + Bookmark (for the page you're on; selected text becomes the title),
+      rename (F2 or double-click), drag to reorder or nest, right-click to point at the current page, add inside,
+      move in/out, delete. Each change is one undo step; pages show their labels
+- [ ] Build bookmarks from headings (large or bold lines)
+- [x] Document properties (Ctrl+D): title, author, subject, keywords; file, kind, size, maker, dates shown
+- [x] Page labels dialog: ranges (from page, 1/i/I/a/A or none, prefix, start at) with a preview; remove all
 
 Security:
 - [ ] Protect: password to open (AES-256) and a permissions password (printing, copying, editing)

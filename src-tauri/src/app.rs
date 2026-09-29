@@ -66,6 +66,39 @@ pub async fn merge_files(state: State<'_, AppState>, sources: Vec<InsertSource>,
     blocking(move || engine.merge(sources, fit, bookmarks, &target)).await
 }
 
+/// Replaces the bookmarks (one undo step).
+#[tauri::command]
+pub async fn set_outline(state: State<'_, AppState>, doc: DocId, items: Vec<crate::engine::mupdf::OutlineNode>) -> Res<()> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.set_outline(&items)).await
+}
+
+#[tauri::command]
+pub async fn page_label_ranges(state: State<'_, AppState>, doc: DocId) -> Res<Vec<crate::engine::mupdf::LabelRange>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.page_label_ranges()).await
+}
+
+/// Replaces the page labels (one undo step).
+#[tauri::command]
+pub async fn set_page_labels(state: State<'_, AppState>, doc: DocId, ranges: Vec<crate::engine::mupdf::LabelRange>) -> Res<()> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.set_page_labels(&ranges)).await
+}
+
+#[tauri::command]
+pub async fn properties(state: State<'_, AppState>, doc: DocId) -> Res<crate::engine::Properties> {
+    let engine = state.engine.clone();
+    blocking(move || Ok(engine.doc(doc)?.properties())).await
+}
+
+/// Sets title, author, subject and keywords (one undo step).
+#[tauri::command]
+pub async fn set_properties(state: State<'_, AppState>, doc: DocId, props: crate::engine::Properties) -> Res<()> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.set_properties(&props)).await
+}
+
 /// Stamps pages (page numbers, headers, watermarks) as one undo step.
 #[tauri::command]
 pub async fn stamp_pages(state: State<'_, AppState>, doc: DocId, pages: Vec<crate::engine::StampPage>, kind: String, behind: bool, replace: bool) -> Res<usize> {
