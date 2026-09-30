@@ -10,6 +10,8 @@ import { activeTab, baseName, showToast, toast, updateSettings, type Tab } from 
 import { menu, openMenuAt } from "./ui/Toolbar";
 import type { MenuItem } from "./ui/Overlays";
 import { testHook } from "./ui/PagesUI";
+import type { Block } from "./reflow/model";
+import { readAloud } from "./speech";
 
 const stemOf = (tab: Tab) => baseName(tab.path).replace(/\.[^.]+$/, "");
 const srcOf = (tab: Tab, view: number) => tab.edits.value?.order[view] ?? view;
@@ -240,6 +242,48 @@ window.addEventListener("contextmenu", (e) => {
   if (!pt) return;
   e.preventDefault();
   void pageMenu(tab, view, pt, e.clientX, e.clientY);
+});
+
+// ---------------------------------------------------------------- Read and Book modes' right-click menu
+
+type Pic = Extract<Block, { k: "img" }>;
+
+/** How much of the smaller of two boxes the other covers (0–1). */
+function overlap(a: [number, number, number, number], b: [number, number, number, number]) {
+  const w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]), h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+  if (w <= 0 || h <= 0) return 0;
+  const area = (r: typeof a) => Math.max(1, (r[2] - r[0]) * (r[3] - r[1]));
+  return (w * h) / Math.min(area(a), area(b));
+}
+
+/** A right-click in Read or Book mode: a table's menu on a table (they're shown as pictures of the page), and
+ * reading aloud from the paragraph clicked. */
+async function reflowMenu(tab: Tab, target: HTMLElement, x: number, y: number) {
+  const items: MenuItem[] = [];
+  const sel = getSelection()?.toString() ?? "";
+  if (sel.trim()) items.push({ label: "Copy", hint: "Ctrl+C", run: () => void navigator.clipboard.writeText(sel) }, { sep: true });
+  const pic = (target.closest("figure.rf-img") as (HTMLElement & { _pic?: Block }) | null)?._pic;
+  if (pic?.k === "img") {
+    const p = pic as Pic;
+    const tables = await tablesOf(tab, p.src);
+    const table = tables.map((t) => [t, overlap(t.r, p.box)] as const).filter(([, o]) => o > 0.5).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (table) items.push(...tableItems(tab, p.page, table), { sep: true });
+    else if (p.kind === "table" || p.kind === "figure")
+      items.push({ label: "Read as a table…", run: () => (tableDialog.value = { tab, view: p.page, area: p.box, table: null }) }, { sep: true });
+  }
+  const para = target.closest<HTMLElement>("[data-b]");
+  if (para && !target.closest("figure")) items.push({ label: "Read aloud from here", run: () => void readAloud(tab, Number(para.dataset.b)) });
+  while (items.length && "sep" in items[items.length - 1]) items.pop();
+  if (items.length) openMenuAt(x, y, items, 260);
+}
+
+window.addEventListener("contextmenu", (e) => {
+  const tab = activeTab.value;
+  const view = tab?.reflowView;
+  const t = e.target as HTMLElement;
+  if (!tab || !view || tab.status.value !== "ready" || !view.el.contains(t)) return;
+  e.preventDefault();
+  void reflowMenu(tab, t, e.clientX, e.clientY);
 });
 
 // ---------------------------------------------------------------- any area

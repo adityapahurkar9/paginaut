@@ -349,7 +349,9 @@ Extract content (right-click the item on the page; Tools › Organize; command p
       when two of the finder's cells overlapped). The finder's tables now place letters like tables you draw
       lines for. "Join heading lines" keeps such rows above the joined column headings; the preview and Copy
       show them spanning (colspan), Excel merges them
-- [ ] Tables, later: the same menu in Read/Book mode
+- [x] The same menu in Read and Book modes (0.8.4): right-click a table there (tables show as pictures of the page)
+      for Copy table, Save as Excel/CSV, Check and adjust columns; "Read as a table…" on other pictures; "Read aloud
+      from here" on a paragraph; Copy for selected text
 - [x] Any area, charts and drawings: "Select an area" (right-click menu, Organize), drag a box: copy its text,
       copy as picture, save as PDF (vector; the rest of the page is hidden, not removed), SVG (vector, text as
       outlines) or PNG at 150/300/600 dpi; turned as the page is shown
