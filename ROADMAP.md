@@ -46,7 +46,7 @@ Deferred:
       the button; planned with Phase 8 polish. (Win+Z already opens Snap Layouts.)
 - [ ] Faster JPEG decoding for heavy scans (first sharp page on the 914 MB scan: 0.31 s vs 0.3 s target).
       Needs libjpeg-turbo built into MuPDF (extra build tools: NASM, CMake).
-- [ ] Drag-and-drop from Explorer: built, needs a manual check (can't be automated from here)
+- [x] Drag-and-drop from Explorer (checked by hand in 0.8.1)
 
 ## Phase 2.5: Read and Book modes (reflowed text)
 Four views: Single · Double (cover on its own optional) · Read · Book.
@@ -73,7 +73,8 @@ Four views: Single · Double (cover on its own optional) · Read · Book.
 - [x] Better joining: list items and headings the engine splits in two, paragraphs split with no gap between them
 - [x] Page overlay layers in the viewer (used by Fix layout; forms and annotations build on them)
 Later (after OCR, Phase 5):
-- [ ] Read aloud on top of the same text (natural offline voices, start marker, skip headers/footers)
+- [x] Read aloud (0.8.2) on the same text, so running headers, footers and page numbers are skipped; see Phase 8
+- [ ] Natural offline voices (Piper) as downloadable add-ons: waiting on the go-ahead to download voice models
 
 ## Phase 3: Form filling (done)
 - [x] Engine: fields listed per page (text, checkbox, radio, dropdown, list, signature), values set through MuPDF so
@@ -138,7 +139,11 @@ DSC digital signatures (built; needs a check with a real token):
       after signing, a changed byte (caught), open signed version. Developers can offer that certificate in the app by
       starting it with PAGINAUT_TEST_CERT=1; normal starts never show it
 - [ ] Check with your DSC token: sign, PIN in the token's window, open the result in Adobe Reader
-- [ ] Later: trusted timestamp (needs internet), revocation check (needs internet), .pfx certificate files
+- [x] 0.8.2: certificate files (.pfx/.p12, password asked, key kept in memory only), trusted timestamps (RFC 3161,
+      on by default, DigiCert's service unless changed; a failed timestamp offers signing without one), and "Check
+      whether it was revoked" on a signature (asks the certificate's authority online). Signing in place goes
+      through a copy, so a cancelled PIN or an unreachable timestamp service never leaves an empty signature in
+      the file
 
 Also from testing:
 - [x] Left/Right arrows go to the next/previous page in Single and Double views (a spread in Double) and a screenful
@@ -197,12 +202,16 @@ at a time in the whole process.
       be removed from the dialog
 - [x] Models are read through our own wide-character file reader, so Windows user names with non-English letters work
 Later:
-- [ ] Sideways pages: our Tesseract build has no orientation detection (it needs the legacy engine); rotate such pages
-      first. A try-each-rotation fallback on low confidence could come later
+- [x] Sideways and upside-down pages (0.8.2): a page that reads poorly is tried at each quarter turn (its middle
+      only); a clear winner is read in full and its text turned back onto the page, so search and selection sit on
+      the words. Lines Tesseract reads vertically by itself don't count (they'd misplace the text). The bar says
+      how many were turned and offers "Turn upright". No extra model; upright pages cost nothing more (4 turned
+      test pages in 7 s)
 - [x] Marathi check: Maharashtra Times article printed to PDF (8 pages, text as outlines): Marathi + English, 1,789
       words in 1.9 s, 91% mean confidence on page 2; Marathi search finds the words. Few misreads (a large bold
       heading dropped words); Best models may help
-- [ ] Recognise again with other settings (today: Remove recognized text, then Recognize text)
+- [x] Recognize again (0.8.2): the dialog offers to read pages recognized before again, with other languages or
+      Best accuracy, replacing their text in the same undo step; "Recognize again…" on the finished bar
 ## Phase 6: Tools suite, in three parts, then Redact
 Installer versions follow the phases: part 6.1 = 0.6.10, 6.2 = 0.6.20, 6.3 = 0.6.30, 6.5 = 0.6.50; fixes in between
 count up from there (0.6.11, 0.6.12…).
@@ -292,7 +301,9 @@ Document details:
 - [x] Bookmarks editor in the Outline panel: + Bookmark (for the page you're on; selected text becomes the title),
       rename (F2 or double-click), drag to reorder or nest, right-click to point at the current page, add inside,
       move in/out, delete. Each change is one undo step; pages show their labels
-- [ ] Build bookmarks from headings (large or bold lines)
+- [x] Bookmarks from headings (0.8.2; Outline › From headings, command palette): Read mode's headings nested by
+      size, then Section/Part/Chapter, ALL CAPS, the rest; contents-page lines, misread text and bold pieces of
+      sentences left out; replaces existing bookmarks after asking, one undo step (a 550-page prospectus: 1,208)
 - [x] Document properties (Ctrl+D): title, author, subject, keywords; file, kind, size, maker, dates shown
 - [x] Page labels dialog: ranges (from page, 1/i/I/a/A or none, prefix, start at) with a preview; remove all
 
@@ -324,8 +335,9 @@ Extract content (right-click the item on the page; Tools › Organize; command p
       column widths as on the page) or CSV (UTF-8, Marathi safe). The table dialog shows it over its picture: drag
       the column lines, click to add one, double-click to remove; the columns are then exactly those. Heading lines
       are joined into one row (years stay headings)
-- [ ] Tables, later: rows as adjustable as columns; group headings spread over the columns they span; percentages
-      as numbers; the same menu in Read/Book mode
+- [x] Tables to Excel: percentages as numbers (0.8.2: "12.5%" is 0.125 shown as 12.50%; "(3%)" is -3%)
+- [ ] Tables, later: rows as adjustable as columns; group headings spread over the columns they span; the same menu
+      in Read/Book mode
 - [x] Any area, charts and drawings: "Select an area" (right-click menu, Organize), drag a box: copy its text,
       copy as picture, save as PDF (vector; the rest of the page is hidden, not removed), SVG (vector, text as
       outlines) or PNG at 150/300/600 dpi; turned as the page is shown
@@ -589,3 +601,24 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       it no longer finds; earlier update installers are cleared before a download; the add-on list's OCR
       catalogue is shared, not copied per lookup; release notes reach GitHub through a file; the tab's grouping
       comes from the app
+
+### 0.8.2: read aloud, better signatures, OCR and small tools
+- [x] Read aloud with the voices installed in Windows (WebView2's own speech has none, so the text is spoken
+      natively through Windows.Media.SpeechSynthesis, with each word's time). View › Read aloud, the Reading pane,
+      the command palette, Ctrl+Shift+U; starts at the selected text or where you are. Read and Book modes tint
+      the paragraph and mark the word, keeping it in view (not for a few seconds after you move the view
+      yourself); Book mode turns its pages; the page view follows the pages. A bar with pause (Ctrl+Shift+Space),
+      previous/next paragraph, stop, voice and speed; a click on a paragraph carries on from there. With
+      Windows' voice chosen, a paragraph in another script (Hindi, Arabic…) gets an installed voice for it.
+      The next paragraph is made while one plays; a closed tab, new text or layout corrections stop it
+- [x] Signatures: .pfx files, trusted timestamps, revocation check (see Phase 4)
+- [x] OCR: sideways pages, Recognize again (see Phase 5)
+- [x] Bookmarks from headings; Excel percentages (see Phase 6)
+- [x] Fix: MuPDF writes 0.5 as ".5" (compact PDF numbers), which isn't JSON: Read mode never finished on a
+      document with text under 1 pt, and search matches, links, bookmarks, fields and tables could fail the same
+      way near a page's edge. JSON goes through json_printf now; Read mode also leaves out a page it can't read
+      rather than waiting forever
+- [x] Review fixes: speech ends COM on the shared worker threads after each call; a click on Book mode's
+      page-turn edges doesn't move the reading; turning a page doesn't stop it; a removed voice falls back to the
+      script match; voice/speed changes while paused stay paused; the Recognize dialog counts recognized pages
+      from the page objects (no page loads under the document lock); Excel keeps "12.0%"'s decimals
