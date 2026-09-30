@@ -145,7 +145,9 @@ class Reader {
     if (!c) {
       const { voice, rate } = speechPrefs();
       const text = this.text(this.pieces[i]);
-      c = api.ttsSpeak(text, voice || voiceFor(text), rate).then((buf) => {
+      // A voice chosen before and since removed from Windows: as if none was chosen.
+      const chosen = voice && voices.value?.some((v) => v.id === voice) ? voice : "";
+      c = api.ttsSpeak(text, chosen || voiceFor(text), rate).then((buf) => {
         const n = new DataView(buf).getUint32(0, true);
         const words = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n))) as Word[];
         return { url: URL.createObjectURL(new Blob([new Uint8Array(buf, 4 + n)], { type: "audio/wav" })), words };
@@ -283,14 +285,20 @@ class Reader {
     void this.play(j);
   }
 
-  /** The voice or speed changed: carry on from the word being read. */
+  /** The voice or speed changed: carry on from the word being read (still paused, if it was). */
   restart() {
     const c = this.pieces[this.i];
     const clip = this.clips.get(this.i);
     this.drop();
     const again = (at: number) => {
-      if (at > c.from && at < c.to) this.pieces.splice(this.i, 1, { ...c, to: at }, { ...c, from: at });
-      void this.play(at > c.from && at < c.to ? this.i + 1 : this.i);
+      const split = at > c.from && at < c.to;
+      if (split) this.pieces.splice(this.i, 1, { ...c, to: at }, { ...c, from: at });
+      const next = split ? this.i + 1 : this.i;
+      if (!speaking.value?.paused) return void this.play(next);
+      // Resuming makes the new clip (see resume).
+      this.i = next;
+      this.word = -1;
+      this.audio.removeAttribute("src");
     };
     if (!clip || this.word < 0) return again(c.from);
     void clip.then((x) => again(c.from + x.words[this.word].start), () => again(c.from));
@@ -384,7 +392,8 @@ export function setSpeech(patch: Partial<{ voice: string; rate: number }>) {
   reader?.restart();
 }
 
-const madeFrom = (t: Tab): unknown[] => [t.info.value?.docId, t.edits.value, t.textRev.value, overridesOf(t).value];
+// The page order, not the edits: turning a page leaves its text as it was.
+const madeFrom = (t: Tab): unknown[] => [t.info.value?.docId, t.edits.value?.order, t.textRev.value, overridesOf(t).value];
 
 // A closed tab, a changed document or new layout corrections: stop (the text read no longer matches).
 effect(() => {

@@ -406,6 +406,14 @@ impl Document {
         with_kind(self.1, |c| unsafe { fo_is_pdf(c, self.0) } != 0)
     }
 
+    /// Pages carrying text Paginaut recognised (read from the page objects).
+    pub fn ocr_layer_count(&self) -> Result<usize> {
+        with_kind(self.1, |c| match unsafe { fo_ocr_layer_count(c, self.0) } {
+            n if n < 0 => Err(last_error(c)),
+            n => Ok(n as usize),
+        })
+    }
+
     pub fn page_count(&self) -> Result<usize> {
         with_kind(self.1, |c| {
             let n = unsafe { fo_count_pages(c, self.0) };

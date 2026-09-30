@@ -7360,6 +7360,35 @@ int fo_ocr_apply(fo_ctx *c, fo_page *p, const char *content, size_t len, int *fo
 	return 0;
 }
 
+/* Pages carrying a text layer made by fo_ocr_apply, read from the page objects (no page is loaded). */
+int fo_ocr_layer_count(fo_ctx *c, fo_doc *d)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	int n = 0;
+	if (!pdf)
+		return 0;
+	fz_try(CTX)
+	{
+		int count = pdf_count_pages(CTX, pdf);
+		for (int i = 0; i < count; i++)
+		{
+			pdf_obj *contents = pdf_dict_get(CTX, pdf_lookup_page_obj(CTX, pdf, i), PDF_NAME(Contents));
+			for (int k = 0; k < pdf_array_len(CTX, contents); k++)
+				if (is_ocr_stream(CTX, pdf_array_get(CTX, contents, k)))
+				{
+					n++;
+					break;
+				}
+		}
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return n;
+}
+
 /* 1 if the page carries a text layer made by fo_ocr_apply. */
 int fo_ocr_has_layer(fo_ctx *c, fo_page *p)
 {

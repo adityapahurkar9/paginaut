@@ -217,7 +217,7 @@ fn percent(s: &str) -> Option<(String, bool)> {
         (false, false) => format!("{whole}.{frac}"),
     };
     let v = if minus && v != "0" { format!("-{v}") } else { v };
-    Some((v, digits.contains('.')))
+    Some((v, t.contains('.')))
 }
 
 pub(crate) fn xml(s: &str) -> String {
@@ -336,6 +336,7 @@ mod tests {
         assert_eq!(percent("-150%"), Some(("-1.5".into(), false)));
         assert_eq!(percent("1,200%"), Some(("12".into(), false)));
         assert_eq!(percent("0%"), Some(("0".into(), false)));
+        assert_eq!(percent("12.0%"), Some(("0.12".into(), true)));
         assert_eq!(percent("12"), None);
         assert_eq!(percent("abc%"), None);
         assert_eq!(col_name(0), "A");

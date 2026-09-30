@@ -287,6 +287,7 @@ int fo_ocr_ink(fo_ctx *c, fo_list *l, const float bounds[4]);
 char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bounds[4], float dpi, po_tess *t, fo_cookie *k, int redo, int *aborted);
 int fo_ocr_apply(fo_ctx *c, fo_page *p, const char *content, size_t len, int *font_num);
 int fo_ocr_has_layer(fo_ctx *c, fo_page *p);
+int fo_ocr_layer_count(fo_ctx *c, fo_doc *d);
 
 /* Compare: a page's words in MuPDF's order, JSON [["word",x0,y0,x1,y1,flags],...] relative to the page;
  * flags: 1 first of a block, 2 first of a line, 4 ends in a hyphen joining it to the next line's first word,

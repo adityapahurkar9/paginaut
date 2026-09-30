@@ -227,7 +227,10 @@ export function ReflowHost({ tab }: { tab: Tab }) {
       if (!b || b.k !== "img" || getSelection()?.toString()) {
         // While reading aloud: a click on a paragraph carries on from there.
         const at = (e.target as HTMLElement).closest<HTMLElement>("[data-b]");
-        if (!fig && at && speaking.value?.tab === tab && !getSelection()?.toString()) readFrom(tab, Number(at.dataset.b));
+        // Book mode's edges turn the page (see BookView.onPointerDown): not a place to read from.
+        const book = el.querySelector(".rf-book")?.getBoundingClientRect();
+        const turning = !!book && (e.clientX < book.left + book.width * 0.14 || e.clientX > book.right - book.width * 0.14);
+        if (!fig && at && !turning && speaking.value?.tab === tab && !getSelection()?.toString()) readFrom(tab, Number(at.dataset.b));
         return;
       }
       e.stopPropagation();

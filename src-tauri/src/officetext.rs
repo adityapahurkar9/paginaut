@@ -983,6 +983,7 @@ pub fn column_name(mut n: u32) -> String {
 mod tests {
     use super::*;
 
+    #[allow(clippy::approx_constant)] // Excel's General format, not pi
     #[test]
     fn formats_numbers_like_excel() {
         assert_eq!(format_value(1234.5, "#,##0.00", false).0, "1,234.50");

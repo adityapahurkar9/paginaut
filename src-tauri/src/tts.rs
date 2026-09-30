@@ -7,7 +7,7 @@ use windows::core::{Interface, HSTRING};
 use windows::Media::Core::SpeechCue;
 use windows::Media::SpeechSynthesis::{SpeechSynthesizer, VoiceGender};
 use windows::Storage::Streams::DataReader;
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
 #[derive(Serialize)]
 pub struct Voice {
@@ -27,10 +27,17 @@ pub struct Word {
     pub at: f64,
 }
 
-fn init() {
-    // WinRT needs the thread in an apartment; the blocking pool's threads may not be yet. Already being in one
-    // (either kind) is fine for the speech classes, which are agile.
-    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+/// Runs `f` with COM started on this thread (WinRT needs it), and ended again after: the blocking pool's threads
+/// are shared, and other work on them starts its own apartment. A thread already in one (either kind) is fine
+/// for the speech classes, which are agile. Everything WinRT is released inside `f`.
+fn with_com<R>(f: impl FnOnce() -> R) -> R {
+    // SAFETY: balanced below; CoUninitialize only after a successful CoInitializeEx (S_OK or S_FALSE).
+    let started = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+    let r = f();
+    if started {
+        unsafe { CoUninitialize() };
+    }
+    r
 }
 
 fn err(e: windows::core::Error) -> String {
@@ -38,7 +45,10 @@ fn err(e: windows::core::Error) -> String {
 }
 
 pub fn voices() -> Result<Vec<Voice>, String> {
-    init();
+    with_com(voices_now)
+}
+
+fn voices_now() -> Result<Vec<Voice>, String> {
     let default = SpeechSynthesizer::DefaultVoice().and_then(|v| v.Id()).map(|s| s.to_string()).unwrap_or_default();
     let mut out = Vec::new();
     for v in SpeechSynthesizer::AllVoices().map_err(err)? {
@@ -57,7 +67,10 @@ pub fn voices() -> Result<Vec<Voice>, String> {
 /// Speaks `text` with the voice `voice` (its id; the Windows default if empty or gone) at `rate` (1 = normal,
 /// 0.5–3). Returns the WAV and its words.
 pub fn speak(text: &str, voice: &str, rate: f64) -> Result<(Vec<u8>, Vec<Word>), String> {
-    init();
+    with_com(|| speak_now(text, voice, rate))
+}
+
+fn speak_now(text: &str, voice: &str, rate: f64) -> Result<(Vec<u8>, Vec<Word>), String> {
     let synth = SpeechSynthesizer::new().map_err(err)?;
     if !voice.is_empty() {
         if let Some(v) = SpeechSynthesizer::AllVoices().map_err(err)?.into_iter().find(|v| v.Id().map(|i| i == voice).unwrap_or(false)) {

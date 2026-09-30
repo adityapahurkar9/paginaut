@@ -333,7 +333,7 @@ fn tokens(s: &Side, n: &Norm, skip_edges: bool) -> Vec<Tok> {
                         let next = &words[i + 1];
                         let lower = next.0.chars().next().is_some_and(|c| c.is_lowercase());
                         i += 1;
-                        (if lower { format!("{}{}", w.0.trim_end_matches(|c| "-‐‑­".contains(c)), next.0) } else { format!("{}{}", w.0, next.0) }, Some(next.r()))
+                        (if lower { format!("{}{}", w.0.trim_end_matches(|c| "-\u{2010}\u{2011}\u{ad}".contains(c)), next.0) } else { format!("{}{}", w.0, next.0) }, Some(next.r()))
                     } else {
                         (w.0.clone(), None)
                     };

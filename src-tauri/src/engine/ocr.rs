@@ -359,15 +359,7 @@ impl Doc {
 
     /// Pages carrying text Paginaut recognised.
     pub fn ocr_layer_pages(&self) -> Result<usize, String> {
-        let mut inner = self.inner.lock();
-        if !inner.doc.is_pdf() {
-            return Ok(0);
-        }
-        let mut n = 0;
-        for i in 0..self.page_count() {
-            n += self.page(&mut inner, i)?.has_ocr_layer() as usize;
-        }
-        Ok(n)
+        self.inner.lock().doc.ocr_layer_count()
     }
 
     /// Removes the text layers Paginaut added (one undo step). Returns the pages changed.

@@ -73,6 +73,7 @@ fn main() {
     // Recognising again, replacing: every page is read again and its text swapped, not added to.
     let chars = |d: &paginaut_lib::engine::Doc| (0..pages).map(|i| d.text(i).unwrap().lock().char_count()).sum::<usize>();
     let before = chars(&d);
+    assert_eq!(d.ocr_layer_pages().unwrap(), pages, "every page has a recognized layer");
     let replaced = run(&engine, info.doc_id, pages, &langs, true);
     let after = chars(&d);
     println!("replace: chars {before} -> {after}, '{word}' in memory: {}", count(&engine, info.doc_id, word));
