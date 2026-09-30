@@ -6,13 +6,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
 import { isDark, settings, showToast, updateSettings } from "../store";
 import {
-  allThemes, chooseTheme, contrastNotes, currentTheme, deleteCustom, fitAdjust, fitProblems, installedFonts, loadFontLists, paperNote, PRESETS, previewTheme,
+  allThemes, chooseTheme, contrastNotes, currentTheme, deleteCustom, fitAdjust, fitProblems, installedFonts, loadFontLists, lookFor, paperNote, PRESETS, previewTheme,
   saveCustom, themeFromPicture, userFonts, type Look, type Palette, type Theme,
 } from "../themes";
 import { testHook } from "./PagesUI";
-import { removeSkin, setSkin, skinFromPicture, skinNotes, skinThumb } from "../skin";
+import { removeSkin, setSkin, skinFromBytes, skinFromPicture, skinNotes, skinThumb } from "../skin";
 
-const lookOf = (t: Theme) => ((isDark.value ? t.dark : t.light) ?? t.dark ?? t.light)!;
+const lookOf = (t: Theme) => lookFor(t, isDark.value);
 const modesOf = (t: Theme) => (t.light && t.dark ? "Light and dark" : t.dark ? "Dark only" : "Light only");
 
 /** The CSS font list of a theme's font setting (a file's font shows as its name here). */
@@ -53,8 +53,8 @@ export function ThemesTab() {
   const s = settings.value;
   const cur = currentTheme();
   const [draft, setDraft] = useState<Theme | null>(null);
-  // The picture a new theme's colours came from (it can be the skin too).
-  const [pic, setPic] = useState<string | null>(null);
+  // The picture a new theme's colours came from, as read (it can be the skin too, without reading it again).
+  const [pic, setPic] = useState<ArrayBuffer | null>(null);
   // Leaving the tab (or Settings) ends a preview.
   useEffect(() => () => void (previewTheme.value = null), []);
   const single = !cur.light || !cur.dark;
@@ -88,7 +88,7 @@ export function ThemesTab() {
           <button class="btn sm" onClick={() => (setPic(null), setDraft(copyOf(cur, !cur.custom)))}>
             {cur.custom ? `Edit ${cur.name}…` : "Make your own palette…"}
           </button>
-          <button class="btn sm" onClick={() => void fromPicture((t, path) => (setPic(path), setDraft(t)))}>
+          <button class="btn sm" onClick={() => void fromPicture((t, bytes) => (setPic(bytes), setDraft(t)))}>
             Make one from a picture…
           </button>
           {cur.custom && (
@@ -98,7 +98,7 @@ export function ThemesTab() {
           )}
         </div>
       )}
-      {draft && <Editor key={draft.id} start={draft} picture={pic} setPicture={setPic} onDone={() => setDraft(null)} />}
+      {draft && <Editor key={draft.id} start={draft} picture={pic} setPicture={setPic} onDone={() => (setPic(null), setDraft(null))} />}
       <SkinSection />
     </>
   );
@@ -106,7 +106,7 @@ export function ThemesTab() {
 
 function SkinSection() {
   const sk = settings.value.skin;
-  const notes = skinNotes();
+  const notes = skinNotes.value;
   const choose = async () => {
     const path = await pickPicture("A photo for the skin");
     if (!path) return;
@@ -172,8 +172,10 @@ function copyOf(t: Theme, asNew: boolean): Theme {
   const c: Theme = JSON.parse(JSON.stringify(t));
   if (asNew) {
     c.id = `custom-${Date.now().toString(36)}`;
-    const mine = (settings.value.customThemes ?? []).filter((x) => x.name.startsWith("My palette")).length;
-    c.name = mine ? `My palette ${mine + 1}` : "My palette";
+    // The next free number: "My palette", then "My palette 2", 3… after the highest in use.
+    const used = (settings.value.customThemes ?? []).map((x) => /^My palette(?: (\d+))?$/.exec(x.name)).filter((m) => m).map((m) => +(m![1] ?? 1));
+    const top = used.length ? Math.max(...used) : 0;
+    c.name = top ? `My palette ${top + 1}` : "My palette";
     c.blurb = "Your own colours";
     c.hc = t.hc;
   }
@@ -181,12 +183,13 @@ function copyOf(t: Theme, asNew: boolean): Theme {
   return c;
 }
 
-async function fromPicture(done: (t: Theme, path: string) => void) {
+async function fromPicture(done: (t: Theme, bytes: ArrayBuffer) => void) {
   const path = await pickPicture("A picture to take colours from");
   if (!path) return;
   try {
     const name = path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "");
-    done(await themeFromPicture(await api.readPicture(path), name), path);
+    const bytes = await api.readPicture(path);
+    done(await themeFromPicture(bytes, name), bytes);
   } catch (e) {
     showToast(`Couldn't use that picture: ${e instanceof Error ? e.message : e}`, 5000);
   }
@@ -201,7 +204,7 @@ const COLOURS: [keyof Palette, string][] = [
   ["acc", "Accent"],
 ];
 
-function Editor({ start, picture, setPicture, onDone }: { start: Theme; picture: string | null; setPicture: (p: string | null) => void; onDone: () => void }) {
+function Editor({ start, picture, setPicture, onDone }: { start: Theme; picture: ArrayBuffer | null; setPicture: (p: ArrayBuffer | null) => void; onDone: () => void }) {
   const [t, setT] = useState<Theme>(start);
   const [asSkin, setAsSkin] = useState(false);
   const [mode, setMode] = useState<"light" | "dark">(isDark.value && start.dark ? "dark" : start.light ? "light" : "dark");
@@ -229,7 +232,7 @@ function Editor({ start, picture, setPicture, onDone }: { start: Theme; picture:
   const save = () => {
     previewTheme.value = null;
     saveCustom({ ...t, name: t.name.trim() || "My palette" });
-    if (picture && asSkin) skinFromPicture(picture).catch((e) => showToast(`Couldn't use that picture as the skin: ${e instanceof Error ? e.message : e}`, 5000));
+    if (picture && asSkin) skinFromBytes(picture).catch((e) => showToast(`Couldn't use that picture as the skin: ${e instanceof Error ? e.message : e}`, 5000));
     onDone();
   };
   const cancel = () => {
@@ -251,7 +254,7 @@ function Editor({ start, picture, setPicture, onDone }: { start: Theme; picture:
     <div class="theme-edit" onKeyDown={(e) => e.stopPropagation()}>
       <div class="theme-row">
         <input class="inp" style={{ flex: 1 }} value={t.name} aria-label="Theme name" onInput={(e) => setT({ ...t, name: (e.target as HTMLInputElement).value })} />
-        <button class="btn sm" onClick={() => void fromPicture((p, path) => (setPicture(path), setT({ ...p, id: t.id, name: t.name, display: t.display, scope: t.scope })))}>
+        <button class="btn sm" onClick={() => void fromPicture((p, bytes) => (setPicture(bytes), setT({ ...p, id: t.id, name: t.name, display: t.display, scope: t.scope })))}>
           Colours from a picture…
         </button>
       </div>

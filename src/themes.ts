@@ -28,19 +28,23 @@ const rgba = (c: string, a: number) => {
   return `rgba(${r}, ${g}, ${b}, ${a})`;
 };
 
-function luminance(c: string) {
+/** WCAG relative luminance of a colour, 0–1. */
+export function luminanceRgb([r, g, b]: Rgb) {
   const f = (v: number) => {
     const s = v / 255;
     return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
   };
-  const [r, g, b] = parse(c);
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+
+/** WCAG contrast ratio, 1–21, of two luminances. */
+export function contrastOfLuminances(a: number, b: number) {
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
 /** WCAG contrast ratio, 1–21. */
 export function contrast(a: string, b: string) {
-  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
-  return (x + 0.05) / (y + 0.05);
+  return contrastOfLuminances(luminanceRgb(parse(a)), luminanceRgb(parse(b)));
 }
 
 export function hsl(h: number, s: number, l: number) {
@@ -399,17 +403,21 @@ function darkPaperOf(t: Theme): Paper {
 /** The theme being shown before it's chosen (the editor's preview). */
 export const previewTheme = signal<Theme | null>(null);
 
+/** A theme's light or dark colours (its only ones, if it has one). */
+export function lookFor(t: Theme, dark: boolean): Look {
+  return ((dark ? t.dark : t.light) ?? t.dark ?? t.light)!;
+}
+
 /** The colours showing now (light or dark; the preview's, if any). */
 export function lookNow(): Look {
-  const t = previewTheme.value ?? currentTheme();
-  return ((isDark.value ? t.dark : t.light) ?? t.dark ?? t.light)!;
+  return lookFor(previewTheme.value ?? currentTheme(), isDark.value);
 }
 
 let applying = 0;
 async function apply(t: Theme, systemIsDark: boolean) {
   const n = ++applying;
   const dark = darkFor(t, systemIsDark);
-  const look = (dark ? t.dark : t.light) ?? t.dark ?? t.light!;
+  const look = lookFor(t, dark);
   const root = document.documentElement;
   root.dataset.theme = dark ? "dark" : "light";
   isDark.value = dark;

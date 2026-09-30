@@ -9,7 +9,7 @@ import * as P from "../pages";
 import { specs } from "../edits";
 import { renderer } from "../render/RenderManager";
 import { bookScreen } from "../modes";
-import { activeKey, activeTab, closeHome, closeTab, findOpen, HOME, homeOpen, openHome, recent, settings, tabs, type Tab } from "../store";
+import { activeKey, activeTab, closeHome, closeTab, findOpen, HOME, homeOpen, minimized, openHome, recent, settings, tabs, type Tab } from "../store";
 import { Sidebar } from "./Sidebar";
 import { AskDialog, FindBar, Palette, PasswordDialog, Toast } from "./Overlays";
 import { Ribbon, Toolbar, ViewControls } from "./Toolbar";
@@ -331,6 +331,7 @@ function StatusBar() {
   const ready = tab?.status.value === "ready" ? tab : null;
   const info = tab?.info.value;
   const [sys, setSys] = useState<SystemInfo | null>(null);
+  const hidden = minimized.value;
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let alive = true;
@@ -339,13 +340,15 @@ function StatusBar() {
       const s = await api.systemInfo().catch(() => null);
       if (alive && s) setSys(s);
     };
+    // Every 3 s while the window can be seen; nothing while it's minimized.
+    if (hidden) return;
     tick();
     const id = setInterval(tick, 3000);
     return () => {
       alive = false;
       clearInterval(id);
     };
-  }, []);
+  }, [hidden]);
   return (
     <div class="statusbar">
       <div class="sb-side">

@@ -1363,11 +1363,16 @@ pub async fn skin_set(app: tauri::AppHandle, jpeg: String) -> Res<String> {
     let dir = skin_dir(&app)?;
     blocking(move || {
         let bytes = crate::base64::decode(&jpeg).ok_or("bad picture")?;
-        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
         let name = format!("skin-{t}.jpg");
+        // The new photo first: if writing it fails, the one before is still there for the settings that name it.
         std::fs::write(dir.join(&name), bytes).map_err(|e| e.to_string())?;
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if e.file_name().to_str() != Some(name.as_str()) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
         Ok(name)
     })
     .await
@@ -1418,28 +1423,65 @@ pub struct SystemInfo {
 /// browser, GPU and renderer processes). On Windows sysinfo's `virtual_memory`
 /// is the private commit; `memory` is the working set, which double-counts
 /// DLLs and other memory shared between those processes.
-fn app_memory(sys: &mut sysinfo::System) -> u64 {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate};
+///
+/// Finding those processes means reading every process on the machine (a few
+/// hundred, ~6 ms), so that is done every 30 s; in between, only the ones found
+/// are asked, straight from Windows (well under a millisecond). WebView2 starts
+/// and ends processes rarely.
+fn app_memory() -> u64 {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    static TREE: Mutex<Option<(Vec<Pid>, std::time::Instant)>> = Mutex::new(None);
     let Ok(me) = sysinfo::get_current_pid() else { return 0 };
-    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_memory());
-    let procs = sys.processes();
-    let mut total = 0;
-    for (pid, p) in procs {
-        let mut cur: Option<Pid> = Some(*pid);
-        let mut depth = 0;
-        while let Some(c) = cur {
-            if c == me {
-                total += p.virtual_memory();
-                break;
+    let mut guard = TREE.lock();
+    if let Some((pids, found)) = guard.as_ref() {
+        if found.elapsed() < std::time::Duration::from_secs(30) {
+            if let Some(total) = pids.iter().map(|p| private_bytes(p.as_u32())).sum::<Option<u64>>() {
+                return total;
             }
-            cur = procs.get(&c).and_then(|x| x.parent());
-            depth += 1;
-            if depth > 8 {
-                break;
-            }
+            // One has ended: look again.
         }
     }
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_memory());
+    let procs = sys.processes();
+    let mine = |pid: Pid| {
+        let mut cur = Some(pid);
+        for _ in 0..8 {
+            match cur {
+                Some(c) if c == me => return true,
+                Some(c) => cur = procs.get(&c).and_then(|x| x.parent()),
+                None => return false,
+            }
+        }
+        false
+    };
+    let pids: Vec<Pid> = procs.keys().copied().filter(|p| mine(*p)).collect();
+    let total = pids.iter().filter_map(|p| procs.get(p)).map(|p| p.virtual_memory()).sum();
+    *guard = Some((pids, std::time::Instant::now()));
     total
+}
+
+/// A process's private memory (commit), as sysinfo reports it, without listing every process.
+#[cfg(windows)]
+fn private_bytes(pid: u32) -> Option<u64> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: the handle is checked, used once and closed; the counters struct is sized for the call.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut c = PROCESS_MEMORY_COUNTERS_EX::default();
+        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+        let ok = GetProcessMemoryInfo(h, &mut c as *mut PROCESS_MEMORY_COUNTERS_EX as *mut PROCESS_MEMORY_COUNTERS, size);
+        let _ = CloseHandle(h);
+        ok.ok()?;
+        Some(c.PrivateUsage as u64)
+    }
+}
+
+#[cfg(not(windows))]
+fn private_bytes(_pid: u32) -> Option<u64> {
+    None
 }
 
 #[tauri::command]
@@ -1456,7 +1498,7 @@ pub async fn system_info(state: State<'_, AppState>) -> Res<SystemInfo> {
             total_memory: sys.total_memory(),
             busy,
             queued,
-            process_memory: app_memory(&mut sys),
+            process_memory: app_memory(),
             uptime_ms,
         })
     })

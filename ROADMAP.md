@@ -540,6 +540,16 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
 - [x] 0.7.71: side bar easier to read (wider, larger, full-strength labels, always the plain UI font); "Make your own
       palette…"; Home's recent files on a card (readable on dark desks); fixed the picture button doing nothing after
       a test run in development builds
+- [x] 0.7.72: review fixes — photos picked one after another become the skin in order (the newest wins; its file is
+      never deleted by an older one); the Themes tab shows the skin's photo while it's off; a new skin photo is
+      written before the old one is removed; "My palette N" never repeats a name; nothing stays decoded between
+      blur changes; the skin's contrast check is memoised and numeric; a picture used for both a palette and the
+      skin is read once
+- [x] 0.7.72: resources checked (668-page PDF, 1280×860): scrolling a steady 60 fps with no long tasks, skin off,
+      on the bars, or behind the pages too; the skin costs ~14 MB of GPU memory and no measurable CPU. The status
+      bar's memory figure cost ~8 ms every 3 s (a list of every process on the PC): now ~1 ms (Paginaut's own
+      processes asked directly, the full list every 30 s), and nothing while minimized. Reading positions are
+      only saved when they moved
 
 ## Phase 8 (0.8.0): Packaging, updates and signing
 - [ ] GitHub repository (the user has an account) hosting source, releases and update files

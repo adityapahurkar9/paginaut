@@ -375,7 +375,8 @@ function closeTabNow(tab: Tab) {
 // hundred MB) until it collects garbage. Its "low memory" level makes it give that
 // back within ~10 s, so it's on whenever nothing is being drawn: while the window is
 // minimized and while no document is open.
-const minimized = signal(false);
+/** The window is minimized (work nobody can see can wait). */
+export const minimized = signal(false);
 export const setMinimized = (m: boolean) => (minimized.value = m);
 let lowMemory: boolean | undefined;
 effect(() => {
@@ -392,9 +393,19 @@ export function cycleTab(dir: 1 | -1) {
   activeKey.value = list[(i + dir + list.length) % list.length].key;
 }
 
-/** Saves reading positions for every open tab (called periodically and on exit). */
+/** The reading position last saved, by file: an unchanged one isn't saved again. */
+const savedViews = new Map<string, string>();
+
+/** Saves reading positions for every open tab that moved (called periodically and on exit). */
 export function persistPositions() {
-  for (const t of tabs.value) if (t.viewer) rememberFile(t.path, { view: t.viewer.viewState() });
+  for (const t of tabs.value) {
+    if (!t.viewer) continue;
+    const view = t.viewer.viewState();
+    const json = JSON.stringify(view);
+    if (savedViews.get(t.path) === json) continue;
+    savedViews.set(t.path, json);
+    rememberFile(t.path, { view });
+  }
 }
 window.addEventListener("beforeunload", persistPositions);
 setInterval(persistPositions, 15000);
