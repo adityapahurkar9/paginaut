@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stdarg.h>
 #include <time.h>
 
 #ifdef _WIN32
@@ -331,6 +332,54 @@ int fo_metadata(fo_ctx *c, fo_doc *d, const char *key, char *buf, int size)
 	return n;
 }
 
+/* fz_append_printf for JSON. MuPDF's %g writes PDF's compact numbers, which drop the leading zero
+ * (".5", "-.25"): not JSON. Its formatting is kept (it turns NaN into 0, which the C library
+ * doesn't) and the zero put back, outside strings. */
+static void json_printf(fz_context *ctx, fz_buffer *buf, const char *fmt, ...)
+{
+	char line[512], *text = line, *whole = NULL;
+	va_list ap;
+	size_t n;
+	int in_string = 0;
+	va_start(ap, fmt);
+	n = fz_vsnprintf(line, sizeof line, fmt, ap);
+	va_end(ap);
+	fz_var(whole);
+	fz_try(ctx)
+	{
+		if (n >= sizeof line)
+		{
+			text = whole = fz_malloc(ctx, n + 1);
+			va_start(ap, fmt);
+			fz_vsnprintf(whole, n + 1, fmt, ap);
+			va_end(ap);
+		}
+		for (size_t i = 0; i < n; i++)
+		{
+			char ch = text[i];
+			if (in_string)
+			{
+				if (ch == '\\' && i + 1 < n)
+				{
+					fz_append_byte(ctx, buf, ch);
+					ch = text[++i];
+				}
+				else if (ch == '"')
+					in_string = 0;
+			}
+			else if (ch == '"')
+				in_string = 1;
+			else if (ch == '.' && (i == 0 || text[i - 1] < '0' || text[i - 1] > '9'))
+				fz_append_byte(ctx, buf, '0');
+			fz_append_byte(ctx, buf, ch);
+		}
+	}
+	fz_always(ctx)
+		fz_free(ctx, whole);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
 static void outline_rec(fz_context *ctx, fz_document *doc, fz_buffer *b, fz_outline *o)
 {
 	int first = 1;
@@ -347,7 +396,7 @@ static void outline_rec(fz_context *ctx, fz_document *doc, fz_buffer *b, fz_outl
 			page = -1;
 		fz_append_string(ctx, b, "{\"t\":");
 		json_str(ctx, b, o->title ? o->title : "");
-		fz_append_printf(ctx, b, ",\"p\":%d,\"y\":%g", page, o->y);
+		json_printf(ctx, b, ",\"p\":%d,\"y\":%g", page, o->y);
 		if (o->down)
 		{
 			fz_append_string(ctx, b, ",\"k\":");
@@ -474,7 +523,7 @@ char *fo_links_json(fo_ctx *c, fo_doc *d, fo_page *p)
 			if (!first)
 				fz_append_byte(CTX, b, ',');
 			first = 0;
-			fz_append_printf(CTX, b, "{\"r\":[%g,%g,%g,%g]", l->rect.x0 - pb.x0, l->rect.y0 - pb.y0, l->rect.x1 - pb.x0, l->rect.y1 - pb.y0);
+			json_printf(CTX, b, "{\"r\":[%g,%g,%g,%g]", l->rect.x0 - pb.x0, l->rect.y0 - pb.y0, l->rect.x1 - pb.x0, l->rect.y1 - pb.y0);
 			if (fz_is_external_link(CTX, l->uri))
 			{
 				fz_append_string(CTX, b, ",\"u\":");
@@ -488,7 +537,7 @@ char *fo_links_json(fo_ctx *c, fo_doc *d, fo_page *p)
 					page = fz_page_number_from_location(CTX, (fz_document *)d, fz_resolve_link(CTX, (fz_document *)d, l->uri, &x, &y));
 				fz_catch(CTX)
 					page = -1;
-				fz_append_printf(CTX, b, ",\"p\":%d,\"y\":%g", page, y);
+				json_printf(CTX, b, ",\"p\":%d,\"y\":%g", page, y);
 			}
 			fz_append_byte(CTX, b, '}');
 		}
@@ -670,7 +719,7 @@ char *fo_text_match_json(fo_ctx *c, fo_text *t, const float b[4], const char *ne
 			else
 				fz_append_byte(CTX, buf, ',');
 			put_quad(q, quads[i], b);
-			fz_append_printf(CTX, buf, "%g,%g,%g,%g,%g,%g,%g,%g", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
+			json_printf(CTX, buf, "%g,%g,%g,%g,%g,%g,%g,%g", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
 		}
 		if (n > 0)
 		{
@@ -727,7 +776,7 @@ char *fo_image_rects_json(fo_ctx *c, fo_list *l, const float b[4])
 			if (!first)
 				fz_append_byte(CTX, buf, ',');
 			first = 0;
-			fz_append_printf(CTX, buf, "[%g,%g,%g,%g]", block->bbox.x0 - b[0], block->bbox.y0 - b[1], block->bbox.x1 - b[0], block->bbox.y1 - b[1]);
+			json_printf(CTX, buf, "[%g,%g,%g,%g]", block->bbox.x0 - b[0], block->bbox.y0 - b[1], block->bbox.x1 - b[0], block->bbox.y1 - b[1]);
 		}
 		fz_append_byte(CTX, buf, ']');
 		s = buffer_to_string(CTX, buf);
@@ -824,7 +873,7 @@ static void reflow_line(fz_context *ctx, fz_buffer *buf, fz_buffer *span, fz_ste
 			fz_append_byte(ctx, buf, '[');
 			fz_terminate_buffer(ctx, span);
 			json_str(ctx, buf, fz_string_from_buffer(ctx, span));
-			fz_append_printf(ctx, buf, ",%g,%d]", size, style);
+			json_printf(ctx, buf, ",%g,%d]", size, style);
 			fz_clear_buffer(ctx, span);
 		}
 		size = sz;
@@ -838,7 +887,7 @@ static void reflow_line(fz_context *ctx, fz_buffer *buf, fz_buffer *span, fz_ste
 		fz_append_byte(ctx, buf, '[');
 		fz_terminate_buffer(ctx, span);
 		json_str(ctx, buf, fz_string_from_buffer(ctx, span));
-		fz_append_printf(ctx, buf, ",%g,%d]", size, style);
+		json_printf(ctx, buf, ",%g,%d]", size, style);
 	}
 	fz_append_string(ctx, buf, "]}");
 }
@@ -1028,7 +1077,7 @@ char *fo_widgets_json(fo_ctx *c, fo_page *p, const float b[4])
 				pdf_annot_default_appearance(CTX, w, &font, &size, &ncolor, color);
 			fz_catch(CTX)
 				size = 0;
-			fz_append_printf(CTX, buf, ",\"fs\":%g,\"q\":%d", size, pdf_annot_quadding(CTX, w));
+			json_printf(CTX, buf, ",\"fs\":%g,\"q\":%d", size, pdf_annot_quadding(CTX, w));
 			if (type == PDF_WIDGET_TYPE_TEXT)
 			{
 				char *fv = NULL;
@@ -1400,7 +1449,7 @@ char *fo_annots_json(fo_ctx *c, fo_page *p, const float b[4])
 					pdf_annot_default_appearance(CTX, a, &font, &size, &dn, dc);
 				fz_catch(CTX)
 					size = 0;
-				fz_append_printf(CTX, buf, ",\"fs\":%g", size);
+				json_printf(CTX, buf, ",\"fs\":%g", size);
 				put_color(CTX, buf, "tc", dn, dc);
 			}
 			fz_append_byte(CTX, buf, '}');
@@ -5149,7 +5198,7 @@ char *fo_pictures_json(fo_ctx *c, fo_list *l, const float b[4])
 			if (!first)
 				fz_append_byte(CTX, buf, ',');
 			first = 0;
-			fz_append_printf(CTX, buf, "{\"r\":[%g,%g,%g,%g],\"w\":%d,\"h\":%d,\"k\":\"%s\",\"m\":%d,\"n\":%zu,\"id\":\"",
+			json_printf(CTX, buf, "{\"r\":[%g,%g,%g,%g],\"w\":%d,\"h\":%d,\"k\":\"%s\",\"m\":%d,\"n\":%zu,\"id\":\"",
 				block->bbox.x0 - b[0], block->bbox.y0 - b[1], block->bbox.x1 - b[0], block->bbox.y1 - b[1],
 				img->w, img->h, ext, img->mask || img->imagemask ? 1 : 0, cb && cb->buffer ? cb->buffer->len : 0);
 			/* The same picture used again (on other pages, too) has the same id. */
@@ -5744,10 +5793,10 @@ static void table_json(fz_context *ctx, fz_buffer *buf, fz_stext_struct *table, 
 	put_bbox(ctx, buf, table->up->bbox, o);
 	fz_append_string(ctx, buf, ",\"xs\":[");
 	for (int i = 0; i < xs->len; i++)
-		fz_append_printf(ctx, buf, i ? ",%g" : "%g", xs->list[i].pos - o[0]);
+		json_printf(ctx, buf, i ? ",%g" : "%g", xs->list[i].pos - o[0]);
 	fz_append_string(ctx, buf, "],\"ys\":[");
 	for (int i = 0; i < ys->len; i++)
-		fz_append_printf(ctx, buf, i ? ",%g" : "%g", ys->list[i].pos - o[1]);
+		json_printf(ctx, buf, i ? ",%g" : "%g", ys->list[i].pos - o[1]);
 	fz_append_string(ctx, buf, "],\"cells\":[");
 	fz_var(text);
 	fz_try(ctx)
@@ -5936,10 +5985,10 @@ static void grid_table_json(fz_context *ctx, fz_buffer *buf, fz_stext_page *t, f
 		put_bbox(ctx, buf, fz_make_rect(xs[0], ys[0], xs[nx - 1], ys[ny - 1]), o);
 		fz_append_string(ctx, buf, ",\"xs\":[");
 		for (int i = 0; i < nx; i++)
-			fz_append_printf(ctx, buf, i ? ",%g" : "%g", xs[i] - o[0]);
+			json_printf(ctx, buf, i ? ",%g" : "%g", xs[i] - o[0]);
 		fz_append_string(ctx, buf, "],\"ys\":[");
 		for (int i = 0; i < ny; i++)
-			fz_append_printf(ctx, buf, i ? ",%g" : "%g", ys[i] - o[1]);
+			json_printf(ctx, buf, i ? ",%g" : "%g", ys[i] - o[1]);
 		fz_append_string(ctx, buf, "],\"cells\":[");
 		for (int y = 0; y < h; y++)
 			for (int x = 0; x < w; x++)
@@ -6231,7 +6280,7 @@ char *fo_text_search_json(fo_ctx *c, fo_text *t, const float b[4], const char *n
 			else
 				fz_append_byte(CTX, buf, ',');
 			put_quad(q, quads[i], b);
-			fz_append_printf(CTX, buf, "%g,%g,%g,%g,%g,%g,%g,%g", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
+			json_printf(CTX, buf, "%g,%g,%g,%g,%g,%g,%g,%g", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
 		}
 		if (n > 0)
 			fz_append_byte(CTX, buf, ']');

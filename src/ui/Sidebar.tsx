@@ -2,13 +2,15 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import { bookScreen } from "../modes";
 import { selectWhenShown } from "../annots";
 import * as A from "../actions";
-import { ChevronDown, ChevronRight, Paperclip, Plus } from "lucide-preact";
+import { ChevronDown, ChevronRight, ListTree, Paperclip, Plus } from "lucide-preact";
+import { analysisOf, flowOf } from "./Reflow";
+import { textOf } from "../reflow/model";
 import { Attachments } from "./ExtractUI";
 import { api, type OutlineItem } from "../api";
 import { renderer, renderKey, type Want } from "../render/RenderManager";
 import { LO_SCALE, paint } from "../render/Viewer";
 import { signal } from "@preact/signals";
-import { activeKey, activeTab, settings, showToast, tabs, updateSettings, type Tab } from "../store";
+import { activeKey, activeTab, ask, settings, showToast, tabs, updateSettings, type Tab } from "../store";
 import { metaChanged, specs } from "../edits";
 import * as P from "../pages";
 import { openMenuAt } from "./Toolbar";
@@ -552,6 +554,64 @@ export async function addBookmarkHere(tab: Tab) {
   updateSettings({ sidebarOpen: true, sidebarTab: "outline" });
 }
 
+/** Bookmarks made from the document's headings (as Read mode finds them: larger or bold lines, running headers
+ * and page numbers left out), nested by size. Replaces the bookmarks there are, after asking. */
+export async function bookmarksFromHeadings(tab: Tab) {
+  if (!tab.info.value?.isPdf) return;
+  const had = tab.outline.value?.length ?? 0;
+  if (had) {
+    const choice = await ask(
+      "Replace the bookmarks?",
+      `This document has ${had} bookmark${had === 1 ? "" : "s"}. Making them from its headings replaces them (Ctrl+Z brings them back).`,
+      [
+        { label: "Replace", value: "replace", primary: true },
+        { label: "Cancel", value: "cancel" },
+      ],
+    );
+    if (choice !== "replace") return;
+  }
+  showToast("Finding the headings…", 60000);
+  let flow;
+  try {
+    flow = flowOf(tab, await analysisOf(tab).analysis);
+  } catch (e) {
+    showToast(`Couldn't read the document: ${String((e as Error)?.message ?? e)}`, 5000);
+    return;
+  }
+  const order = tab.edits.value?.order ?? [];
+  const tree: OutlineItem[] = [];
+  // The open headings by level, to nest smaller ones under the last larger one.
+  const open: { level: number; item: OutlineItem }[] = [];
+  let count = 0;
+  for (const b of flow.blocks) {
+    if (b.k !== "h") continue;
+    const t = textOf(b).replace(/\s+/g, " ").trim();
+    const src = order[b.page];
+    // Misread text (a poor scanner text layer) isn't a heading: mostly letters, digits and spaces, with a word in it.
+    const plain = t.match(/[\p{L}\p{N}\s]/gu)?.length ?? 0;
+    // Nor is a bold piece of a sentence (starting in lower case).
+    if (src === undefined || plain < t.length * 0.8 || !/\p{L}{2}/u.test(t) || /^\p{Ll}/u.test(t)) continue;
+    // A contents page's entries (dot leaders) point at headings found anyway.
+    if (/(\.\s?){5,}|…\s*\d+$/.test(t)) continue;
+    const item: OutlineItem = { t: t.length > 120 ? `${t.slice(0, 117)}…` : t, p: src, y: Math.max(0, (b.y ?? 0) - 6) };
+    // Headings of one size: "Section/Part/Chapter …" above ALL-CAPS ones above the rest.
+    const level = b.level + (/^(section|part|chapter|book|unit)\b/i.test(t) ? 0 : t === t.toUpperCase() && /\p{Lu}/u.test(t) ? 0.3 : 0.6);
+    while (open.length && open[open.length - 1].level >= level) open.pop();
+    const parent = open[open.length - 1]?.item;
+    if (parent) (parent.k = parent.k ?? []).push(item);
+    else tree.push(item);
+    open.push({ level, item });
+    count++;
+  }
+  if (!count) {
+    showToast(flow.scans ? "This is a scan: recognize its text first (Tools › OCR), then its headings can be found." : "No headings found: the text is all one size and weight.", 5000);
+    return;
+  }
+  await saveOutline(tab, tree);
+  showToast(`Made ${count} bookmark${count === 1 ? "" : "s"} from the headings · Ctrl+Z to undo`);
+  updateSettings({ sidebarOpen: true, sidebarTab: "outline" });
+}
+
 type Drop = { path: Path; where: "before" | "after" | "inside" };
 const renaming = signal<{ tab: Tab; path: Path } | null>(null);
 
@@ -690,9 +750,16 @@ function Outline({ tab }: { tab: Tab }) {
           <button class="btn ghost sm" onClick={() => void add(null)} title="A bookmark for the page you're on (selected text becomes its title)">
             <Plus size={14} /> Bookmark
           </button>
+          <button class="btn ghost sm" onClick={() => void bookmarksFromHeadings(tab)} title="Bookmarks for the document's headings (larger or bold lines), nested by size">
+            <ListTree size={14} /> From headings
+          </button>
         </div>
       )}
-      {!items.length && <div class="empty-note">This document has no bookmarks. {editable ? "Add one for the page you're on with + Bookmark." : "Scanned files usually don't."}</div>}
+      {!items.length && (
+        <div class="empty-note">
+          This document has no bookmarks. {editable ? "Add one for the page you're on with + Bookmark, or make them from its headings." : "Scanned files usually don't."}
+        </div>
+      )}
       {items.map((it, i) => (
         <OutlineNode
           key={i}

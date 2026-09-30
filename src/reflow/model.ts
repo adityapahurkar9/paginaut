@@ -27,7 +27,7 @@ export interface Run {
 
 export type Block =
   | { k: "p" | "li"; runs: Run[]; len: number; page: number }
-  | { k: "h"; level: 1 | 2 | 3; runs: Run[]; len: number; page: number }
+  | { k: "h"; level: 1 | 2 | 3; runs: Run[]; len: number; page: number; /** Top of the heading on its page, in points. */ y?: number }
   | {
       k: "img";
       page: number;
@@ -451,7 +451,7 @@ export class Analysis {
             hGeom = { box: union(hGeom.box, it.box), lineH: hGeom.lineH };
             continue;
           }
-          blocks.push({ k: "h", level: level as 1 | 2 | 3, runs, len, page });
+          blocks.push({ k: "h", level: level as 1 | 2 | 3, runs, len, page, y: it.box[1] });
           hGeom = { box: it.box, lineH: (it.box[3] - it.box[1]) / Math.max(1, t.lines) };
           continue;
         }

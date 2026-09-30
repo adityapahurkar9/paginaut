@@ -49,7 +49,12 @@ export function analysisOf(tab: Tab): Loaded {
     api
       .reflow(info.docId, tab.edits.value?.order[tab.page.value] ?? 0, sid, (ev) => {
         if (ev.kind === "page") {
-          pages[ev.page] = JSON.parse(ev.data) as RawPage;
+          // A page that can't be read is left out rather than stopping the rest.
+          try {
+            pages[ev.page] = JSON.parse(ev.data) as RawPage;
+          } catch (e) {
+            console.warn(`reflow: page ${ev.page + 1} left out:`, e);
+          }
           progress.value = ++received / count;
         } else if (ev.error) reject(new Error(ev.error));
         else if (!ev.complete) reject(new Error("cancelled"));
