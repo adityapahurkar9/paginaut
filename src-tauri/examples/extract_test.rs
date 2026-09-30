@@ -108,7 +108,31 @@ fn main() {
         format!("{:?}", list.iter().map(|a| (&a.name, a.page, a.size)).collect::<Vec<_>>()),
     );
     check("attachment contents", d.attachment_data(0).unwrap() == b"hello world", String::new());
-    engine.close(info.doc_id);
+
+    // Attaching and removing.
+    d.forms_init().unwrap();
+    let names = |d: &paginaut_lib::engine::Doc| d.attachments().unwrap().iter().map(|a| a.name.clone()).collect::<Vec<_>>();
+    d.attachment_add(&format!("{dir}/photo.png")).unwrap();
+    d.attachment_add(&format!("{dir}/photo.png")).unwrap();
+    let n = names(&d);
+    check("attached twice", n.len() == 4 && n.iter().filter(|x| *x == "photo.png").count() == 2, format!("{n:?}"));
+    let photo = std::fs::read(format!("{dir}/photo.png")).unwrap();
+    let i = d.attachments().unwrap().iter().position(|a| a.name == "photo.png").unwrap();
+    check("attached bytes", d.attachment_data(i).unwrap() == photo, String::new());
+    d.attachment_remove(0).unwrap();
+    let n = names(&d);
+    check("document attachment removed", !n.contains(&"notes.txt".to_string()) && n.len() == 3, format!("{n:?}"));
+    let pinned = d.attachments().unwrap().iter().position(|a| a.page == 0).unwrap();
+    d.attachment_remove(pinned).unwrap();
+    let n = names(&d);
+    check("page attachment removed", !n.contains(&"run.exe".to_string()) && n.len() == 2, format!("{n:?}"));
+    d.undo(false).unwrap();
+    check("undo brings it back", names(&d).contains(&"run.exe".to_string()), String::new());
+    d.undo(true).unwrap();
+    let saved = engine.save(info.doc_id, vec![0], vec![0], None).unwrap();
+    let n = names(&engine.doc(saved.doc_id).unwrap());
+    check("after saving", n == ["photo.png", "photo.png"], format!("{n:?}"));
+    engine.close(saved.doc_id);
     let info = engine.open(&format!("{dir}/text-1000.pdf")).unwrap();
     check("no attachments", engine.doc(info.doc_id).unwrap().attachments().unwrap().is_empty(), String::new());
 

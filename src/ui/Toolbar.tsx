@@ -28,8 +28,8 @@ import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
 import { startLabels, startProperties } from "./MetaUI";
 import { startSecure } from "./SecureUI";
-import { openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
-import { textEdit, toggleTextEdit } from "../textedit";
+import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
+import { addPicture, textEdit, toggleTextEdit } from "../textedit";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -484,8 +484,10 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
       <TB icon={I(FilePlus2, 17)} label="Insert" menu disabled={!tab?.info.value?.isPdf} onClick={(e) => openMenu(e, [
         { label: "Pages from a file…", run: () => tab && void startInsert(tab) },
         { label: "Blank page", run: () => tab && void insertBlankPage(tab) },
+        { sep: true },
+        { label: "Picture…", run: () => tab && void addPicture(tab) },
       ], "left", 200)} />
-      <TB icon={I(TextCursorInput, 17)} label="Edit text" title="Click a paragraph on the page to change its words (Esc to stop)" on={!!tab && textEdit.value === tab} disabled={!tab?.info.value?.isPdf} onClick={() => tab && toggleTextEdit(tab)} />
+      <TB icon={I(TextCursorInput, 17)} label="Edit" title="Change words, move, resize, replace or delete pictures on the page (Esc to stop)" on={!!tab && textEdit.value === tab} disabled={!tab?.info.value?.isPdf} onClick={() => tab && toggleTextEdit(tab)} />
       <div class="sep" />
       <TB icon={I(FormInput, 17)} label="Forms" menu onClick={(e) => openMenu(e, formItems(tab), "left", 270)} />
       <TB icon={I(Highlighter, 17)} label="Comment" title="Highlight, draw, add notes and text (Comment tab)" onClick={() => updateSettings({ ribbon: "comment" })} />
@@ -517,9 +519,10 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { label: "Save all pictures…", disabled: !tab, run: () => tab && (picturesDialog.value = tab) },
         { label: "Select an area to copy or save…", hint: "or right-click a page", disabled: !tab, run: () => tab && startArea(tab) },
         { label: `Attached files${tab?.attachments.value?.length ? ` (${tab.attachments.value.length})` : ""}`, disabled: !tab?.attachments.value?.length, run: showAttachments },
+        { label: "Attach a file…", disabled: !tab?.info.value?.isPdf, run: () => tab && void attachFiles(tab) },
         { label: "Table on this page to Excel / CSV…", disabled: !tab, run: () => tab && void openPageTable(tab) },
         { sep: true },
-        { label: "Edit text", check: !!tab && textEdit.value === tab, disabled: !tab?.info.value?.isPdf, run: () => tab && toggleTextEdit(tab) },
+        { label: "Edit text and pictures", check: !!tab && textEdit.value === tab, disabled: !tab?.info.value?.isPdf, run: () => tab && toggleTextEdit(tab) },
         soon("Redact", 6.5), soon("Compare", 7.5),
       ], "left", 280)} />
       <TB icon={I(RefreshCw, 17)} label="Convert" menu onClick={(e) => openMenu(e, [

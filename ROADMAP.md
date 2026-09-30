@@ -333,11 +333,26 @@ Extract content (right-click the item on the page; Tools › Organize; command p
       open (double-click; programs and scripts are refused, only saved), save, save all
 - [x] Fix: copying a picture made WebView2 ask for clipboard permission (the write now starts inside the click)
 
-### Phase 6.3 (0.6.30): Edit PDF
-- [ ] Edit existing text: click a line, change it; same font where the PDF carries the letters needed, a close
-      match where it doesn't; lines reflow within their paragraph
-- [ ] Pictures on the page: add, replace, move, resize, delete
-- [ ] Attachments: add and remove (listing and saving them come in 6.2)
+### Phase 6.3 (0.6.30): Edit PDF (done)
+- [x] Edit text (Tools › Edit, Organize, command palette): paragraphs outlined; click one and change its words in
+      place. The old text is removed through MuPDF's redaction (text only; pictures and drawings under it stay) and
+      the new text is laid out by MuPDF's HTML engine in the same box, size, line spacing, colour and alignment
+      (left, right, centre, justified), in the paragraph's own font where it has the letters and a close font
+      letter by letter where it doesn't (Marathi in a Times paragraph works). First baseline lands exactly where
+      it was. One undo step, 5 ms (src-tauri/examples/edit_test.rs)
+- [x] Pictures on the page (the same Edit mode; Tools › Insert › Picture): click one to move it, resize it
+      (corners keep its shape, Shift frees them), replace it (fitted into its box) or delete it (Delete key).
+      Moved pictures keep their turn and flip; pictures and paragraphs stack as the page draws them, so the one
+      on top is the one clicked. Each change one undo step
+- [x] Attachments: attach files (Organize, the paperclip panel's +) and remove them (a file pinned to a page loses
+      its pin); undo and redo refresh the list
+- [x] Fix: page rewrites (text edits, pictures, crop with Remove outside) dropped the form objects page numbers
+      and watermarks draw with, so they vanished or couldn't be removed; they're set aside and put back now
+- [x] Fix: stamped text sat 12 pt inside its box (MuPDF's style sheet gives the body a 1em margin)
+- [x] Fix (MuPDF): attaching a file left a journal operation open, so undo stopped working (patched in
+      native/build-mupdf.ps1)
+- [ ] Later: edit a single line inside a table cell; bold/italic changes within a paragraph; keep a moved
+      picture's place in the drawing order (it goes on top now)
 
 ### Phase 6.5 (0.6.50): Redact
 - [ ] Mark text or areas by hand, or by search

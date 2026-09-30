@@ -14,8 +14,8 @@ import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
 import { startLabels, startProperties } from "./MetaUI";
 import { startSecure } from "./SecureUI";
-import { openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
-import { toggleTextEdit } from "../textedit";
+import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
+import { addPicture, toggleTextEdit } from "../textedit";
 import { addBookmarkHere } from "./Sidebar";
 import { removeStamps } from "../stamps";
 import { helpPanel } from "./HelpDialogs";
@@ -234,11 +234,13 @@ function commands(): Item[] {
     c("Remove password / unlock…", withTab((t) => startSecure(t, "protect")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Reduce file size (compress)…", withTab((t) => startSecure(t, "compress")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Repair a damaged PDF…", withTab((t) => startSecure(t, "repair")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
-    c("Edit text (change words on the page)", withTab((t) => toggleTextEdit(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Edit text and pictures (change words on the page)", withTab((t) => toggleTextEdit(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Add a picture to the page…", withTab((t) => void addPicture(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Save all pictures (extract images)…", withTab((t) => (picturesDialog.value = t)), "", hasDoc),
     c("Table on this page to Excel / CSV (extract table)…", withTab((t) => void openPageTable(t)), "", hasDoc),
     c("Select an area to copy or save (PDF, SVG, PNG, text)…", withTab((t) => startArea(t)), "", hasDoc),
     c("Attached files (attachments)", showAttachments, "", () => hasDoc() && !!activeTab.value?.attachments.value?.length),
+    c("Attach a file to the document…", withTab((t) => void attachFiles(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Add a bookmark for this page", withTab((t) => void addBookmarkHere(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Remove page numbers, headers and footers", withTab((t) => void removeStamps(t, "Header")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Remove watermark", withTab((t) => void removeStamps(t, "Watermark")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),

@@ -3467,7 +3467,8 @@ static fz_stext_page *paragraphs_of(fz_context *ctx, fz_display_list *l)
 {
 	fz_stext_options opts;
 	fz_init_stext_options(ctx, &opts);
-	opts.flags |= FZ_STEXT_PARAGRAPH_BREAK;
+	/* Pictures kept, only to count them: a paragraph's "z" says how many were drawn before it. */
+	opts.flags |= FZ_STEXT_PARAGRAPH_BREAK | FZ_STEXT_PRESERVE_IMAGES;
 	return fz_new_stext_page_from_display_list(ctx, l, &opts);
 }
 
@@ -3525,7 +3526,7 @@ static char paragraph_align(fz_stext_block *b)
 	return 'l';
 }
 
-static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz_stext_block *b, const float o[4], int *n)
+static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz_stext_block *b, const float o[4], int *n, int *pics)
 {
 	for (; b; b = b->next)
 	{
@@ -3534,9 +3535,11 @@ static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz
 		int lines = 0;
 		if (b->type == FZ_STEXT_BLOCK_STRUCT && b->u.s.down)
 		{
-			paragraphs_json(ctx, buf, text, b->u.s.down->first_block, o, n);
+			paragraphs_json(ctx, buf, text, b->u.s.down->first_block, o, n, pics);
 			continue;
 		}
+		if (b->type == FZ_STEXT_BLOCK_IMAGE && b->u.i.image)
+			(*pics)++;
 		if (b->type != FZ_STEXT_BLOCK_TEXT || !b->u.t.first_line)
 			continue;
 		for (fz_stext_line *line = b->u.t.first_line; line && !first; line = line->next)
@@ -3565,8 +3568,8 @@ static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz
 					line->bbox.x0 - o[0], line->bbox.y0 - o[1], line->bbox.x1 - o[0], line->bbox.y1 - o[1], base - o[1]);
 			}
 		}
-		fz_append_printf(ctx, buf, "],\"s\":%.2f,\"lead\":%.2f,\"c\":\"#%06x\",\"b\":%d,\"i\":%d,\"serif\":%d,\"mono\":%d,\"a\":\"%c\",\"font\":",
-			first->size, lines > 1 ? lead / (lines - 1) : first->size * 1.2f, first->argb & 0xffffff,
+		fz_append_printf(ctx, buf, "],\"z\":%d,\"s\":%.2f,\"lead\":%.2f,\"c\":\"#%06x\",\"b\":%d,\"i\":%d,\"serif\":%d,\"mono\":%d,\"a\":\"%c\",\"font\":",
+			*pics, first->size, lines > 1 ? lead / (lines - 1) : first->size * 1.2f, first->argb & 0xffffff,
 			fz_font_is_bold(ctx, first->font), fz_font_is_italic(ctx, first->font),
 			fz_font_is_serif(ctx, first->font), fz_font_is_monospaced(ctx, first->font), paragraph_align(b));
 		json_str(ctx, buf, fz_font_name(ctx, first->font));
@@ -3586,12 +3589,12 @@ char *fo_paragraphs_json(fo_ctx *c, fo_list *l, const float b[4])
 	fz_var(text);
 	fz_try(CTX)
 	{
-		int n = 0;
+		int n = 0, pics = 0;
 		t = paragraphs_of(CTX, (fz_display_list *)l);
 		buf = fz_new_buffer(CTX, 4096);
 		text = fz_new_buffer(CTX, 256);
 		fz_append_byte(CTX, buf, '[');
-		paragraphs_json(CTX, buf, text, t->first_block, b, &n);
+		paragraphs_json(CTX, buf, text, t->first_block, b, &n, &pics);
 		fz_append_byte(CTX, buf, ']');
 		s = buffer_to_string(CTX, buf);
 	}
@@ -4884,6 +4887,167 @@ int fo_attachment_data(fo_ctx *c, fo_doc *d, int idx, unsigned char **data, size
 	}
 	fz_catch(CTX)
 	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+/* Writes the EmbeddedFiles name tree again as one flat, sorted list from `tree` (name → file). */
+static void write_embedded_files(fz_context *ctx, pdf_document *doc, pdf_obj *tree)
+{
+	pdf_obj *root = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root));
+	pdf_obj *names = pdf_dict_get(ctx, root, PDF_NAME(Names)), *ef, *arr;
+	int n = pdf_dict_len(ctx, tree);
+	if (!n)
+	{
+		pdf_dict_del(ctx, names, PDF_NAME(EmbeddedFiles));
+		return;
+	}
+	if (!names)
+		names = pdf_dict_put_dict(ctx, root, PDF_NAME(Names), 1);
+	ef = pdf_dict_put_dict(ctx, names, PDF_NAME(EmbeddedFiles), 1);
+	arr = pdf_dict_put_array(ctx, ef, PDF_NAME(Names), 2 * n);
+	pdf_sort_dict(ctx, tree);
+	for (int i = 0; i < n; i++)
+	{
+		pdf_array_push_text_string(ctx, arr, pdf_to_name(ctx, pdf_dict_get_key(ctx, tree, i)));
+		pdf_array_push(ctx, arr, pdf_dict_get_val(ctx, tree, i));
+	}
+}
+
+int fo_pdf_attachment_add(fo_ctx *c, fo_doc *d, const char *name, const char *mime, const unsigned char *data, size_t len, long long modified)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_obj *tree = NULL, *fs = NULL;
+	fz_buffer *buf = NULL;
+	int began = 0;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	fz_var(tree);
+	fz_var(fs);
+	fz_var(buf);
+	fz_var(began);
+	fz_try(CTX)
+	{
+		char key[512];
+		int k = 2;
+		pdf_begin_operation(CTX, pdf, "Attach file");
+		began = 1;
+		buf = fz_new_buffer_from_copied_data(CTX, data, len);
+		fs = pdf_add_embedded_file(CTX, pdf, name, mime && mime[0] ? mime : NULL, buf, modified, modified, 1);
+		tree = pdf_load_name_tree(CTX, pdf, PDF_NAME(EmbeddedFiles));
+		/* A name already used gets a number, as Explorer does. */
+		fz_strlcpy(key, name, sizeof key);
+		while (pdf_dict_gets(CTX, tree, key))
+			fz_snprintf(key, sizeof key, "%s (%d)", name, k++);
+		pdf_dict_puts(CTX, tree, key, fs);
+		write_embedded_files(CTX, pdf, tree);
+		pdf_end_operation(CTX, pdf);
+		began = 0;
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, tree);
+		pdf_drop_obj(CTX, fs);
+		fz_drop_buffer(CTX, buf);
+	}
+	fz_catch(CTX)
+	{
+		if (began)
+			pdf_abandon_operation(CTX, pdf);
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
+int fo_pdf_attachment_remove(fo_ctx *c, fo_doc *d, int idx)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_obj *files = NULL, *pages = NULL, *tree = NULL;
+	int began = 0;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return -1;
+	}
+	fz_var(files);
+	fz_var(pages);
+	fz_var(tree);
+	fz_var(began);
+	fz_try(CTX)
+	{
+		pdf_obj *fs;
+		int page;
+		files = pdf_new_array(CTX, pdf, 8);
+		pages = pdf_new_array(CTX, pdf, 8);
+		collect_attachments(CTX, pdf, files, pages);
+		if (idx < 0 || idx >= pdf_array_len(CTX, files))
+			fz_throw(CTX, FZ_ERROR_ARGUMENT, "no such attachment");
+		fs = pdf_array_get(CTX, files, idx);
+		page = pdf_array_get_int(CTX, pages, idx);
+		pdf_begin_operation(CTX, pdf, "Remove attachment");
+		began = 1;
+		if (page < 0)
+		{
+			/* Off the document's list (every entry that is this file). */
+			pdf_obj *keep = NULL;
+			tree = pdf_load_name_tree(CTX, pdf, PDF_NAME(EmbeddedFiles));
+			fz_var(keep);
+			fz_try(CTX)
+			{
+				keep = pdf_new_dict(CTX, pdf, pdf_dict_len(CTX, tree));
+				for (int i = 0; i < pdf_dict_len(CTX, tree); i++)
+				{
+					pdf_obj *v = pdf_dict_get_val(CTX, tree, i);
+					if (!(v == fs || (pdf_is_indirect(CTX, v) && pdf_to_num(CTX, v) == pdf_to_num(CTX, fs))))
+						pdf_dict_put(CTX, keep, pdf_dict_get_key(CTX, tree, i), v);
+				}
+				write_embedded_files(CTX, pdf, keep);
+			}
+			fz_always(CTX)
+				pdf_drop_obj(CTX, keep);
+			fz_catch(CTX)
+				fz_rethrow(CTX);
+		}
+		else
+		{
+			/* The pin(s) on its page go (through the page, which may be open and showing them). */
+			pdf_page *pg = pdf_load_page(CTX, pdf, page);
+			fz_try(CTX)
+			{
+				pdf_annot *a = pdf_first_annot(CTX, pg), *next;
+				for (; a; a = next)
+				{
+					pdf_obj *o = pdf_annot_obj(CTX, a), *afs = pdf_dict_get(CTX, o, PDF_NAME(FS));
+					next = pdf_next_annot(CTX, a);
+					if (pdf_name_eq(CTX, pdf_dict_get(CTX, o, PDF_NAME(Subtype)), PDF_NAME(FileAttachment)) &&
+						(afs == fs || (pdf_is_indirect(CTX, afs) && pdf_to_num(CTX, afs) == pdf_to_num(CTX, fs))))
+						pdf_delete_annot(CTX, pg, a);
+				}
+			}
+			fz_always(CTX)
+				fz_drop_page(CTX, &pg->super);
+			fz_catch(CTX)
+				fz_rethrow(CTX);
+		}
+		pdf_end_operation(CTX, pdf);
+		began = 0;
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, files);
+		pdf_drop_obj(CTX, pages);
+		pdf_drop_obj(CTX, tree);
+	}
+	fz_catch(CTX)
+	{
+		if (began)
+			pdf_abandon_operation(CTX, pdf);
 		FAIL();
 		return -1;
 	}

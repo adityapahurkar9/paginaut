@@ -1,8 +1,10 @@
 // Getting content out of a page: pictures (right-click), any area (drag a box), attachments.
 import { effect, signal } from "@preact/signals";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { api, type Picture, type Table } from "./api";
 import * as A from "./actions";
+import { DOC_STEP, metaChanged } from "./edits";
+import { formsChanged } from "./forms";
 import { onDocReady } from "./pages";
 import { activeTab, baseName, showToast, toast, updateSettings, type Tab } from "./store";
 import { menu, openMenuAt } from "./ui/Toolbar";
@@ -338,6 +340,53 @@ function areaItems(tab: Tab, view: number, area: [number, number, number, number
 
 export function showAttachments() {
   updateSettings({ sidebarOpen: true, sidebarTab: "files" });
+}
+
+/** Reads the attachment list again (after a change, undo or redo). */
+export async function refreshAttachments(tab: Tab) {
+  const info = tab.info.value;
+  if (!info?.isPdf) return;
+  tab.attachments.value = await api.attachments(info.docId).catch(() => []);
+}
+
+/** Attaches files the user picks to the document (one undo step each). */
+export async function attachFiles(tab: Tab) {
+  const info = tab.info.value;
+  if (!info?.isPdf) return showToast("Only PDFs can have attachments. Save this file as a PDF first (Save as).", 4500);
+  const hook = testHook()?.pick;
+  const picked = hook ?? (await open({ title: "Attach files", multiple: true }));
+  const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+  if (!paths.length) return;
+  let done = 0;
+  for (const path of paths) {
+    try {
+      await api.attachmentAdd(info.docId, path);
+      metaChanged(tab);
+      done++;
+    } catch (e) {
+      showToast(`Couldn't attach ${baseName(path)}: ${e}`, 6000);
+    }
+  }
+  if (!done) return;
+  await refreshAttachments(tab);
+  showAttachments();
+  showToast(`Attached ${done === 1 ? baseName(paths[0]) : `${done} files`} · Ctrl+Z to undo`);
+}
+
+/** Removes an attachment (a pinned one takes its pin off the page, so the page is redrawn). */
+export async function removeAttachment(tab: Tab, i: number, name: string, pinned: boolean) {
+  try {
+    await api.attachmentRemove(tab.info.value!.docId, i);
+    if (pinned) {
+      tab.history.push(DOC_STEP);
+      tab.historyVersion.value++;
+      formsChanged(tab, true);
+    } else metaChanged(tab);
+    await refreshAttachments(tab);
+    showToast(`Removed ${name} · Ctrl+Z to undo`);
+  } catch (e) {
+    showToast(`Couldn't remove it: ${e}`, 5000);
+  }
 }
 
 onDocReady((tab) => {

@@ -1,9 +1,9 @@
 // "Save all pictures" and the Attachments panel.
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "preact/hooks";
-import { FileDown, FolderDown, Paperclip, X } from "lucide-preact";
+import { FileDown, FolderDown, Paperclip, Plus, Trash2, X } from "lucide-preact";
 import { api, type Attachment } from "../api";
-import { picturesDialog } from "../extract";
+import { attachFiles, picturesDialog, removeAttachment } from "../extract";
 import { pagesOf } from "../stamps";
 import { baseName, showToast, type Tab } from "../store";
 import { testHook } from "./PagesUI";
@@ -171,6 +171,11 @@ export function Attachments({ tab }: { tab: Tab }) {
           {list.length} attached {list.length === 1 ? "file" : "files"}
         </span>
         <span style={{ flex: 1 }} />
+        {tab.info.value?.isPdf && (
+          <button class="ib sm" onClick={() => void attachFiles(tab)} title="Attach files to the document" aria-label="Attach files">
+            <Plus size={15} />
+          </button>
+        )}
         <button class="btn ghost sm" onClick={() => void saveAll()} title="Save every attached file in a folder">
           <FolderDown size={14} /> Save all
         </button>
@@ -186,6 +191,9 @@ export function Attachments({ tab }: { tab: Tab }) {
           </div>
           <button class="ib sm" title="Save…" aria-label={`Save ${a.name}`} onClick={() => void saveOne(a)}>
             <FileDown size={15} />
+          </button>
+          <button class="ib sm" title={a.page >= 0 ? "Remove (takes its pin off the page)" : "Remove from the document"} aria-label={`Remove ${a.name}`} onClick={() => void removeAttachment(tab, a.i, a.name, a.page >= 0)}>
+            <Trash2 size={15} />
           </button>
         </div>
       ))}

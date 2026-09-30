@@ -80,6 +80,8 @@ export interface Picture {
 export interface Paragraph {
   r: [number, number, number, number];
   l: [number, number, number, number, number][];
+  /** How many pictures the page draws before this paragraph (later is on top). */
+  z: number;
   s: number;
   lead: number;
   c: string;
@@ -298,7 +300,13 @@ export const api = {
   saveWith: (doc: number, order: number[], rot: number[], target: string | null, opts: SaveOptions) =>
     invoke<DocInfo>("save_with", { doc, order, rot, target, opts }),
   security: (doc: number) => invoke<Security>("security", { doc }),
-  pictures: (doc: number, page: number) => invoke<Picture[]>("pictures", { doc, page }),
+  /** own: only pictures in the page's own content (not comments, stamps or fields). */
+  pictures: (doc: number, page: number, own = false) => invoke<Picture[]>("pictures", { doc, page, own }),
+  /** 0 delete the picture at target, 1 move or resize it to dest, 2 replace it with the picture at path (into dest), 3 add that picture at dest. */
+  pictureEdit: (doc: number, page: number, target: [number, number, number, number], action: 0 | 1 | 2 | 3, dest: [number, number, number, number], path: string | null) =>
+    invoke<void>("picture_edit", { doc, page, target, action, dest, path }),
+  /** A picture file's bytes (pictures only, up to 40 MB). */
+  readPicture: (path: string) => invoke<ArrayBuffer>("read_picture", { path }),
   /** fmt 0 as stored, 1 PNG, 2 PDF. */
   pictureBytes: (doc: number, page: number, idx: number, fmt: number) => invoke<ArrayBuffer>("picture_bytes", { doc, page, idx, fmt }),
   /** Returns the path used (its extension follows the format). */
@@ -322,6 +330,10 @@ export const api = {
   /** Saves at `path`, or into folder `dir` under its own name; returns the path used. */
   attachmentSave: (doc: number, i: number, path: string | null, dir: string | null) => invoke<string>("attachment_save", { doc, i, path, dir }),
   attachmentOpen: (doc: number, i: number) => invoke<void>("attachment_open", { doc, i }),
+  /** Attaches the file at `path` to the document (one undo step in the engine). */
+  attachmentAdd: (doc: number, path: string) => invoke<void>("attachment_add", { doc, path }),
+  /** Removes attachment `i`: off the document's list, or its pin off its page (one undo step). */
+  attachmentRemove: (doc: number, i: number) => invoke<void>("attachment_remove", { doc, i }),
   /** Checks the permissions password; when right the app keeps it, so the protection can be changed. */
   checkOwner: (doc: number, password: string) => invoke<boolean>("check_owner", { doc, password }),
   existingFiles: (paths: string[]) => invoke<string[]>("existing_files", { paths }),

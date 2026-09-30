@@ -265,6 +265,9 @@ pub struct Attachment {
 pub struct Paragraph {
     pub r: [f32; 4],
     pub l: Vec<[f32; 5]>,
+    /// How many pictures the page draws before it (what's drawn later is on top).
+    #[serde(default)]
+    pub z: i32,
     pub s: f32,
     pub lead: f32,
     pub c: String,
@@ -817,6 +820,46 @@ impl Doc {
 
     pub fn attachment_data(&self, i: usize) -> Result<Vec<u8>, String> {
         self.inner.lock().doc.attachment_data(i)
+    }
+
+    /// Attaches the file at `path` to the document (one undo step).
+    pub fn attachment_add(&self, path: &str) -> Result<(), String> {
+        let p = std::path::Path::new(path);
+        let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+        if meta.len() > 500 << 20 {
+            return Err("That file is too large to attach (over 500 MB).".into());
+        }
+        let data = std::fs::read(p).map_err(|e| e.to_string())?;
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("attachment").to_string();
+        let modified = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(-1, |d| d.as_secs() as i64);
+        let mime = match p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+            "pdf" => "application/pdf",
+            "txt" => "text/plain",
+            "csv" => "text/csv",
+            "xml" => "application/xml",
+            "json" => "application/json",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "zip" => "application/zip",
+            _ => "",
+        };
+        let inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Err("Only PDFs can have attachments. Save this file as a PDF first (Save as).".into());
+        }
+        inner.doc.attachment_add(&name, mime, &data, modified)?;
+        drop(inner);
+        self.edited();
+        Ok(())
+    }
+
+    pub fn attachment_remove(&self, i: usize) -> Result<(), String> {
+        self.inner.lock().doc.attachment_remove(i)?;
+        self.edited();
+        Ok(())
     }
 
     // ------------------------------------------------------------ bookmarks, labels, properties

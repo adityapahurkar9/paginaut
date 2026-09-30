@@ -187,6 +187,11 @@ int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const fl
  * to `dest`, 2 replaces it with the picture in data at `dest`, 3 adds that picture at `dest`.
  * Page coordinates relative to the origin; one undo step. */
 int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action, const float dest[4], const unsigned char *data, size_t len);
+/* Attaches a file to the document (one undo step); a name already used gets a number.
+ * modified: seconds since 1970. Removing takes attachment idx (fo_attachments_json order)
+ * off the document's list, or its pin(s) off its page. */
+int fo_pdf_attachment_add(fo_ctx *c, fo_doc *d, const char *name, const char *mime, const unsigned char *data, size_t len, long long modified);
+int fo_pdf_attachment_remove(fo_ctx *c, fo_doc *d, int idx);
 /* A new, empty PDF in memory. */
 fo_doc *fo_pdf_new(fo_ctx *c);
 /* Adds a bookmark titled `title` at the end of d's outline, pointing at page

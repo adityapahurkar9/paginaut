@@ -115,6 +115,8 @@ extern "C" {
         width: c_float,
     ) -> c_int;
     pub fn fo_pdf_picture_edit(c: *mut fo_ctx, p: *mut fo_page, target: *const c_float, action: c_int, dest: *const c_float, data: *const u8, len: usize) -> c_int;
+    pub fn fo_pdf_attachment_add(c: *mut fo_ctx, d: *mut fo_doc, name: *const c_char, mime: *const c_char, data: *const u8, len: usize, modified: i64) -> c_int;
+    pub fn fo_pdf_attachment_remove(c: *mut fo_ctx, d: *mut fo_doc, idx: c_int) -> c_int;
     pub fn fo_tables_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
     pub fn fo_table_in_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, area: *const c_float, cols: *const c_float, ncols: c_int) -> *mut c_char;
     pub fn fo_pictures_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;

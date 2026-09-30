@@ -566,6 +566,19 @@ pub async fn attachment_save(state: State<'_, AppState>, doc: DocId, i: usize, p
     .await
 }
 
+/// Attaches the file at `path` to the document (one undo step).
+#[tauri::command]
+pub async fn attachment_add(state: State<'_, AppState>, doc: DocId, path: String) -> Res<()> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.attachment_add(&path)).await
+}
+
+#[tauri::command]
+pub async fn attachment_remove(state: State<'_, AppState>, doc: DocId, i: usize) -> Res<()> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.attachment_remove(i)).await
+}
+
 /// Kinds of file that run code when opened: attachments like these are only saved, never opened.
 const RISKY: &[&str] = &[
     "exe", "com", "bat", "cmd", "scr", "pif", "cpl", "msi", "msp", "msc", "dll", "sys", "jar", "js", "jse", "vbs", "vbe", "wsf", "wsh",

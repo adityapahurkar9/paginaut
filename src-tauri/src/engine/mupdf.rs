@@ -678,6 +678,19 @@ impl Document {
         with_kind(self.1, |c| take_string(c, unsafe { fo_attachments_json(c, self.0) }).ok_or_else(|| last_error(c)))
     }
 
+    /// Attaches a file to the document (inside the caller's undo step: the native side makes its own).
+    pub fn attachment_add(&self, name: &str, mime: &str, data: &[u8], modified: i64) -> Result<()> {
+        let (n, m) = (CString::new(name).map_err(|e| e.to_string())?, CString::new(mime).map_err(|e| e.to_string())?);
+        with_kind(self.1, |c| {
+            if unsafe { fo_pdf_attachment_add(c, self.0, n.as_ptr(), m.as_ptr(), data.as_ptr(), data.len(), modified) } == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
+    /// Removes attachment `i` (from the document's list, or its pin from its page).
+    pub fn attachment_remove(&self, i: usize) -> Result<()> {
+        with_kind(self.1, |c| if unsafe { fo_pdf_attachment_remove(c, self.0, i as c_int) } == 0 { Ok(()) } else { Err(last_error(c)) })
+    }
+
     /// The contents of embedded file `i`.
     pub fn attachment_data(&self, i: usize) -> Result<Vec<u8>> {
         with_kind(self.1, |c| {

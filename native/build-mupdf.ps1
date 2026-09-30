@@ -29,6 +29,15 @@ $old = "pix->colorspace != fz_device_gray(ctx) && pix->colorspace != fz_device_r
 $new = "!fz_colorspace_is_gray(ctx, pix->colorspace) && !fz_colorspace_is_rgb(ctx, pix->colorspace) && !fz_colorspace_is_cmyk(ctx, pix->colorspace)"
 if ($src.Contains($old)) { Set-Content $jpeg $src.Replace($old, $new) -NoNewline }
 
+# pdf_add_embedded_file begins a journal operation and, when it succeeds, never ends it:
+# after attaching a file, undo refused to work ("Can't undo/redo during an operation").
+$link = Join-Path $root "source\pdf\pdf-link.c"
+$src = Get-Content $link -Raw
+$old = "		filespec = pdf_add_filespec(ctx, doc, filename, file);`n	}`n	fz_always(ctx)`n		pdf_drop_obj(ctx, file);"
+$new = "		filespec = pdf_add_filespec(ctx, doc, filename, file);`n		pdf_end_operation(ctx, doc);`n	}`n	fz_always(ctx)`n		pdf_drop_obj(ctx, file);"
+if ($src.Contains($old)) { Set-Content $link $src.Replace($old, $new) -NoNewline }
+elseif (-not $src.Contains($new)) { Write-Warning "pdf-link.c changed: check pdf_add_embedded_file still ends its operation" }
+
 $env:CL = "/MP /DTOFU_CJK"
 $target = if ($Clean) { "libmupdf:Rebuild" } else { "libmupdf" }
 & $msbuild (Join-Path $root "platform\win32\mupdf.sln") "/target:$target" `

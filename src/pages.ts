@@ -86,6 +86,7 @@ async function docStep(tab: Tab, redo: boolean) {
     if (info.isPdf) {
       api.outline(info.docId).then((o) => (tab.outline.value = o)).catch(() => {});
       api.pageLabels(info.docId).then((l) => (tab.labels.value = l)).catch(() => {});
+      api.attachments(info.docId).then((a) => (tab.attachments.value = a)).catch(() => {});
       api.properties(info.docId).then((p) => {
         const cur = tab.info.value;
         if (cur?.docId === info.docId && (cur.title !== p.title || cur.author !== p.author)) tab.info.value = { ...cur, title: p.title, author: p.author };
