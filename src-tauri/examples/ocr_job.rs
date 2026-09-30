@@ -19,11 +19,12 @@ fn run(engine: &std::sync::Arc<Engine>, doc: u64, pages: usize, langs: &str, rep
         .unwrap();
     let end = rx.recv().unwrap();
     println!(
-        "ocr: {:?}, complete={} pages={} replaced={} words={} changed={} error={:?}",
+        "ocr: {:?}, complete={} pages={} replaced={} turned={:?} words={} changed={} error={:?}",
         t0.elapsed(),
         end.complete,
         end.pages,
         end.replaced,
+        end.turned,
         end.words,
         end.changed,
         end.error

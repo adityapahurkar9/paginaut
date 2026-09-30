@@ -37,6 +37,8 @@ pub struct OcrEnd {
     pub pages: usize,
     /// Of those, pages whose earlier recognised text was replaced.
     pub replaced: usize,
+    /// Pages that read the right way up only when turned: (page, clockwise turn in degrees).
+    pub turned: Vec<(usize, u32)>,
     pub words: usize,
     /// The document changed (a new undo step).
     pub changed: bool,
@@ -45,8 +47,15 @@ pub struct OcrEnd {
     pub error: Option<String>,
 }
 
-/// A page's recognised text (content, words), and whether it replaces the page's earlier OCR layer.
-type PageText = (String, usize, bool);
+/// A page's recognised text.
+struct PageText {
+    content: String,
+    words: usize,
+    /// It replaces the page's earlier OCR layer.
+    redo: bool,
+    /// The page read the right way up turned this far clockwise.
+    rot: u32,
+}
 
 /// How many pages have something to read but (almost) no text, among a sample.
 #[derive(Serialize)]
@@ -83,6 +92,9 @@ struct PageJson {
     l: Vec<LineJson>,
     #[serde(default)]
     blank: u8,
+    /// The words are on the page turned this far clockwise (it was sideways or upside down).
+    #[serde(default)]
+    rot: u32,
 }
 
 #[derive(Deserialize)]
@@ -273,6 +285,24 @@ fn page_content(lines: &[LineJson], o: [f32; 2]) -> (String, usize) {
     (s, words)
 }
 
+/// The text of a page that was read turned `rot` degrees clockwise: written the way it reads, then turned
+/// back onto the page as it is (page space as shown, `b` its bounds).
+fn turned_content(lines: &[LineJson], b: &[f32; 4], rot: u32) -> (String, usize) {
+    let (w, h) = (b[2] - b[0], b[3] - b[1]);
+    // From the turned page (x', y') to the page: x = a x' + c y' + e, y = b x' + d y' + f.
+    let [a, bb, c, d, e, f] = match rot {
+        90 => [0.0, -1.0, 1.0, 0.0, 0.0, h],
+        180 => [-1.0, 0.0, 0.0, -1.0, w, h],
+        270 => [0.0, 1.0, -1.0, 0.0, w, 0.0],
+        _ => return page_content(lines, [b[0], b[1]]),
+    };
+    let (content, n) = page_content(lines, [0.0, 0.0]);
+    if content.is_empty() {
+        return (content, n);
+    }
+    (format!("q\n{a} {bb} {c} {d} {} {} cm\n{content}Q\n", e + b[0], f + b[1]), n)
+}
+
 impl Doc {
     /// Samples up to 12 pages spread through the document: how many have something
     /// to read but under 30 characters of text: scans, and also pages whose text is
@@ -302,19 +332,19 @@ impl Doc {
         let (mut pages, mut replaced, mut words, mut font) = (0, 0, 0, 0);
         inner.doc.begin_op("Recognize text");
         let res = (|| -> Result<(), String> {
-            for (&i, (content, n, redo)) in results {
+            for (&i, r) in results {
                 // Nothing read (a page left blank): an earlier layer stays rather than going for nothing.
-                if content.is_empty() {
+                if r.content.is_empty() {
                     continue;
                 }
                 let page = self.page(&mut inner, i)?;
-                if *redo {
+                if r.redo {
                     page.ocr_apply("", &mut font)?;
                     replaced += 1;
                 }
-                page.ocr_apply(content, &mut font)?;
+                page.ocr_apply(&r.content, &mut font)?;
                 pages += 1;
-                words += n;
+                words += r.words;
             }
             Ok(())
         })();
@@ -416,6 +446,7 @@ impl Engine {
                     Ok((p, r, w)) => {
                         end.pages = p;
                         end.replaced = r;
+                        end.turned = results.iter().filter(|(_, t)| t.rot != 0 && !t.content.is_empty()).map(|(&i, t)| (i, t.rot)).collect();
                         end.words = w;
                         end.changed = p > 0;
                         end.dirty = d.has_changes();
@@ -462,10 +493,10 @@ impl Engine {
                         };
                         let page: PageJson = serde_json::from_str(&json).map_err(|e| e.to_string())?;
                         if page.blank == 1 || page.l.is_empty() {
-                            return Ok(Some((String::new(), 0, redo)));
+                            return Ok(Some(PageText { content: String::new(), words: 0, redo, rot: 0 }));
                         }
-                        let (content, n) = page_content(&page.l, [b[0], b[1]]);
-                        Ok(Some((content, n, redo)))
+                        let (content, words) = turned_content(&page.l, &b, page.rot);
+                        Ok(Some(PageText { content, words, redo, rot: page.rot }))
                     })();
                     match res {
                         Ok(Some(r)) => {
@@ -518,6 +549,19 @@ mod tests {
     }
 
     /// The words in the order the content writes them.
+    #[test]
+    fn a_turned_page_is_turned_back() {
+        // A word at the top-left of a page read turned 90 degrees clockwise (612 x 792 page).
+        let lines = vec![line(40.0, &[(20.0, 60.0, "Sideways")])];
+        let (s, n) = super::turned_content(&lines, &[0.0, 0.0, 612.0, 792.0], 90);
+        assert_eq!(n, 1);
+        assert!(s.starts_with("q\n0 -1 1 0 0 792 cm\n"), "{s}");
+        assert!(s.ends_with("Q\n"));
+        // Upright: as before, no matrix.
+        let (u, _) = super::turned_content(&lines, &[0.0, 0.0, 612.0, 792.0], 0);
+        assert!(u.starts_with("BT"));
+    }
+
     fn texts(s: &str) -> Vec<String> {
         s.lines()
             .filter_map(|l| l.strip_prefix('<').and_then(|l| l.strip_suffix(">Tj")))

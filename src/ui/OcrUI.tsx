@@ -40,10 +40,14 @@ export function OcrBar({ tab }: { tab: Tab }) {
     const e = st.end;
     const added = e.pages > 0;
     const did = e.replaced ? `Recognized ${plural(e.pages, "page")} again` : `Added text to ${plural(e.pages, "page")}`;
+    // Sideways or upside-down pages: read the right way, and offered turned upright (until they are).
+    const rot = tab.edits.value?.rot ?? [];
+    const sideways = e.turned.length ? ` ${plural(e.turned.length, "page was", "pages were")} sideways or upside down.` : "";
+    const turnable = e.turned.some(([src, deg]) => (rot[src] ?? 0) !== deg);
     const text = e.error
       ? `Text recognition stopped with an error: ${e.error}${added ? ` ${did}.` : ""}`
       : added
-        ? `${st.stopped ? "Stopped. " : ""}${did}: you can now search, select and copy it.${tab.dirty.value ? " Save to keep it." : ""}`
+        ? `${st.stopped ? "Stopped. " : ""}${did}: you can now search, select and copy it.${sideways}${tab.dirty.value ? " Save to keep it." : ""}`
         : st.stopped
           ? "Stopped before any text was found."
           : "No new text found: the pages already have text, or have nothing to read.";
@@ -51,6 +55,11 @@ export function OcrBar({ tab }: { tab: Tab }) {
       <div class={`formbar ocrbar ${e.error ? "warn" : ""}`}>
         <ScanText size={16} />
         <span title={text}>{text}</span>
+        {turnable && (
+          <button class="btn ghost" onClick={() => P.turnSources(tab, e.turned)} title="Turn those pages so they read the right way up (Ctrl+Z to undo)">
+            Turn upright
+          </button>
+        )}
         {added && !e.error && (
           <button class="btn ghost" onClick={() => void recognize(tab)} title="Wrong language, or words misread? Read the pages again with other languages or Best accuracy">
             Recognize again…

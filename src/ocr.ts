@@ -26,6 +26,8 @@ export interface OcrEnd {
   pages: number;
   /** Of those, pages whose earlier recognised text was replaced. */
   replaced: number;
+  /** Pages that read the right way up only when turned: [page in the file, clockwise degrees]. */
+  turned: [number, number][];
   words: number;
   changed: boolean;
   dirty: boolean;

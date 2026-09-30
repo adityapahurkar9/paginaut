@@ -24,6 +24,9 @@ fn main() {
     let t1 = Instant::now();
     let json = list.ocr(&b, 300.0, &tess, None, false).unwrap().unwrap();
     println!("page {page} recognised in {:?}", t1.elapsed());
+    if std::env::var("OCR_JSON").is_ok() {
+        println!("{}", &json[..json.len().min(400)]);
+    }
     let v: Value = serde_json::from_str(&json).unwrap();
     if v["blank"].as_i64() == Some(1) {
         println!("blank: nothing to read");

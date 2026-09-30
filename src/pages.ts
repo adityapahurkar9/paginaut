@@ -47,6 +47,17 @@ export function rotatePages(tab: Tab, by: 90 | -90 | 180, page?: number) {
   maybeAutoSave(tab);
 }
 
+/** Sets how far pages (by index in the file) are turned, e.g. to show sideways scans upright; one undo step. */
+export function turnSources(tab: Tab, turns: [number, number][]) {
+  const e = tab.edits.value;
+  if (!e) return;
+  const rot = e.rot.slice();
+  for (const [src, deg] of turns) if (src < rot.length) rot[src] = ((deg % 360) + 360) % 360;
+  if (rot.every((r, i) => r === e.rot[i])) return;
+  apply(tab, { order: e.order, rot });
+  maybeAutoSave(tab);
+}
+
 export function deletePages(tab: Tab, page?: number) {
   const e = tab.edits.value;
   if (!e) return;

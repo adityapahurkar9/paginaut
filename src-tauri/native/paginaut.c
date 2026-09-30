@@ -6696,7 +6696,21 @@ typedef struct
 	int line;
 	int words;
 	int failed;
+	/* How well it read: letters, their summed confidence, and a score that favours sure words. */
+	long letters;
+	double conf_letters;
+	double score;
 } ocr_out;
+
+/* Letters and digits in a word (UTF-8: every character outside ASCII counts). */
+static int word_letters(const char *t)
+{
+	int n = 0;
+	for (const unsigned char *p = (const unsigned char *)t; *p; p++)
+		if ((*p & 0xC0) != 0x80 && (*p >= 0x80 || (*p >= '0' && *p <= '9') || ((*p | 32) >= 'a' && (*p | 32) <= 'z')))
+			n++;
+	return n;
+}
 
 /* Called from C++: no MuPDF exception may escape it. */
 static void ocr_word(void *arg, int line, const int lb[4], const int bl[4], const int wb[4], float conf, const char *text)
@@ -6704,7 +6718,20 @@ static void ocr_word(void *arg, int line, const int lb[4], const int bl[4], cons
 	ocr_out *o = (ocr_out *)arg;
 	fz_context *ctx = o->ctx;
 	float s = o->s;
+	int n;
 	if (o->failed)
+		return;
+	n = word_letters(text);
+	/* Only words on level lines count: Tesseract reads some sideways text as vertical lines, which
+	 * would place the text layer wrongly (the page is turned instead). */
+	if (abs(bl[2] - bl[0]) >= abs(bl[3] - bl[1]))
+	{
+		o->letters += n;
+		o->conf_letters += (double)conf * n;
+		o->score += (double)conf * conf / 10000.0 * n;
+	}
+	/* Only scoring (trying which way up the page reads). */
+	if (!o->buf)
 		return;
 	fz_try(ctx)
 	{
@@ -6811,6 +6838,76 @@ static fz_pixmap *render_untexted(fz_context *ctx, fz_display_list *l, fz_rect b
 	return pix;
 }
 
+/* The region (x0, y0, w, h) of a grey pixmap turned clockwise by rot (90, 180 or 270), as a new
+ * buffer of *ow x *oh bytes. */
+static unsigned char *turn_gray(fz_context *ctx, const fz_pixmap *pix, int x0, int y0, int w, int h, int rot, int *ow, int *oh)
+{
+	int W = rot == 180 ? w : h, H = rot == 180 ? h : w;
+	unsigned char *out = fz_malloc(ctx, (size_t)W * H);
+	for (int y = 0; y < h; y++)
+	{
+		const unsigned char *src = pix->samples + (size_t)(y0 + y) * pix->stride + x0;
+		for (int x = 0; x < w; x++)
+		{
+			int nx, ny;
+			if (rot == 90)
+				nx = h - 1 - y, ny = x;
+			else if (rot == 180)
+				nx = w - 1 - x, ny = h - 1 - y;
+			else
+				nx = y, ny = w - 1 - x;
+			out[(size_t)ny * W + nx] = src[x];
+		}
+	}
+	*ow = W;
+	*oh = H;
+	return out;
+}
+
+/* Which way up a page reads (tried when it reads poorly as it is: a sideways or upside-down scan). The middle
+ * of the page is read at each quarter turn; returns the clockwise turn (90, 180, 270) that reads clearly
+ * better than none, else 0. *rc: 1 aborted, -1 failed. */
+static int best_turn(fz_context *ctx, po_tess *t, const fz_pixmap *pix, float scale, fz_cookie *k, int *rc)
+{
+	int cw = pix->w * 3 / 5, ch = pix->h * 3 / 5, cx = (pix->w - cw) / 2, cy = (pix->h - ch) / 2;
+	double upright = 0, best = 0;
+	int turn = 0;
+	unsigned char *g = NULL;
+	fz_var(g);
+	*rc = 0;
+	fz_try(ctx)
+	{
+		for (int r = 0; r < 360 && *rc == 0; r += 90)
+		{
+			ocr_out o = { 0 };
+			int w = cw, h = ch, stride = (int)pix->stride;
+			const unsigned char *src = pix->samples + (size_t)cy * pix->stride + cx;
+			o.ctx = ctx;
+			o.s = scale;
+			o.line = -1;
+			if (r)
+			{
+				g = turn_gray(ctx, pix, cx, cy, cw, ch, r, &w, &h);
+				src = g;
+				stride = w;
+			}
+			*rc = po_tess_recognize(t, src, w, h, stride, (int)(scale * 72 + 0.5f), ocr_word, &o, k ? &k->abort : NULL);
+			fz_free(ctx, g);
+			g = NULL;
+			if (r == 0)
+				upright = o.score;
+			else if (o.score > best)
+				best = o.score, turn = r;
+		}
+	}
+	fz_always(ctx)
+		fz_free(ctx, g);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	/* A clear win, with a fair number of words read surely. */
+	return *rc == 0 && best > upright * 1.5 + 20 ? turn : 0;
+}
+
 /* How much of the page is left to read (see render_untexted), in parts per 10,000
  * of its area, from a quick low-resolution render. -1 on error. */
 int fo_ocr_ink(fo_ctx *c, fo_list *l, const float bf[4])
@@ -6835,21 +6932,24 @@ int fo_ocr_ink(fo_ctx *c, fo_list *l, const float bf[4])
 }
 
 /* Recognises a page: renders what isn't text yet (see render_untexted), then runs
- * Tesseract on it.
- * JSON {"l":[{"b":[line box],"bl":[baseline x1,y1,x2,y2],"w":[[x0,y0,x1,y1,conf,"text"],...]}],"blank":1?}
- * in points relative to the page origin. *aborted is set when k was aborted. */
+ * Tesseract on it; a page that reads poorly is tried turned (see best_turn).
+ * JSON {"l":[{"b":[line box],"bl":[baseline x1,y1,x2,y2],"w":[[x0,y0,x1,y1,conf,"text"],...]}],"blank":1?,"rot":r?}
+ * in points relative to the page origin, or with rot, to the top-left of the page turned rot degrees
+ * clockwise (the way up it reads). *aborted is set when k was aborted. */
 char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bf[4], float dpi, po_tess *t, fo_cookie *k, int redo, int *aborted)
 {
 	fz_pixmap *pix = NULL;
 	fz_buffer *buf = NULL;
+	unsigned char *turned = NULL;
 	char *s = NULL;
 	*aborted = 0;
 	fz_var(pix);
 	fz_var(buf);
+	fz_var(turned);
 	fz_try(CTX)
 	{
 		float scale = dpi / 72;
-		int w, h, rc;
+		int w, h, rc, rot = 0;
 		size_t dark = 0;
 		ocr_out out = { 0 };
 
@@ -6888,15 +6988,55 @@ char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bf[4], float dpi, po_tess *
 		}
 		if (rc < 0 || out.failed)
 			fz_throw(CTX, FZ_ERROR_LIBRARY, "text recognition failed");
+
+		/* Read poorly (few letters, or unsure of them): maybe it's sideways or upside down. */
+		if (out.letters < 20 || out.conf_letters < 70.0 * out.letters)
+		{
+			rot = best_turn(CTX, t, pix, scale, (fz_cookie *)k, &rc);
+			if (rc == 1)
+			{
+				*aborted = 1;
+				break;
+			}
+			if (rc < 0)
+				fz_throw(CTX, FZ_ERROR_LIBRARY, "text recognition failed");
+		}
+		if (rot)
+		{
+			int tw, th;
+			ocr_out again = { 0 };
+			turned = turn_gray(CTX, pix, 0, 0, pix->w, pix->h, rot, &tw, &th);
+			fz_drop_buffer(CTX, buf);
+			buf = NULL;
+			buf = fz_new_buffer(CTX, 4096);
+			fz_append_string(CTX, buf, "{\"l\":[");
+			again.ctx = CTX;
+			again.buf = buf;
+			again.s = scale;
+			again.line = -1;
+			rc = po_tess_recognize(t, turned, tw, th, tw, (int)(scale * 72 + 0.5f), ocr_word, &again, k ? &((fz_cookie *)k)->abort : NULL);
+			if (rc == 1)
+			{
+				*aborted = 1;
+				break;
+			}
+			if (rc < 0 || again.failed)
+				fz_throw(CTX, FZ_ERROR_LIBRARY, "text recognition failed");
+			out = again;
+		}
 		if (out.line >= 0)
 			fz_append_string(CTX, buf, "]}");
-		fz_append_string(CTX, buf, "]}");
+		fz_append_string(CTX, buf, "]");
+		if (rot)
+			fz_append_printf(CTX, buf, ",\"rot\":%d", rot);
+		fz_append_string(CTX, buf, "}");
 		s = buffer_to_string(CTX, buf);
 	}
 	fz_always(CTX)
 	{
 		fz_drop_pixmap(CTX, pix);
 		fz_drop_buffer(CTX, buf);
+		fz_free(CTX, turned);
 	}
 	fz_catch(CTX)
 	{
