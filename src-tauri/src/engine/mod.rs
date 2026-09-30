@@ -885,9 +885,10 @@ impl Doc {
     }
 
     /// The table in `area` of page `index`, with the column lines `cols` if given (two or more).
-    pub fn table_in(&self, index: usize, area: [f32; 4], cols: &[f32]) -> Result<Option<table::Table>, String> {
+    /// The table in `area`: found, or with exactly these column lines, and row lines too if given.
+    pub fn table_in(&self, index: usize, area: [f32; 4], cols: &[f32], rows: &[f32]) -> Result<Option<table::Table>, String> {
         let b = self.bounds(index)?;
-        let json = self.list(index, 1)?.table_in_json(&b, &area, cols)?;
+        let json = self.list(index, 1)?.table_in_json(&b, &area, cols, rows)?;
         let list: Vec<Option<table::Table>> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
         Ok(list.into_iter().flatten().filter(|t| t.rows() > 0 && t.cols() > 0).max_by_key(|t| t.cells.len()))
     }

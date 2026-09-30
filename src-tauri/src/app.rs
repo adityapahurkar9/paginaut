@@ -518,9 +518,9 @@ pub async fn tables(state: State<'_, AppState>, doc: DocId, page: usize) -> Res<
 
 /// Reads the table in `area`, with the column lines `cols` if given (two or more).
 #[tauri::command]
-pub async fn table_in(state: State<'_, AppState>, doc: DocId, page: usize, area: [f32; 4], cols: Vec<f32>) -> Res<Option<crate::engine::table::Table>> {
+pub async fn table_in(state: State<'_, AppState>, doc: DocId, page: usize, area: [f32; 4], cols: Vec<f32>, rows: Option<Vec<f32>>) -> Res<Option<crate::engine::table::Table>> {
     let engine = state.engine.clone();
-    blocking(move || engine.doc(doc)?.table_in(page, area, &cols)).await
+    blocking(move || engine.doc(doc)?.table_in(page, area, &cols, &rows.unwrap_or_default())).await
 }
 
 /// Writes a table as CSV or Excel at `path` (which must end in .csv or .xlsx).

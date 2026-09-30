@@ -341,8 +341,9 @@ Extract content (right-click the item on the page; Tools › Organize; command p
       the column lines, click to add one, double-click to remove; the columns are then exactly those. Heading lines
       are joined into one row (years stay headings)
 - [x] Tables to Excel: percentages as numbers (0.8.2: "12.5%" is 0.125 shown as 12.50%; "(3%)" is -3%)
-- [ ] Tables, later: rows as adjustable as columns; group headings spread over the columns they span; the same menu
-      in Read/Book mode
+- [x] Rows as adjustable as columns (0.8.4): orange row lines in the table dialog to drag, Shift+click to add,
+      double-click to remove (joins the rows); once set, the table is read with exactly those rows
+- [ ] Tables, later: group headings spread over the columns they span; the same menu in Read/Book mode
 - [x] Any area, charts and drawings: "Select an area" (right-click menu, Organize), drag a box: copy its text,
       copy as picture, save as PDF (vector; the rest of the page is hidden, not removed), SVG (vector, text as
       outlines) or PNG at 150/300/600 dpi; turned as the page is shown

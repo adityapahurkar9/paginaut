@@ -6204,7 +6204,7 @@ char *fo_tables_json(fo_ctx *c, fo_list *l, const float b[4])
 	return s;
 }
 
-char *fo_table_in_json(fo_ctx *c, fo_list *l, const float b[4], const float area[4], const float *cols, int ncols)
+char *fo_table_in_json(fo_ctx *c, fo_list *l, const float b[4], const float area[4], const float *cols, int ncols, const float *rows, int nrows)
 {
 	fz_stext_page *t = NULL;
 	fz_buffer *buf = NULL;
@@ -6228,8 +6228,8 @@ char *fo_table_in_json(fo_ctx *c, fo_list *l, const float b[4], const float area
 		fz_append_byte(CTX, buf, '[');
 		if (ncols >= 2)
 		{
-			/* Column lines exactly as given; rows as the table finder proposes them, or
-			 * from the text lines when it proposes none. */
+			/* Column lines exactly as given; row lines too if given, else as the table finder
+			 * proposes them, or from the text lines when it proposes none. */
 			float *xs = colx = fz_malloc(CTX, ncols * sizeof(float)), *ys = NULL;
 			int ny = 0;
 			for (int i = 0; i < ncols; i++)
@@ -6237,7 +6237,17 @@ char *fo_table_in_json(fo_ctx *c, fo_list *l, const float b[4], const float area
 			qsort(xs, ncols, sizeof(float), cmp_float);
 			r.x0 = xs[0];
 			r.x1 = xs[ncols - 1];
-			if (fz_propose_table_within_bounds(CTX, t, r, &xpos, &ypos, &opts) && ypos && ypos->len >= 2)
+			if (nrows >= 2)
+			{
+				ys = fz_malloc(CTX, nrows * sizeof(float));
+				for (int i = 0; i < nrows; i++)
+					ys[i] = rows[i] + b[1];
+				qsort(ys, nrows, sizeof(float), cmp_float);
+				ny = nrows;
+				r.y0 = ys[0];
+				r.y1 = ys[ny - 1];
+			}
+			else if (fz_propose_table_within_bounds(CTX, t, r, &xpos, &ypos, &opts) && ypos && ypos->len >= 2)
 			{
 				ys = fz_malloc(CTX, ypos->len * sizeof(float));
 				for (int i = 0; i < ypos->len; i++)

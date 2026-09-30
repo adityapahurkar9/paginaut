@@ -157,11 +157,20 @@ fn main() {
         std::fs::write(format!("{tmp}/table.csv"), tb.csv()).unwrap();
         std::fs::write(format!("{tmp}/table.xlsx"), tb.xlsx()).unwrap();
         // Reading the same area again, and with the column lines given.
-        let again = d.table_in(*page, tb.r, &[]).unwrap();
+        let again = d.table_in(*page, tb.r, &[], &[]).unwrap();
         check("table read from its area", again.as_ref().is_some_and(|a| a.cols() == tb.cols()), format!("{:?}", again.as_ref().map(|a| (a.rows(), a.cols()))));
         let mid = (tb.xs[0] + tb.xs[tb.xs.len() - 1]) / 2.0;
-        let two = d.table_in(*page, tb.r, &[tb.xs[0], mid, tb.xs[tb.xs.len() - 1]]).unwrap();
+        let two = d.table_in(*page, tb.r, &[tb.xs[0], mid, tb.xs[tb.xs.len() - 1]], &[]).unwrap();
         check("column lines as given", two.as_ref().is_some_and(|a| a.cols() == 2), format!("{:?}", two.as_ref().map(|a| (a.rows(), a.cols()))));
+        // Row lines too: the first three rows joined into one, the rest as found.
+        let mut rows = vec![tb.ys[0]];
+        rows.extend_from_slice(&tb.ys[3..]);
+        let fewer = d.table_in(*page, tb.r, &tb.xs, &rows).unwrap();
+        check(
+            "row lines as given",
+            fewer.as_ref().is_some_and(|a| a.rows() == tb.rows() - 2 && a.ys == rows),
+            format!("{:?} of {}", fewer.as_ref().map(|a| (a.rows(), a.cols())), tb.rows()),
+        );
     }
     check("tables found", found > 0 && best.is_some(), format!("{found}"));
     engine.close(info.doc_id);

@@ -443,7 +443,9 @@ export const api = {
   editText: (doc: number, page: number, edit: { para: Paragraph; text: string }) => invoke<void>("edit_text", { doc, page, edit }),
   tables: (doc: number, page: number) => invoke<Table[]>("tables", { doc, page }),
   /** The table in `area`; with two or more column lines, exactly those columns. */
-  tableIn: (doc: number, page: number, area: [number, number, number, number], cols: number[]) => invoke<Table | null>("table_in", { doc, page, area, cols }),
+  /** The table in `area`: found (no lines given), or with exactly these column lines, and row lines too if given. */
+  tableIn: (doc: number, page: number, area: [number, number, number, number], cols: number[], rows: number[] = []) =>
+    invoke<Table | null>("table_in", { doc, page, area, cols, rows }),
   /** Writes a table at `path` (.csv or .xlsx). */
   tableSave: (table: Table, path: string) => invoke<void>("table_save", { table, path }),
   attachments: (doc: number) => invoke<Attachment[]>("attachments", { doc }),

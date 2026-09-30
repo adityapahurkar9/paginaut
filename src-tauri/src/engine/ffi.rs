@@ -134,7 +134,7 @@ extern "C" {
     pub fn fo_pdf_redact_apply(c: *mut fo_ctx, p: *mut fo_page, cover: c_int, rgb: *const c_float, label: *const c_char, left: *mut c_int) -> c_int;
     pub fn fo_pdf_sanitize(c: *mut fo_ctx, d: *mut fo_doc, what: c_int) -> *mut c_char;
     pub fn fo_tables_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
-    pub fn fo_table_in_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, area: *const c_float, cols: *const c_float, ncols: c_int) -> *mut c_char;
+    pub fn fo_table_in_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, area: *const c_float, cols: *const c_float, ncols: c_int, rows: *const c_float, nrows: c_int) -> *mut c_char;
     pub fn fo_pictures_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
     pub fn fo_picture_data(c: *mut fo_ctx, l: *mut fo_list, idx: c_int, fmt: c_int, data: *mut *mut u8, len: *mut usize, ext: *mut c_char) -> c_int;
     pub fn fo_attachments_json(c: *mut fo_ctx, d: *mut fo_doc) -> *mut c_char;

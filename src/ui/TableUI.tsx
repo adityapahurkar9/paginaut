@@ -1,4 +1,4 @@
-// The table dialog: a table over its picture, with column lines to move, add and remove.
+// The table dialog: a table over its picture, with column and row lines to move, add and remove.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { X } from "lucide-preact";
 import { api, type Table } from "../api";
@@ -19,6 +19,8 @@ function TableInner({ tab, view, area, initial }: { tab: Tab; view: number; area
   const src = tab.edits.value?.order[view] ?? view;
   const [table, setTable] = useState<Table | null>(initial);
   const [cols, setCols] = useState<number[]>(initial?.xs ?? []);
+  // Row lines you set (top and bottom included); null while they're the ones found.
+  const [rows, setRows] = useState<number[] | null>(null);
   const [img, setImg] = useState<string | null>(null);
   const [busy, setBusy] = useState(!initial);
   const [join, setJoin] = useState(true);
@@ -58,40 +60,57 @@ function TableInner({ tab, view, area, initial }: { tab: Tab; view: number; area
       .finally(() => setBusy(false));
   }, []);
 
-  // Column lines moved: read again with exactly those columns.
+  // Lines moved: read again with exactly those columns (and rows, once you've set them).
   useEffect(() => {
     if (!edited.current || cols.length < 2) return;
     const id = setTimeout(() => {
       setBusy(true);
-      api.tableIn(docId, src, area, cols).then(setTable).finally(() => setBusy(false));
+      api.tableIn(docId, src, area, cols, rows && rows.length >= 2 ? rows : []).then(setTable).finally(() => setBusy(false));
     }, 180);
     return () => clearTimeout(id);
-  }, [cols]);
+  }, [cols, rows]);
 
+  const sorted = (v: number[]) => [...v].sort((a, b) => a - b);
   const change = (next: number[]) => {
     edited.current = true;
-    setCols([...next].sort((a, b) => a - b));
+    setCols(sorted(next));
+  };
+  const shownRows = rows ?? table?.ys ?? [];
+  const changeRows = (next: number[]) => {
+    edited.current = true;
+    setRows(sorted(next));
   };
   const toPage = (clientX: number) => {
     const r = pic.current!.getBoundingClientRect();
     return Math.max(area[0], Math.min(area[2], area[0] + (clientX - r.left) / scale));
   };
+  const toPageY = (clientY: number) => {
+    const r = pic.current!.getBoundingClientRect();
+    return Math.max(area[1], Math.min(area[3], area[1] + (clientY - r.top) / scale));
+  };
 
-  const drag = (i: number, e: PointerEvent) => {
+  /** Drags line i: a column (x) or a row (y). */
+  const drag = (i: number, e: PointerEvent, row = false) => {
     e.preventDefault();
     e.stopPropagation();
+    // A found row line moved: from now on the rows are yours.
+    if (row && !rows) setRows(shownRows);
     const move = (ev: PointerEvent) => {
-      const x = toPage(ev.clientX);
       edited.current = true;
-      setCols((c) => c.map((v, k) => (k === i ? x : v)));
+      if (row) {
+        const y = toPageY(ev.clientY);
+        setRows((r) => (r ?? shownRows).map((v, k) => (k === i ? y : v)));
+      } else {
+        const x = toPage(ev.clientX);
+        setCols((c) => c.map((v, k) => (k === i ? x : v)));
+      }
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      setCols((c) => {
-        edited.current = true;
-        return [...c].sort((a, b) => a - b);
-      });
+      edited.current = true;
+      if (row) setRows((r) => r && sorted(r));
+      else setCols((c) => sorted(c));
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -108,12 +127,37 @@ function TableInner({ tab, view, area, initial }: { tab: Tab; view: number; area
         </button>
         <h2>Table</h2>
         <span class="hint">
-          Drag the blue lines to where the columns split. Click the picture to add a line; double-click a line to remove it.
+          Drag the blue lines to where the columns split, and the orange ones to where the rows do. Click the picture to add a
+          column line, Shift+click to add a row line; double-click a line to remove it.
         </span>
         <div class="table-pic-wrap">
-          <div ref={pic} class="table-pic" style={{ width: WIDTH, height: h }} onClick={(e) => (e.target as HTMLElement).closest(".col-line") || change([...cols, toPage(e.clientX)])}>
+          <div
+            ref={pic}
+            class="table-pic"
+            style={{ width: WIDTH, height: h }}
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest(".col-line, .row-line")) return;
+              if (e.shiftKey) changeRows([...shownRows, toPageY(e.clientY)]);
+              else change([...cols, toPage(e.clientX)]);
+            }}
+          >
             {img && <img src={img} width={WIDTH} height={h} alt="" draggable={false} />}
-            {table?.ys.map((y, i) => <div key={`r${i}`} class="row-line" style={{ top: (y - area[1]) * scale }} />)}
+            {shownRows.map((y, i) => {
+              const edge = i === 0 || i === shownRows.length - 1;
+              return (
+                <div
+                  key={`r${i}`}
+                  class={`row-line ${edge ? "edge" : ""}`}
+                  style={{ top: (y - area[1]) * scale }}
+                  onPointerDown={(e) => drag(i, e, true)}
+                  onDblClick={(e) => {
+                    e.stopPropagation();
+                    if (!edge && shownRows.length > 2) changeRows(shownRows.filter((_, k) => k !== i));
+                  }}
+                  title={edge ? "Top or bottom of the table" : "Drag to move · double-click to remove (joins the rows)"}
+                />
+              );
+            })}
             {cols.map((x, i) => (
               <div
                 key={i}
@@ -157,7 +201,7 @@ function TableInner({ tab, view, area, initial }: { tab: Tab; view: number; area
           <input type="checkbox" checked={join} onChange={(e) => setJoin((e.target as HTMLInputElement).checked)} /> Join heading lines into one row
         </label>
         <div class="row">
-          <button class="btn ghost" disabled={!initial && !edited.current} onClick={() => { edited.current = false; setTable(initial); setCols(initial?.xs ?? []); if (!initial) { setBusy(true); api.tableIn(docId, src, area, []).then((t) => { setTable(t); setCols(t?.xs ?? [area[0], area[2]]); }).finally(() => setBusy(false)); } }}>
+          <button class="btn ghost" disabled={!initial && !edited.current} onClick={() => { edited.current = false; setRows(null); setTable(initial); setCols(initial?.xs ?? []); if (!initial) { setBusy(true); api.tableIn(docId, src, area, []).then((t) => { setTable(t); setCols(t?.xs ?? [area[0], area[2]]); }).finally(() => setBusy(false)); } }}>
             Reset
           </button>
           <span style={{ flex: 1 }} />

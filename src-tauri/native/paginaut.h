@@ -174,9 +174,10 @@ char *fo_area_text(fo_ctx *c, fo_list *l, const float bounds[4], const float are
 int fo_pdf_area_pdf(fo_ctx *c, fo_page *p, const float area[4], int rot, unsigned char **data, size_t *len);
 /* Tables on a page: JSON [{"r","xs" (column lines),"ys" (row lines),"cells":[[row,col,rows,cols,text]]}|null],
  * coordinates relative to the page origin. fo_table_in_json reads the one table in `area`, with the
- * column lines `cols` (page coordinates relative to the origin, left and right edges included) if given. */
+ * column lines `cols` (page coordinates relative to the origin, left and right edges included) if given, and
+ * with these row lines `rows` (top and bottom included) if given too. */
 char *fo_tables_json(fo_ctx *c, fo_list *l, const float bounds[4]);
-char *fo_table_in_json(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4], const float *cols, int ncols);
+char *fo_table_in_json(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4], const float *cols, int ncols, const float *rows, int nrows);
 /* Paragraphs on a page (for editing): JSON [{"r","l":[[x0,y0,x1,y1,baseline]],"s" (size),"lead" (baseline
  * to baseline),"c":"#rrggbb","b","i","serif","mono","a":"l|r|c|j","font","t" (text)}], relative to the page origin. */
 char *fo_paragraphs_json(fo_ctx *c, fo_list *l, const float bounds[4]);
