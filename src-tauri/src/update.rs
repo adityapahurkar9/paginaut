@@ -88,8 +88,11 @@ pub fn newer(a: &str, b: &str) -> bool {
 
 pub fn check(cancel: &AtomicBool) -> Result<Checked, String> {
     let Some(text) = latest_text("latest.json", cancel)? else {
+        *FOUND.lock() = None;
         return Ok(Checked { current: CURRENT, available: None, none_published: true });
     };
+    // A check replaces what an earlier one found (a release can be withdrawn).
+    *FOUND.lock() = None;
     let latest: Latest = serde_json::from_str(&text).map_err(|_| "The update information couldn't be read.".to_string())?;
     let platform = ["windows-x86_64-nsis", "windows-x86_64"].iter().find_map(|k| latest.platforms.get(*k)).cloned();
     let available = match platform {

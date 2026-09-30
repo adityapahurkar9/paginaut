@@ -582,3 +582,10 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       resets a default whose ProgID disappears); a kind Paginaut is the default for can't be unticked
 - Replaces the installer's own file associations (Tauri's, which set each type's class): earlier versions'
   ProgIDs ("PDF document" …) are kept and pointed at the new copy, and removed on uninstall
+- [x] 0.8.1: review fixes — an upgrade that uninstalls first keeps what was offered (the uninstall leaves a note,
+      read within the hour) and recreates any ProgID a default still names (so 0.7's "PDF document" default
+      survives its old uninstaller); only an installed copy offers itself (a dev build or copied folder shows the
+      tab read-only), and an old ProgID is only re-pointed when its program is gone; a check forgets an update
+      it no longer finds; earlier update installers are cleared before a download; the add-on list's OCR
+      catalogue is shared, not copied per lookup; release notes reach GitHub through a file; the tab's grouping
+      comes from the app

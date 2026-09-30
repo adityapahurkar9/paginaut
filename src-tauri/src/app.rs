@@ -1416,6 +1416,8 @@ pub async fn update_check(app: tauri::AppHandle) -> Res<crate::update::Checked> 
 #[tauri::command]
 pub async fn update_install(app: tauri::AppHandle, on_event: Channel<DownloadEvent>) -> Res<()> {
     let dir = std::env::temp_dir().join("Paginaut update");
+    // Installers from earlier updates (and a stopped download) go first: only the new one is kept.
+    let _ = std::fs::remove_dir_all(&dir);
     UPDATE_STOP.store(false, std::sync::atomic::Ordering::Release);
     let installer = blocking(move || {
         let mut last = 0u64;
@@ -1439,21 +1441,33 @@ pub fn update_stop() {
 
 // ---------------------------------------------------------------- default app
 
-/// Which file types Paginaut is offered for, and where it's the default now.
-#[tauri::command]
-pub async fn default_apps_status() -> Res<Vec<crate::defaults::KindStatus>> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    blocking(move || Ok(crate::defaults::status(&crate::defaults::PAGINAUT, &exe))).await
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultApps {
+    /// This copy is installed: only then may it offer itself (a development build or a copied folder would take
+    /// the installed copy's place).
+    installed: bool,
+    kinds: Vec<crate::defaults::KindStatus>,
 }
 
-/// Offers Paginaut for exactly these kinds of file (withdrawn from the rest).
+/// Which file types Paginaut is offered for, and where it's the default now.
 #[tauri::command]
-pub async fn default_apps_set(kinds: Vec<String>) -> Res<Vec<crate::defaults::KindStatus>> {
+pub async fn default_apps_status() -> Res<DefaultApps> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    blocking(move || Ok(DefaultApps { installed: crate::defaults::installed(&exe), kinds: crate::defaults::status(&crate::defaults::PAGINAUT, &exe) })).await
+}
+
+/// Offers Paginaut for exactly these kinds of file (withdrawn from the rest). Installed copies only.
+#[tauri::command]
+pub async fn default_apps_set(kinds: Vec<String>) -> Res<DefaultApps> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    if !crate::defaults::installed(&exe) {
+        return Err("Only an installed Paginaut can be offered in Windows; this copy isn't installed.".into());
+    }
     blocking(move || {
         let ids: Vec<&str> = kinds.iter().map(String::as_str).collect();
         crate::defaults::register(&crate::defaults::PAGINAUT, &exe, &ids)?;
-        Ok(crate::defaults::status(&crate::defaults::PAGINAUT, &exe))
+        Ok(DefaultApps { installed: true, kinds: crate::defaults::status(&crate::defaults::PAGINAUT, &exe) })
     })
     .await
 }

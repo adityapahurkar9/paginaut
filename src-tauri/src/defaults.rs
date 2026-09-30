@@ -1,7 +1,13 @@
 //! Paginaut as a choice for its file types in Windows ("Open with" and Settings › Default apps), never taking
 //! any over: Windows 10 and 11 let only the user choose a default, so the app registers itself and then opens
 //! Default apps at Paginaut for the user to confirm. Everything lives under HKEY_CURRENT_USER; the installer
-//! runs `paginaut --register-types` after installing and `--unregister-types` before uninstalling.
+//! runs `paginaut --register-types` after installing and `--unregister-types` before uninstalling. Only an
+//! installed copy offers itself (a development build or a copied folder would take the installed copy's place).
+//!
+//! Windows resets a default whose ProgID disappears, so ProgIDs are never deleted while Paginaut is installed,
+//! and an upgrade that uninstalls the old version first (the installer's recommended choice) is bridged: the
+//! uninstall leaves a note of what was offered, and the install that follows offers it again and recreates any
+//! ProgID a default still names.
 
 use serde::Serialize;
 
@@ -10,25 +16,28 @@ pub struct Kind {
     pub id: &'static str,
     pub name: &'static str,
     pub exts: &'static [&'static str],
-    /// Offered on a first install (Office files and pictures stay with their own apps unless picked).
+    /// Offered on a first install.
     pub core: bool,
+    /// Files other apps own (Office files, pictures): shown apart, and offered only when picked.
+    pub others: bool,
 }
 
 pub const KINDS: &[Kind] = &[
-    Kind { id: "pdf", name: "PDF document", exts: &["pdf"], core: true },
-    Kind { id: "xps", name: "XPS document", exts: &["xps", "oxps"], core: true },
-    Kind { id: "ebook", name: "E-book", exts: &["epub", "mobi", "fb2", "fbz"], core: true },
-    Kind { id: "comic", name: "Comic book", exts: &["cbz"], core: true },
-    Kind { id: "markdown", name: "Markdown document", exts: &["md", "markdown"], core: false },
+    Kind { id: "pdf", name: "PDF document", exts: &["pdf"], core: true, others: false },
+    Kind { id: "xps", name: "XPS document", exts: &["xps", "oxps"], core: true, others: false },
+    Kind { id: "ebook", name: "E-book", exts: &["epub", "mobi", "fb2", "fbz"], core: true, others: false },
+    Kind { id: "comic", name: "Comic book", exts: &["cbz"], core: true, others: false },
+    Kind { id: "markdown", name: "Markdown document", exts: &["md", "markdown"], core: false, others: false },
     Kind {
         id: "picture",
         name: "Picture",
         exts: &["png", "jpg", "jpeg", "jfif", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "pnm", "pbm", "pgm", "ppm", "pam", "jxr"],
         core: false,
+        others: true,
     },
-    Kind { id: "word", name: "Word document", exts: &["docx", "doc", "docm", "dotx", "dot", "dotm", "rtf", "odt", "ott"], core: false },
-    Kind { id: "excel", name: "Spreadsheet", exts: &["xlsx", "xls", "xlsm", "xlsb", "xltx", "xlt", "ods", "ots"], core: false },
-    Kind { id: "powerpoint", name: "Presentation", exts: &["pptx", "ppt", "pptm", "ppsx", "pps", "potx", "pot", "odp", "otp"], core: false },
+    Kind { id: "word", name: "Word document", exts: &["docx", "doc", "docm", "dotx", "dot", "dotm", "rtf", "odt", "ott"], core: false, others: true },
+    Kind { id: "excel", name: "Spreadsheet", exts: &["xlsx", "xls", "xlsm", "xlsb", "xltx", "xlt", "ods", "ots"], core: false, others: true },
+    Kind { id: "powerpoint", name: "Presentation", exts: &["pptx", "ppt", "pptm", "ppsx", "pps", "potx", "pot", "odp", "otp"], core: false, others: true },
 ];
 
 /// ProgIDs the installers of 0.7 and earlier made (Tauri's own associations), cleaned up on the way.
@@ -41,10 +50,26 @@ pub struct KindStatus {
     pub name: &'static str,
     pub exts: &'static [&'static str],
     pub core: bool,
+    pub others: bool,
     /// Paginaut is offered for these files.
     pub offered: bool,
     /// How many of its extensions open in this copy of Paginaut now.
     pub default_for: usize,
+}
+
+/// This copy was installed (the installer puts its uninstaller next to it), so it may offer itself in Windows.
+pub fn installed(exe: &std::path::Path) -> bool {
+    exe.parent().is_some_and(|d| d.join("uninstall.exe").is_file())
+}
+
+/// The program a ProgID's command runs (`"C:\...\paginaut.exe" "%1"` or unquoted).
+fn command_exe(command: &str) -> std::path::PathBuf {
+    let c = command.trim();
+    let path = match c.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(""),
+        None => c.to_ascii_lowercase().find(".exe").map_or(c, |i| &c[..i + 4]),
+    };
+    std::path::PathBuf::from(path)
 }
 
 /// Where the keys go: Paginaut's own names, or a test's.
@@ -181,7 +206,7 @@ pub fn register(n: &Names, exe: &std::path::Path, ids: &[&str]) -> Result<(), St
         }
     }
     reg::set("Software\\RegisteredApplications", Some(n.app), &caps)?;
-    refresh_legacy(exe, &cmd, &icon);
+    refresh_legacy(&cmd, &icon);
     notify();
     Ok(())
 }
@@ -192,6 +217,46 @@ pub fn unregister(n: &Names, exe: &std::path::Path) {
     unregister_keys(n);
     remove_legacy(exe);
     notify();
+}
+
+/// The note an uninstall leaves for an install that follows at once (an upgrade that uninstalls first).
+fn carryover(n: &Names) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("{} file types.txt", n.app))
+}
+
+/// The installer's `--unregister-types`: withdraws everything, noting first what was offered.
+#[cfg(windows)]
+pub fn unregister_for_uninstall(n: &Names, exe: &std::path::Path) {
+    let offered: Vec<&str> = status(n, exe).into_iter().filter(|k| k.offered).map(|k| k.id).collect();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let _ = std::fs::write(carryover(n), format!("{now}\n{}", offered.join(",")));
+    unregister(n, exe);
+}
+
+/// What the note says, if it was left in the last hour (it's removed either way).
+fn take_carryover(n: &Names) -> Vec<&'static str> {
+    let path = carryover(n);
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let _ = std::fs::remove_file(&path);
+    let mut lines = text.lines();
+    let at: u64 = lines.next().and_then(|l| l.trim().parse().ok()).unwrap_or(0);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    if now.saturating_sub(at) > 3600 {
+        return Vec::new();
+    }
+    let ids = lines.next().unwrap_or("");
+    KINDS.iter().filter(|k| ids.split(',').any(|i| i.trim() == k.id)).map(|k| k.id).collect()
+}
+
+/// The ProgIDs the user's defaults name for an extension (Windows keeps the choice in UserChoice, and in
+/// UserChoiceLatest on newer versions).
+#[cfg(windows)]
+fn chosen(ext: &str) -> Vec<String> {
+    let base = format!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.{ext}");
+    [reg::get(&format!("{base}\\UserChoice"), Some("ProgId")), reg::get(&format!("{base}\\UserChoiceLatest\\ProgId"), Some("ProgId"))]
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 #[cfg(windows)]
@@ -214,11 +279,12 @@ fn unregister_keys(n: &Names) {
     reg::delete_value("Software\\RegisteredApplications", n.app);
 }
 
-/// The ProgIDs earlier installers made, if they open this app, pointed at this copy: they're kept, because one may
-/// be the user's default (Windows resets a default whose ProgID disappears). Only uninstalling removes them.
+/// The ProgIDs earlier installers made are kept, because one may be the user's default (Windows resets a default
+/// whose ProgID disappears). One whose program is gone (moved, or uninstalled before this install) is pointed
+/// at this copy; one a default still names but that an old uninstaller removed is made again. A ProgID that
+/// opens another copy that's still there is left alone. Only uninstalling removes them.
 #[cfg(windows)]
-fn refresh_legacy(exe: &std::path::Path, cmd: &str, icon: &str) {
-    let name = exe.file_name().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
+fn refresh_legacy(cmd: &str, icon: &str) {
     let mut seen = Vec::new();
     for (_, class) in LEGACY {
         if seen.contains(class) {
@@ -227,21 +293,32 @@ fn refresh_legacy(exe: &std::path::Path, cmd: &str, icon: &str) {
         seen.push(class);
         let key = format!("{CLASSES}\\{class}");
         let command = reg::get(&format!("{key}\\shell\\open\\command"), None);
-        if command.is_some_and(|c| c.to_lowercase().contains(&name)) {
+        let point_here = match &command {
+            Some(c) => is_paginaut(c) && !command_exe(c).is_file(),
+            // Gone: made again if a default names it (an old uninstaller removed it before this install).
+            None => LEGACY.iter().filter(|(_, c)| c == class).any(|(e, _)| chosen(e).iter().any(|p| p == class)),
+        };
+        if point_here {
+            let _ = reg::set(&key, None, class);
             let _ = reg::set(&format!("{key}\\shell\\open\\command"), None, cmd);
             let _ = reg::set(&format!("{key}\\DefaultIcon"), None, icon);
         }
     }
 }
 
-/// The ProgIDs earlier installers made, if they open this app: removed, and the type's own class put back
-/// (uninstalling only).
+/// A ProgID command that runs a Paginaut.
+fn is_paginaut(command: &str) -> bool {
+    command_exe(command).file_name().is_some_and(|f| f.to_string_lossy().eq_ignore_ascii_case("paginaut.exe"))
+}
+
+/// The ProgIDs earlier installers made, if they open this copy (or a Paginaut that's gone): removed, and the
+/// type's own class put back (uninstalling only).
 #[cfg(windows)]
 fn remove_legacy(exe: &std::path::Path) {
-    let name = exe.file_name().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let ours = |c: &str| is_paginaut(c) && (same_file(&command_exe(c).to_string_lossy(), exe) || !command_exe(c).is_file());
     for (ext, class) in LEGACY {
         let command = reg::get(&format!("{CLASSES}\\{class}\\shell\\open\\command"), None);
-        if !command.is_some_and(|c| c.to_lowercase().contains(&name)) {
+        if !command.is_some_and(|c| ours(&c)) {
             continue;
         }
         let key = format!("{CLASSES}\\.{ext}");
@@ -256,7 +333,7 @@ fn remove_legacy(exe: &std::path::Path) {
     }
     for (_, class) in LEGACY {
         let command = reg::get(&format!("{CLASSES}\\{class}\\shell\\open\\command"), None);
-        if command.is_some_and(|c| c.to_lowercase().contains(&name)) {
+        if command.is_some_and(|c| ours(&c)) {
             reg::delete_tree(&format!("{CLASSES}\\{class}"));
         }
     }
@@ -302,6 +379,7 @@ pub fn status(n: &Names, exe: &std::path::Path) -> Vec<KindStatus> {
             name: k.name,
             exts: k.exts,
             core: k.core,
+            others: k.others,
             offered: reg::get(&format!("{CLASSES}\\{}\\shell\\open\\command", prog_id(n, k)), None).is_some(),
             default_for: k.exts.iter().filter(|e| opens_in(e).is_some_and(|p| same_file(&p, exe))).count(),
         })
@@ -335,12 +413,23 @@ pub fn open_settings(_: &Names) -> Result<(), String> {
     Err("Only on Windows.".into())
 }
 
-/// The installer's `--register-types`: the kinds already offered (their paths refreshed), or on a first install
-/// the core ones.
+/// The installer's `--register-types`: the kinds offered before (still registered, or noted by the uninstall of an
+/// upgrade), plus any a default still names; on a first install the core ones.
 #[cfg(windows)]
 pub fn register_for_install(n: &Names, exe: &std::path::Path) -> Result<(), String> {
-    let now: Vec<&str> = status(n, exe).into_iter().filter(|s| s.offered).map(|s| s.id).collect();
-    let ids: Vec<&str> = if now.is_empty() { KINDS.iter().filter(|k| k.core).map(|k| k.id).collect() } else { now };
+    let mut ids: Vec<&str> = status(n, exe).into_iter().filter(|s| s.offered).map(|s| s.id).collect();
+    ids.extend(take_carryover(n));
+    for k in KINDS {
+        let pid = prog_id(n, k);
+        if k.exts.iter().any(|e| chosen(e).contains(&pid)) {
+            ids.push(k.id);
+        }
+    }
+    if ids.is_empty() {
+        ids = KINDS.iter().filter(|k| k.core).map(|k| k.id).collect();
+    }
+    ids.sort_unstable();
+    ids.dedup();
     register(n, exe, &ids)
 }
 
@@ -359,6 +448,8 @@ mod tests {
     use super::*;
 
     const TEST: Names = Names { app: "PaginautTestTypes", exe_name: "paginaut-test-types.exe" };
+    // Its own names: tests run at the same time.
+    const TEST_UPGRADE: Names = Names { app: "PaginautTestUpgrade", exe_name: "paginaut-test-upgrade.exe" };
 
     #[test]
     fn kinds_have_unique_ids_and_extensions() {
@@ -379,6 +470,30 @@ mod tests {
     #[ignore]
     fn open_settings_at_paginaut() {
         open_settings(&PAGINAUT).unwrap();
+    }
+
+    #[test]
+    fn command_paths() {
+        assert_eq!(command_exe(r#""C:\Program Files\P\paginaut.exe" "%1""#), std::path::PathBuf::from(r"C:\Program Files\P\paginaut.exe"));
+        assert_eq!(command_exe(r#"E:\P R\Paginaut\paginaut.exe "%1""#), std::path::PathBuf::from(r"E:\P R\Paginaut\paginaut.exe"));
+        assert!(is_paginaut(r#"E:\P R\Paginaut\PAGINAUT.EXE "%1""#));
+        assert!(!is_paginaut(r#""C:\Program Files\Adobe\Acrobat.exe" "%1""#));
+    }
+
+    /// An uninstall's note of what was offered is picked up once by the install that follows.
+    #[cfg(windows)]
+    #[test]
+    fn upgrade_keeps_the_choice() {
+        let exe = std::env::current_exe().unwrap();
+        register(&TEST_UPGRADE, &exe, &["pdf", "markdown"]).unwrap();
+        unregister_for_uninstall(&TEST_UPGRADE, &exe);
+        assert!(status(&TEST_UPGRADE, &exe).iter().all(|k| !k.offered));
+        register_for_install(&TEST_UPGRADE, &exe).unwrap();
+        let offered: Vec<&str> = status(&TEST_UPGRADE, &exe).iter().filter(|k| k.offered).map(|k| k.id).collect();
+        assert_eq!(offered, ["pdf", "markdown"]);
+        assert!(!carryover(&TEST_UPGRADE).exists());
+        unregister(&TEST_UPGRADE, &exe);
+        assert!(status(&TEST_UPGRADE, &exe).iter().all(|k| !k.offered));
     }
 
     /// Writes and removes test keys under HKEY_CURRENT_USER (never Paginaut's own names).

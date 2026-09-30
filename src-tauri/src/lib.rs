@@ -124,7 +124,7 @@ pub fn installer_switch() -> Option<i32> {
         match arg.as_str() {
             "--register-types" => return Some(defaults::register_for_install(&defaults::PAGINAUT, &exe).map_or(1, |_| 0)),
             "--unregister-types" => {
-                defaults::unregister(&defaults::PAGINAUT, &exe);
+                defaults::unregister_for_uninstall(&defaults::PAGINAUT, &exe);
                 return Some(0);
             }
             _ => {}

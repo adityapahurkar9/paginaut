@@ -75,13 +75,17 @@ if (-not $Publish) {
   Write-Host "Not published (add -Publish to upload to github.com/$repo)."
   exit 0
 }
-cmd /c "gh repo view $repo --json name 2>nul" | Out-Null
+& gh repo view $repo --json name 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "github.com/$repo doesn't exist (or gh isn't signed in): create it as a public repository first." }
 if ($AddonsOnly) {
-  cmd /c "gh release upload v$version `"$addons`" `"$addons.sig`" --repo $repo --clobber"
+  & gh release upload "v$version" $addons "$addons.sig" --repo $repo --clobber
 } else {
-  $files = Get-ChildItem $stage | ForEach-Object { "`"$($_.FullName)`"" }
-  cmd /c "gh release create v$version $($files -join ' ') --repo $repo --title `"Paginaut $version`" --notes `"$($latest.notes)`""
+  # The notes go through a file: quotes, & and % in them reach GitHub as written.
+  $notesFile = Join-Path $stage "notes.txt"
+  [IO.File]::WriteAllText($notesFile, $latest.notes)
+  $files = Get-ChildItem $stage -Exclude "notes.txt" | ForEach-Object { $_.FullName }
+  & gh release create "v$version" @files --repo $repo --title "Paginaut $version" --notes-file $notesFile
+  Remove-Item $notesFile
 }
 if ($LASTEXITCODE -ne 0) { throw "Publishing failed." }
 Write-Host "Published: https://github.com/$repo/releases/tag/v$version" -ForegroundColor Green

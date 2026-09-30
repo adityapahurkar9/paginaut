@@ -353,12 +353,20 @@ export interface UpdateChecked {
   nonePublished: boolean;
 }
 
+/** Settings › Default app: this copy may offer itself only when installed. */
+export interface DefaultApps {
+  installed: boolean;
+  kinds: DefaultKind[];
+}
+
 /** A kind of file Paginaut can be offered for in Windows (Settings › Default app). */
 export interface DefaultKind {
   id: string;
   name: string;
   exts: string[];
   core: boolean;
+  /** Files other apps own (Office files, pictures): shown apart. */
+  others: boolean;
   /** Paginaut is offered for it (Open with, Default apps). */
   offered: boolean;
   /** How many of its extensions open in Paginaut now. */
@@ -533,8 +541,8 @@ export const api = {
   skinSet: (jpeg: string) => invoke<string>("skin_set", { jpeg }),
   skinBytes: (file: string) => invoke<ArrayBuffer>("skin_bytes", { file }),
   skinClear: () => invoke<void>("skin_clear"),
-  defaultAppsStatus: () => invoke<DefaultKind[]>("default_apps_status"),
-  defaultAppsSet: (kinds: string[]) => invoke<DefaultKind[]>("default_apps_set", { kinds }),
+  defaultAppsStatus: () => invoke<DefaultApps>("default_apps_status"),
+  defaultAppsSet: (kinds: string[]) => invoke<DefaultApps>("default_apps_set", { kinds }),
   defaultAppsOpen: () => invoke<void>("default_apps_open"),
   updateCheck: () => invoke<UpdateChecked>("update_check"),
   updateInstall: (onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {

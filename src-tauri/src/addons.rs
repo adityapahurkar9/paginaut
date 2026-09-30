@@ -45,7 +45,19 @@ pub struct LibrePin {
 
 const SCHEMA: u32 = 1;
 
-static LIST: Lazy<RwLock<Option<Arc<Addons>>>> = Lazy::new(|| RwLock::new(None));
+/// The checked list in use, with its OCR languages ready to hand out.
+struct Loaded {
+    ocr: Option<Arc<OcrList>>,
+    libreoffice: Option<LibrePin>,
+}
+
+impl From<Addons> for Loaded {
+    fn from(a: Addons) -> Self {
+        Loaded { ocr: a.ocr.map(Arc::new), libreoffice: a.libreoffice }
+    }
+}
+
+static LIST: Lazy<RwLock<Option<Loaded>>> = Lazy::new(|| RwLock::new(None));
 
 static BUILTIN_OCR: Lazy<Arc<OcrList>> = Lazy::new(|| {
     Arc::new(OcrList {
@@ -59,11 +71,7 @@ static BUILTIN_OCR: Lazy<Arc<OcrList>> = Lazy::new(|| {
 
 /// The OCR languages on offer: the checked list's, or the built-in one.
 pub fn ocr() -> Arc<OcrList> {
-    let list = LIST.read();
-    match list.as_ref().and_then(|a| a.ocr.as_ref()) {
-        Some(o) => Arc::new(o.clone()),
-        None => BUILTIN_OCR.clone(),
-    }
+    LIST.read().as_ref().and_then(|a| a.ocr.clone()).unwrap_or_else(|| BUILTIN_OCR.clone())
 }
 
 /// The LibreOffice release to set up, when the list names one.
@@ -107,7 +115,7 @@ fn parse_checked(json: &str, sig: &str) -> Result<Addons, String> {
 pub fn load_cached(dir: &Path) {
     let (Ok(json), Ok(sig)) = (std::fs::read_to_string(dir.join("addons.json")), std::fs::read_to_string(dir.join("addons.json.sig"))) else { return };
     if let Ok(a) = parse_checked(&json, &sig) {
-        *LIST.write() = Some(Arc::new(a));
+        *LIST.write() = Some(a.into());
     }
 }
 
@@ -120,7 +128,7 @@ pub fn refresh(dir: &Path, cancel: &AtomicBool) -> Result<bool, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("addons.json"), &json).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("addons.json.sig"), &sig).map_err(|e| e.to_string())?;
-    *LIST.write() = Some(Arc::new(a));
+    *LIST.write() = Some(a.into());
     Ok(true)
 }
 
