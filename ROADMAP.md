@@ -529,6 +529,17 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       cut with "…"; a check lists labels that still don't fit and offers "headings only". All 16 presets fit
 - Backend: fonts.rs (installed families from the registry, user font files); commands fonts_installed, fonts_user,
   font_add, font_bytes, font_remove
+- [x] 0.7.71: skins — a photo behind the title bar, toolbar, side bars, status bar and Home (tick "Also behind the
+      pages" for the desk too), seen through the theme's colours; how much shows (10–70%), blur, on/off in View ›
+      Theme; low contrast over the photo marked. Menus, panes, dialogs and the pages stay solid. The photo is kept
+      shrunk to 1920 px; its blurred copy is made once per change. Backend: skin_set, skin_bytes, skin_clear
+- [x] 0.7.71: Steampunk redone (brass plate, copper, oiled walnut; Bookman / Rockwell / Georgia type; brass sheen on
+      the title bar and side bar, copper rule, worn desk edge); Library's dark version oxblood leather, so the two
+      differ; Cyberpunk neon rules, Blueprint grid, Terminal scan lines. All presets checked: text readable on every
+      colour it sits on; a note when text behind the pages is low contrast
+- [x] 0.7.71: side bar easier to read (wider, larger, full-strength labels, always the plain UI font); "Make your own
+      palette…"; Home's recent files on a card (readable on dark desks); fixed the picture button doing nothing after
+      a test run in development builds
 
 ## Phase 8 (0.8.0): Packaging, updates and signing
 - [ ] GitHub repository (the user has an account) hosting source, releases and update files

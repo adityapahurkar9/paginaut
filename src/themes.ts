@@ -122,10 +122,10 @@ export const PRESETS: Theme[] = [
   {
     id: "steampunk",
     name: "Steampunk",
-    blurb: "Brass, copper and dark walnut, with verdigris",
-    display: `"Palatino Linotype", "Book Antiqua", Georgia, serif`,
-    light: L("#d6bf98", "#e8d8b8", "#f6ecd6", "#b89c74", "#2e1f14", "#2f7361", "#f1e4c6", "#3a2717"),
-    dark: L("#1c140e", "#281d15", "#33261b", "#130d09", "#ecd9b8", "#c8923f", "#2b2017", "#e6d2ae"),
+    blurb: "Brass plate, copper and oiled walnut, set in Victorian type",
+    display: `"Bookman Old Style", Rockwell, Georgia, serif`,
+    light: L("#bf9b62", "#e2cfa6", "#f2e6c8", "#b0936a", "#24170c", "#8a3f12", "#f1e3c4", "#2e1d10"),
+    dark: L("#231a13", "#2c2118", "#372a1f", "#17110c", "#f0deb9", "#d6874a", "#2a1f16", "#ecd7b0"),
   },
   {
     id: "cyberpunk",
@@ -176,7 +176,7 @@ export const PRESETS: Theme[] = [
     blurb: "Leather, oxblood and gold leaf",
     display: `"Book Antiqua", "Palatino Linotype", Garamond, Georgia, serif`,
     light: L("#d9c6ad", "#e8d9c4", "#f5ecdf", "#b89c7e", "#2b1a12", "#7d1f1f", "#f3e6cc", "#3b2a1c"),
-    dark: L("#1c120d", "#251811", "#2f1f16", "#140c08", "#ecdcc5", "#d4a537", "#2a1d14", "#e5d3b5"),
+    dark: L("#1e1110", "#281716", "#331f1d", "#150b0a", "#efdcc8", "#d4a537", "#2a1a17", "#e8d5bd"),
   },
   {
     id: "midnight",
@@ -277,6 +277,7 @@ export function contrastNotes(p: Palette): string[] {
   const notes: string[] = [];
   if (contrast(p.tx, p.panel) < 4.5 || contrast(p.tx, p.surface) < 4.5) notes.push("Low contrast: text on the panels may be hard to read.");
   if (contrast(p.acc, p.panel) < 2.5) notes.push("Low contrast: the accent is hard to see on the panels.");
+  if (contrast(p.tx, p.canvas) < 3) notes.push("Low contrast: messages shown behind the pages (while a file opens) may be hard to read.");
   const on = contrast("#ffffff", p.acc) >= contrast("#111111", p.acc) ? "#ffffff" : "#111111";
   if (contrast(on, p.acc) < 3) notes.push("Low contrast: labels on accent buttons may be hard to read.");
   return notes;
@@ -398,6 +399,12 @@ function darkPaperOf(t: Theme): Paper {
 /** The theme being shown before it's chosen (the editor's preview). */
 export const previewTheme = signal<Theme | null>(null);
 
+/** The colours showing now (light or dark; the preview's, if any). */
+export function lookNow(): Look {
+  const t = previewTheme.value ?? currentTheme();
+  return ((isDark.value ? t.dark : t.light) ?? t.dark ?? t.light)!;
+}
+
 let applying = 0;
 async function apply(t: Theme, systemIsDark: boolean) {
   const n = ++applying;
@@ -407,6 +414,9 @@ async function apply(t: Theme, systemIsDark: boolean) {
   root.dataset.theme = dark ? "dark" : "light";
   isDark.value = dark;
   root.classList.toggle("hc", !!t.hc);
+  // A preset's own touches (a brass sheen, a blueprint's grid, a terminal's scan lines): look-<id> in the stylesheet.
+  for (const c of [...root.classList]) if (c.startsWith("look-")) root.classList.remove(c);
+  if (!t.custom) root.classList.add(`look-${t.id}`);
   // The standard theme is the stylesheet's own colours.
   const vars = t.id === "standard" ? {} : tokens(look.pal, dark, t.hc);
   for (const k of Object.keys(TOKEN_NAMES)) root.style.removeProperty(k);

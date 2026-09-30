@@ -1346,6 +1346,49 @@ pub async fn font_remove(app: tauri::AppHandle, file: String) -> Res<()> {
     blocking(move || std::fs::remove_file(crate::fonts::file(&dir, &file)?).map_err(|e| e.to_string())).await
 }
 
+// ---------------------------------------------------------------- skin (a photo behind the bars and Home)
+
+fn skin_dir(app: &tauri::AppHandle) -> Res<std::path::PathBuf> {
+    app.path().app_local_data_dir().map(|d| d.join("skin")).map_err(|e| e.to_string())
+}
+
+fn skin_file(dir: &std::path::Path, name: &str) -> Res<std::path::PathBuf> {
+    let ok = name.starts_with("skin-") && name.ends_with(".jpg") && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'.');
+    if ok { Ok(dir.join(name)) } else { Err("Unknown skin.".into()) }
+}
+
+/// Keeps a skin's photo (a JPEG the app made, as base64) in place of the one before; returns its file name.
+#[tauri::command]
+pub async fn skin_set(app: tauri::AppHandle, jpeg: String) -> Res<String> {
+    let dir = skin_dir(&app)?;
+    blocking(move || {
+        let bytes = crate::base64::decode(&jpeg).ok_or("bad picture")?;
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let name = format!("skin-{t}.jpg");
+        std::fs::write(dir.join(&name), bytes).map_err(|e| e.to_string())?;
+        Ok(name)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn skin_bytes(app: tauri::AppHandle, file: String) -> Res<tauri::ipc::Response> {
+    let dir = skin_dir(&app)?;
+    blocking(move || std::fs::read(skin_file(&dir, &file)?).map(tauri::ipc::Response::new).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+pub async fn skin_clear(app: tauri::AppHandle) -> Res<()> {
+    let dir = skin_dir(&app)?;
+    blocking(move || {
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    })
+    .await
+}
+
 /// Opens a file Paginaut just made in the program Windows uses for it.
 #[tauri::command]
 pub fn open_path(app: tauri::AppHandle, path: String) -> Res<()> {

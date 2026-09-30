@@ -510,6 +510,9 @@ export const api = {
   fontAdd: (path: string) => invoke<{ name: string; file: string }>("font_add", { path }),
   fontBytes: (file: string) => invoke<ArrayBuffer>("font_bytes", { file }),
   fontRemove: (file: string) => invoke<void>("font_remove", { file }),
+  skinSet: (jpeg: string) => invoke<string>("skin_set", { jpeg }),
+  skinBytes: (file: string) => invoke<ArrayBuffer>("skin_bytes", { file }),
+  skinClear: () => invoke<void>("skin_clear"),
   markdownRead: (path: string) => invoke<string>("markdown_read", { path }),
   /** The Markdown file at `path` shown from `text` (a new document; pictures from its folder). */
   markdownPreview: (path: string, text: string) => invoke<DocInfo>("markdown_preview", { path, text }),

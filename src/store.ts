@@ -64,6 +64,7 @@ export interface Settings {
   /** The theme (a preset's id or one of the user's own). `theme` is its light or dark mode. */
   look?: string;
   customThemes?: import("./themes").Theme[];
+  skin?: import("./skin").Skin;
   /** Compare's options, as last chosen. */
   compare?: Partial<import("./api").CompareOptions>;
 }

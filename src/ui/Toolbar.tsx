@@ -31,6 +31,7 @@ import { openConvertPane } from "../office";
 import { closePane, pane, togglePane } from "../panes";
 import { railMenuItems } from "./Rail";
 import { currentTheme } from "../themes";
+import { setSkin } from "../skin";
 import { isMarkdown, toggleMdPane } from "../markdown";
 import { pickAndConvert } from "./OfficeUI";
 import { openCompareSetup } from "../compare";
@@ -302,6 +303,7 @@ function ViewTools({ tab }: { tab: Tab | null }) {
       { label: "Match Windows", check: s.theme === "system", run: () => updateSettings({ theme: "system" }) },
       { sep: true },
       { head: currentTheme().name },
+      ...(s.skin ? [{ label: "Show the skin", check: !s.skin.off, run: () => setSkin({ off: !s.skin!.off }) }] : []),
       { label: "Choose a theme…", run: () => openSettings("themes") },
     ]);
   return (
