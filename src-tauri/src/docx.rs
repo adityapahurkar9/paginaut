@@ -4,70 +4,8 @@
 //! (MuPDF's own .docx writer makes files Word refuses to open; LibreOffice's loses text under shading.)
 
 use crate::engine::table::{xml, zip, Table};
-use crate::engine::{Doc, Paragraph, Picture};
-
-enum Block {
-    Para(Paragraph),
-    Table(Table),
-    /// Picture bytes, their extension, and size in points.
-    Picture(Vec<u8>, &'static str, f32, f32),
-}
-
-/// What's on page `index`, in reading order: paragraphs as MuPDF reads them, each table where its first
-/// paragraph was (the paragraphs inside it left out), each picture before the first paragraph below its top.
-fn blocks(d: &Doc, index: usize) -> Result<Vec<Block>, String> {
-    let b = d.bounds(index)?;
-    let height = b[3] - b[1];
-    // Page numbers at the top or bottom of the page mean nothing in a flowing document.
-    let page_number = |p: &Paragraph| {
-        let t = p.t.trim().to_lowercase();
-        let t = t.strip_prefix("page").unwrap_or(&t).trim();
-        let numeric = !t.is_empty() && t.split(['/', ' ']).filter(|w| *w != "of" && !w.is_empty()).all(|w| w.chars().all(|c| c.is_ascii_digit() || "ivxlc".contains(c)));
-        numeric && (p.r[1] > height * 0.88 || p.r[3] < height * 0.12)
-    };
-    let paras: Vec<Paragraph> = d.paragraphs(index)?.into_iter().filter(|p| !page_number(p)).collect();
-    let mut tables: Vec<Option<Table>> = d.tables(index)?.into_iter().map(Some).collect();
-    let rects: Vec<[f32; 4]> = tables.iter().flatten().map(|t| t.r).collect();
-    let inside = |r: &[f32; 4], t: &[f32; 4]| {
-        let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
-        cx >= t[0] && cx <= t[2] && cy >= t[1] && cy <= t[3]
-    };
-    let mut pictures: Vec<(f32, Block)> = Vec::new();
-    // Numbered as picture_data counts them (the page with its comments' pictures).
-    for (n, p) in d.pictures(index, false)?.into_iter().enumerate() {
-        let Picture { r, w, h, .. } = p;
-        // Rules, dots and bullets drawn as pictures aren't worth keeping.
-        if w < 24 || h < 24 || (r[2] - r[0]) < 12.0 || (r[3] - r[1]) < 12.0 {
-            continue;
-        }
-        let (mut data, mut ext) = d.picture_data(index, n, 0)?;
-        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
-            (data, ext) = d.picture_data(index, n, 1)?; // as PNG
-        }
-        let ext = if ext == "png" { "png" } else { "jpeg" };
-        pictures.push((r[1], Block::Picture(data, ext, r[2] - r[0], r[3] - r[1])));
-    }
-    pictures.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut pictures = pictures.into_iter().peekable();
-    let mut out = Vec::new();
-    for p in paras {
-        while pictures.peek().is_some_and(|(top, _)| *top <= p.r[1]) {
-            out.push(pictures.next().unwrap().1);
-        }
-        match rects.iter().position(|t| inside(&p.r, t)) {
-            Some(i) => {
-                if let Some(t) = tables[i].take() {
-                    out.push(Block::Table(t));
-                }
-            }
-            None => out.push(Block::Para(p)),
-        }
-    }
-    out.extend(pictures.map(|p| p.1));
-    // Tables with no paragraph found inside them.
-    out.extend(tables.into_iter().flatten().map(Block::Table));
-    Ok(out)
-}
+use crate::engine::{Doc, Paragraph};
+use crate::flow::{clean, document, Block};
 
 /// "ABCDEF+Aptos-Bold" → "Aptos".
 fn family(font: &str) -> String {
@@ -90,11 +28,6 @@ fn family(font: &str) -> String {
 fn symbol_font(f: &str) -> bool {
     let f = f.to_ascii_lowercase();
     ["symbol", "wingdings", "webdings", "zapf", "dingbats", "marlett"].iter().any(|s| f.starts_with(s))
-}
-
-/// Bullets drawn with symbol fonts arrive as private-use characters (U+F0B7…): a plain bullet instead.
-fn clean(text: &str) -> String {
-    text.chars().map(|c| if ('\u{f020}'..='\u{f0ff}').contains(&c) { '•' } else { c }).collect()
 }
 
 fn run_props(p: &Paragraph) -> String {
@@ -186,12 +119,9 @@ pub fn write(d: &Doc, order: &[usize], path: &str, progress: &mut dyn FnMut(usiz
     let mut body = String::new();
     let mut media: Vec<(String, Vec<u8>)> = Vec::new();
     let mut rels = String::new();
-    for (k, &page) in order.iter().enumerate() {
-        if !progress(k, order.len()) {
-            return Err("stopped".into());
-        }
+    for (k, blocks) in document(d, order, progress)?.into_iter().enumerate() {
         let mut new_page = k > 0;
-        for b in blocks(d, page)? {
+        for b in blocks {
             match b {
                 Block::Para(p) if !p.t.trim().is_empty() => body.push_str(&paragraph(&p, new_page)),
                 Block::Para(_) => continue,
@@ -245,6 +175,5 @@ mod tests {
         assert_eq!(super::family("Arial,Bold"), "Arial");
         assert_eq!(super::family("Calibri"), "Calibri");
         assert!(super::symbol_font("Symbol") && super::symbol_font("Wingdings 2") && !super::symbol_font("Aptos"));
-        assert_eq!(super::clean("\u{f0b7} New office"), "• New office");
     }
 }

@@ -62,6 +62,34 @@ fn main() {
         let (r, t) = go(&report, "pptx", Some(e), &name);
         check(&format!("pptx ({e})"), r.is_ok() && tmp.join(&name).is_file(), format!("in {t:?} {:?}", r.as_ref().map(|d| &d.note)));
     }
+    // Markdown out: headings, lists, a table, the picture in a folder beside it.
+    let (r, t) = go(&report, "md", None, "report.md");
+    let md = std::fs::read_to_string(tmp.join("report.md")).unwrap_or_default();
+    check(
+        "Markdown from PDF",
+        r.is_ok() && md.contains("# Quarterly Report") && md.contains("| Region |") && md.contains("- New office opened in Pune") && (tmp.join("report_files").join("picture-1.jpg").is_file() || tmp.join("report_files").join("picture-1.png").is_file())
+            && md.matches("Quarterly Report - Q3 2026").count() == 0,
+        format!("in {t:?}, {} chars {:?}", md.len(), r.as_ref().map(|d| &d.note)),
+    );
+    println!("---- report.md (start) ----\n{}\n----", md.chars().take(900).collect::<String>());
+    // Markdown in: a file, and text being edited (pictures from the file's folder).
+    let sample = PathBuf::from(&args[1]).join("markdown").join("sample.md");
+    if sample.is_file() {
+        let pdf = tmp.join("sample.pdf").to_string_lossy().into_owned();
+        let r = engine.convert_file(&sample.to_string_lossy(), &pdf);
+        let back = r.as_ref().ok().and_then(|_| engine.open(&pdf).ok());
+        check("Markdown to PDF (A4)", back.as_ref().is_some_and(|i| (i.first_size[0] - 595.0).abs() < 1.0), format!("{:?} {:?}", r.err(), back.map(|i| i.page_count)));
+        let text = std::fs::read_to_string(&sample).unwrap() + "\n\n## Added while editing\n";
+        match engine.open_markdown(&sample.to_string_lossy(), &text) {
+            Ok(info) => {
+                let d = engine.doc(info.doc_id).unwrap();
+                let all: String = (0..info.page_count).map(|i| d.area_text(i, [0.0, 0.0, 595.0, 842.0]).unwrap_or_default()).collect();
+                check("Markdown shown from edited text", all.contains("Added while editing") && info.path == sample.to_string_lossy(), format!("{} pages", info.page_count));
+            }
+            Err(e) => check("Markdown shown from edited text", false, e),
+        }
+    }
+
     // To PDF: a web page, laid out on A4.
     let html = tmp.join("page.html");
     std::fs::write(&html, "<html><body><h1>Web page</h1><p>Paginaut makes a PDF of this page.</p><ul><li>One</li><li>Two</li></ul></body></html>").unwrap();

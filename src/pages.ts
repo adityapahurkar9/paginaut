@@ -265,7 +265,15 @@ export function setBeforeSave(fn: (tab: Tab) => Promise<boolean>) {
   beforeSave = fn;
 }
 
+/** Set by markdown.ts: saves a Markdown file's edited source instead (null: save as usual). */
+let saveOverride: (tab: Tab, saveAs: boolean) => Promise<boolean | null> = async () => null;
+export function setSaveOverride(fn: typeof saveOverride) {
+  saveOverride = fn;
+}
+
 export async function save(tab: Tab, saveAs = false): Promise<boolean> {
+  const own = await saveOverride(tab, saveAs);
+  if (own !== null) return own;
   if (!(await beforeSave(tab))) return false;
   const info = tab.info.value;
   const e = tab.edits.value;

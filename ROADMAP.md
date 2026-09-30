@@ -446,6 +446,21 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
 - Tests: src-tauri/examples/convert_test.rs (every format and program, pictures numbered, tables found, web page to
       A4, a PDF not converted again); unit tests for PackBits and font names
 
+## Phase 7.2 (0.7.20): Markdown (done)
+- [x] Open .md / .markdown files (MuPDF's own Markdown reader: GitHub tables, code, quotes, lists; laid out on A4),
+      and make PDFs of them (Save as PDF, or Convert › Files to PDF)
+- [x] Edit a Markdown file: Tools › Edit (for a .md tab) opens the Markdown pane on the right with the source; the pages
+      follow as you type (made again from the text after a short pause, the page you're on kept); Save / Ctrl+S writes
+      the .md file (Save as still makes a PDF); closing asks about unsaved changes. One pane on the right at a time
+- [x] PDF → Markdown (Convert pane): headings from text clearly larger than the body, bold/italic paragraphs, bullet
+      and numbered lists, tables as pipe tables, pictures saved in "<name>_files" next to it and linked; formatting
+      characters escaped. Running headers and footers (the same text near the top or bottom of most pages) and page
+      numbers are left out, in the Word export too
+- [x] Fixes: MuPDF's Markdown reader didn't ask for the file's folder, so linked pictures showed as "[image]" (fourth
+      MuPDF patch in native/build-mupdf.ps1); paths reach MuPDF with forward slashes, since it finds a file's folder by
+      its last "/" (pictures of Markdown files and web pages opened by full path weren't found)
+- Tests: convert_test.rs (PDF → Markdown, Markdown → PDF, Markdown shown from edited text); unit tests for escaping
+
 ## Phase 7.5 (0.7.50): Compare
 - [ ] Two PDFs side by side, scrolling together: word-by-word text diff with a list of changes, plus a picture overlay
       for changes in drawings and scans

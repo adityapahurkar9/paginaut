@@ -29,6 +29,7 @@ import { SigBar } from "./SigPanel";
 import { OcrBar, OcrDialog } from "./OcrUI";
 import { OfficeBar, OfficeDialog, openingText } from "./OfficeUI";
 import { ConvertPane } from "./ConvertPane";
+import { MarkdownPane } from "./MarkdownPane";
 import { officeKind } from "../office";
 import { InsertDialog, MergeDialog, SplitDialog } from "./PagesUI";
 import { HeaderDialog, WatermarkDialog } from "./StampUI";
@@ -75,6 +76,7 @@ export function App() {
         </div>
         <SignPane />
         <ConvertPane />
+        <MarkdownPane />
       </div>
       <StatusBar />
       <Palette />

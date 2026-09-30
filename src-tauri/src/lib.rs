@@ -3,6 +3,8 @@ mod app;
 mod base64;
 pub mod convert;
 mod docx;
+mod flow;
+mod markdown;
 mod net;
 mod ocr;
 pub mod office;
@@ -220,6 +222,9 @@ pub fn run() {
             app::convert_from_pdf,
             app::convert_stop,
             app::open_path,
+            app::markdown_read,
+            app::markdown_preview,
+            app::markdown_save,
             app::cancel,
             app::system_info,
             app::take_launch_files,

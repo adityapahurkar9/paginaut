@@ -18,7 +18,7 @@ pub struct Request {
     /// Pages to convert (document page indices, in this order) and every page's turn.
     pub order: Vec<usize>,
     pub rot: Vec<i32>,
-    /// "docx", "xlsx", "pptx", "png", "jpg", "tiff" or "txt".
+    /// "docx", "xlsx", "pptx", "md", "png", "jpg", "tiff" or "txt".
     pub format: String,
     /// The file to write (for PNG/JPG with several pages: numbered files named after it).
     pub out: String,
@@ -119,6 +119,15 @@ pub fn run(engine: &Engine, office: &Office, r: &Request, cancel: &AtomicBool, p
                 done("Paginaut", "The text, tables and pictures in reading order; the page layout isn't kept. Microsoft Word keeps more of it.".into())
             }
         },
+        "md" => {
+            let d = engine.doc(r.doc)?;
+            let n = crate::markdown::write(&d, &r.order, &r.out, &mut |k, n| {
+                progress(k, n);
+                !stopped()
+            })?;
+            let stem = stem_of(&out);
+            done("Paginaut", if n > 0 { format!("{n} {} saved in \"{stem}_files\" next to it.", if n == 1 { "picture" } else { "pictures" }) } else { String::new() })
+        }
         "xlsx" => {
             let d = engine.doc(r.doc)?;
             let mut found = Vec::new();

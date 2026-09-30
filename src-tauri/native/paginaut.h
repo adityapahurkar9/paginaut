@@ -38,6 +38,7 @@ void fo_cookie_drop(fo_cookie *k);
 
 /* Documents */
 fo_doc *fo_open(fo_ctx *c, const char *path_utf8);
+fo_doc *fo_open_buffer(fo_ctx *c, const char *magic, const unsigned char *data, size_t len, const char *dir_utf8);
 void fo_doc_drop(fo_ctx *c, fo_doc *d);
 int fo_needs_password(fo_ctx *c, fo_doc *d);
 int fo_authenticate(fo_ctx *c, fo_doc *d, const char *password);

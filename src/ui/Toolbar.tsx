@@ -31,7 +31,8 @@ import { startSecure } from "./SecureUI";
 import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
 import { addPicture, textEdit, toggleTextEdit } from "../textedit";
 import { redactTab, startRedact, stopRedact } from "../redact";
-import { convertPane, officeDialog, openConvertPane } from "../office";
+import { convertPane, mdPane, officeDialog, openConvertPane } from "../office";
+import { isMarkdown, toggleMdPane } from "../markdown";
 import { pickAndConvert } from "./OfficeUI";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
@@ -495,7 +496,11 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { sep: true },
         { label: "Picture…", run: () => tab && void addPicture(tab) },
       ], "left", 200)} />
-      <TB icon={I(TextCursorInput, 17)} label="Edit" title="Change words, move, resize, replace or delete pictures on the page (Esc to stop)" on={!!tab && textEdit.value === tab} disabled={!tab?.info.value?.isPdf} onClick={() => tab && toggleTextEdit(tab)} />
+      {tab && isMarkdown(tab.path) ? (
+        <TB icon={I(TextCursorInput, 17)} label="Edit" title="Edit the Markdown source: the pages follow as you type (Ctrl+S saves the .md file)" on={mdPane.value === tab} onClick={() => toggleMdPane(tab)} />
+      ) : (
+        <TB icon={I(TextCursorInput, 17)} label="Edit" title="Change words, move, resize, replace or delete pictures on the page (Esc to stop)" on={!!tab && textEdit.value === tab} disabled={!tab?.info.value?.isPdf} onClick={() => tab && toggleTextEdit(tab)} />
+      )}
       <TB icon={I(EyeOff, 17)} label="Redact" title="Remove or cover text and areas; sanitize the document" on={!!tab && redactTab.value === tab} disabled={!tab?.info.value?.isPdf} onClick={() => tab && (redactTab.value === tab ? stopRedact() : startRedact(tab))} />
       <div class="sep" />
       <TB icon={I(FormInput, 17)} label="Forms" menu onClick={(e) => openMenu(e, formItems(tab), "left", 270)} />

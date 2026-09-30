@@ -17,11 +17,12 @@ export function startExport(_tab: Tab | null, target: ExportTarget) {
   openConvertPane(target);
 }
 
-const TARGETS: [ExportTarget, string][] = [["docx", "Word"], ["xlsx", "Excel"], ["pptx", "PowerPoint"], ["images", "Images"], ["txt", "Text"]];
+const TARGETS: [ExportTarget, string][] = [["docx", "Word"], ["xlsx", "Excel"], ["pptx", "PowerPoint"], ["md", "Markdown"], ["images", "Images"], ["txt", "Text"]];
 const WHAT: Record<ExportTarget, string> = {
   docx: "An editable Word document.",
   xlsx: "Every table found on the pages, a sheet each, numbers as numbers. (Scanned pages need Tools › OCR first.)",
   pptx: "A slide per page.",
+  md: "Headings, lists, tables and pictures as Markdown text (pictures go in a folder next to it).",
   images: "Each page as a picture.",
   txt: "The pages' text, in reading order.",
 };
@@ -52,7 +53,7 @@ export function ConvertPane() {
       <div class="signpane-body">
         <section class="pane-sec">
           <h3>This document to</h3>
-          {ready ? <ThisDocument key={ready.key} tab={ready} /> : <p class="muted small">Open a document to convert it to Word, Excel, PowerPoint, pictures or text.</p>}
+          {ready ? <ThisDocument key={ready.key} tab={ready} /> : <p class="muted small">Open a document to convert it to Word, Excel, PowerPoint, Markdown, pictures or text.</p>}
         </section>
         <section class="pane-sec">
           <h3>Files to PDF</h3>
@@ -107,7 +108,7 @@ function ThisDocument({ tab }: { tab: Tab }) {
     const order = shown.map((i) => edits.order[i]);
     const stem = baseName(tab.path).replace(/\.[^.]+$/, "");
     const ext = format;
-    const names: Record<string, string> = { docx: "Word document", xlsx: "Excel workbook", pptx: "PowerPoint presentation", png: "PNG picture", jpg: "JPEG picture", tiff: "TIFF picture", txt: "Text" };
+    const names: Record<string, string> = { docx: "Word document", xlsx: "Excel workbook", pptx: "PowerPoint presentation", md: "Markdown", png: "PNG picture", jpg: "JPEG picture", tiff: "TIFF picture", txt: "Text" };
     const out =
       testHook()?.save ??
       (await save({ title: "Save as", defaultPath: tab.path.replace(/[^\\/]+$/, `${stem}.${ext}`), filters: [{ name: names[format], extensions: [ext] }] }));

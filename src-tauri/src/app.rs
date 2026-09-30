@@ -1188,6 +1188,57 @@ pub async fn office_convert(state: State<'_, AppState>, office: State<'_, Arc<Of
     .await
 }
 
+// ---------------------------------------------------------------- Markdown
+
+fn markdown_path(path: &str) -> Res<()> {
+    let ext = std::path::Path::new(path).extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext == "md" || ext == "markdown" {
+        Ok(())
+    } else {
+        Err("Only Markdown files (.md) can be edited here.".into())
+    }
+}
+
+/// A Markdown file's text, to edit.
+#[tauri::command]
+pub async fn markdown_read(path: String) -> Res<String> {
+    blocking(move || {
+        markdown_path(&path)?;
+        let data = std::fs::read(&path).map_err(|e| e.to_string())?;
+        if data.len() > 8 << 20 {
+            return Err("The file is too large to edit here.".into());
+        }
+        Ok(String::from_utf8_lossy(data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&data)).into_owned())
+    })
+    .await
+}
+
+/// Shows `text` as the Markdown file at `path` (its pictures read from its folder): a new document.
+#[tauri::command]
+pub async fn markdown_preview(state: State<'_, AppState>, path: String, text: String) -> Res<DocInfo> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        markdown_path(&path)?;
+        engine.open_markdown(&path, &text)
+    })
+    .await
+}
+
+/// Writes the Markdown file (beside it first, so a failure never leaves half a file).
+#[tauri::command]
+pub async fn markdown_save(path: String, text: String) -> Res<()> {
+    blocking(move || {
+        markdown_path(&path)?;
+        let tmp = format!("{path}.paginaut-tmp");
+        std::fs::write(&tmp, text.as_bytes()).map_err(|e| format!("Couldn't save: {e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("Couldn't save: {e}")
+        })
+    })
+    .await
+}
+
 // ---------------------------------------------------------------- converting from PDF
 
 #[tauri::command]
@@ -1222,7 +1273,7 @@ pub fn convert_stop() {
 pub fn open_path(app: tauri::AppHandle, path: String) -> Res<()> {
     use tauri_plugin_opener::OpenerExt;
     let ext = std::path::Path::new(&path).extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-    if !["docx", "xlsx", "pptx", "png", "jpg", "tiff", "txt", "pdf"].contains(&ext.as_str()) {
+    if !["docx", "xlsx", "pptx", "md", "png", "jpg", "tiff", "txt", "pdf"].contains(&ext.as_str()) {
         return Err("Paginaut only opens the files it made.".into());
     }
     app.opener().open_path(path, None::<&str>).map_err(|e| e.to_string())

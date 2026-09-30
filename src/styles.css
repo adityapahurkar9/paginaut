@@ -967,3 +967,9 @@ body.text-edit .pg { cursor: default; }
 .pane-link { padding: 0; align-self: flex-start; }
 .export-result { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--acc-soft); font-size: 12.5px; }
 .export-result small { color: var(--tx2); }
+.mdpane { flex-basis: 440px; width: 440px; }
+.mdpane .signpane-body { display: flex; flex-direction: column; padding: 8px 12px 12px; gap: 8px; }
+.md-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--tx3); }
+.md-bar span { flex: 1; }
+.md-source { flex: 1; min-height: 200px; resize: none; width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid var(--bd); border-radius: 8px; background: var(--panel); color: var(--tx); font: 13px/1.5 "Cascadia Mono", Consolas, monospace; tab-size: 4; outline: none; }
+.md-source:focus { border-color: var(--acc); }

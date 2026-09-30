@@ -19,7 +19,7 @@ const ext = (path: string) => path.split(".").pop()?.toLowerCase() ?? "";
 export const isOffice = (path: string) => OFFICE_EXT.includes(ext(path));
 /** Other files Convert to PDF takes (Paginaut makes those PDFs itself). */
 export const WEB_EXT = ["html", "htm", "xhtml"];
-const OTHER_EXT = [...WEB_EXT, "epub", "mobi", "fb2", "xps", "oxps", "txt"];
+const OTHER_EXT = [...WEB_EXT, "md", "markdown", "epub", "mobi", "fb2", "xps", "oxps", "txt"];
 export const convertible = (path: string) => isOffice(path) || OTHER_EXT.includes(ext(path));
 export type OfficeKind = "word" | "excel" | "powerpoint";
 export function officeKind(path: string): OfficeKind | null {
@@ -175,16 +175,22 @@ export interface ConvertItem {
 export const convertDialog = signal<{ items: ConvertItem[]; folder: string | null; running: boolean } | null>(null);
 
 /** The Convert pane (right side) is open, showing this conversion of the document. Shares the side with the Sign pane. */
-export type ExportTarget = "docx" | "xlsx" | "pptx" | "images" | "txt";
+export type ExportTarget = "docx" | "xlsx" | "pptx" | "md" | "images" | "txt";
 export const convertPane = signal<{ target: ExportTarget } | null>(null);
+/** The Markdown pane (editing a .md file's source), for this tab. */
+export const mdPane = signal<Tab | null>(null);
 
 export function openConvertPane(target?: ExportTarget) {
   convertPane.value = { target: target ?? convertPane.value?.target ?? "docx" };
+  mdPane.value = null;
   if (settings.value.signPane) updateSettings({ signPane: false });
 }
-// Opening the Sign pane closes this one.
+// Opening the Sign pane closes the others: one pane on the right at a time.
 settings.subscribe((s) => {
-  if (s.signPane && convertPane.peek()) convertPane.value = null;
+  if (s.signPane) {
+    if (convertPane.peek()) convertPane.value = null;
+    if (mdPane.peek()) mdPane.value = null;
+  }
 });
 
 /** Adds files to "Files to PDF" (those already there stay) and shows the pane. */

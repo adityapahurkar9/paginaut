@@ -46,6 +46,7 @@ extern "C" {
     pub fn fo_cookie_drop(k: *mut fo_cookie);
 
     pub fn fo_open(c: *mut fo_ctx, path: *const c_char) -> *mut fo_doc;
+    pub fn fo_open_buffer(c: *mut fo_ctx, magic: *const c_char, data: *const u8, len: usize, dir: *const c_char) -> *mut fo_doc;
     pub fn fo_doc_drop(c: *mut fo_ctx, d: *mut fo_doc);
     pub fn fo_needs_password(c: *mut fo_ctx, d: *mut fo_doc) -> c_int;
     pub fn fo_authenticate(c: *mut fo_ctx, d: *mut fo_doc, password: *const c_char) -> c_int;

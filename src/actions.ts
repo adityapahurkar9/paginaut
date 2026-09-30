@@ -12,7 +12,7 @@ import {
 } from "./store";
 
 export const OPENABLE = [
-  "pdf", "xps", "oxps", "epub", "mobi", "fb2", "fbz", "cbz", "svg", "txt", "html", "htm", "xhtml",
+  "pdf", "xps", "oxps", "epub", "mobi", "fb2", "fbz", "cbz", "svg", "txt", "md", "markdown", "html", "htm", "xhtml",
   "png", "jpg", "jpeg", "jfif", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "pnm", "pbm", "pgm", "ppm", "pam", "jxr",
   ...OFFICE_EXT,
 ];

@@ -17,6 +17,7 @@ import { startLabels, startProperties } from "./MetaUI";
 import { startSecure } from "./SecureUI";
 import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
 import { addPicture, toggleTextEdit } from "../textedit";
+import { isMarkdown, openMdPane } from "../markdown";
 import { startRedact } from "../redact";
 import { officeDialog } from "../office";
 import { pickAndConvert } from "./OfficeUI";
@@ -250,6 +251,8 @@ function commands(): Item[] {
     c("Redact: remove or cover text and areas…", withTab((t) => startRedact(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Sanitize: remove metadata, scripts, hidden text…", withTab((t) => startRedact(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Edit text and pictures (change words on the page)", withTab((t) => toggleTextEdit(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Edit the Markdown source", withTab((t) => void openMdPane(t)), "", () => hasDoc() && isMarkdown(activeTab.value!.path)),
+    c("Convert to Markdown…", withTab((t) => startExport(t, "md")), "", hasDoc),
     c("Add a picture to the page…", withTab((t) => void addPicture(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Save all pictures (extract images)…", withTab((t) => (picturesDialog.value = t)), "", hasDoc),
     c("Table on this page to Excel / CSV (extract table)…", withTab((t) => void openPageTable(t)), "", hasDoc),

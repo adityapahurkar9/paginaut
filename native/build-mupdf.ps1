@@ -38,6 +38,15 @@ $new = "		filespec = pdf_add_filespec(ctx, doc, filename, file);`n		pdf_end_oper
 if ($src.Contains($old)) { Set-Content $link $src.Replace($old, $new) -NoNewline }
 elseif (-not $src.Contains($new)) { Write-Warning "pdf-link.c changed: check pdf_add_embedded_file still ends its operation" }
 
+# The Markdown reader doesn't ask for the file's folder (the HTML one does), so pictures a .md file links to
+# never load ("[image]" instead).
+$md = Join-Path $root "source\html\md.c"
+$src = Get-Content $md -Raw
+$old = "	md_mimetypes,`n	md_recognize_doc_content`n};"
+$new = "	md_mimetypes,`n	md_recognize_doc_content,`n	1`n};"
+if ($src.Contains($old)) { Set-Content $md $src.Replace($old, $new) -NoNewline }
+elseif (-not $src.Contains($new)) { Write-Warning "md.c changed: check the Markdown handler still asks for its folder (wants_dir)" }
+
 $env:CL = "/MP /DTOFU_CJK"
 $target = if ($Clean) { "libmupdf:Rebuild" } else { "libmupdf" }
 & $msbuild (Join-Path $root "platform\win32\mupdf.sln") "/target:$target" `

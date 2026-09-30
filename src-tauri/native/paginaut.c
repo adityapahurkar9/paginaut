@@ -201,8 +201,18 @@ static char *os_path(fz_context *ctx, const char *path)
 			s[p + i] = rest[i] == '/' ? '\\' : rest[i];
 		return s;
 	}
-#endif
+	/* MuPDF finds a file's folder by its last '/' (fz_dirname): with backslashes, a Markdown or web page's
+	 * pictures were looked for in the current folder. Windows takes either. */
+	{
+		char *s = fz_strdup(ctx, path);
+		for (char *q = s; *q; q++)
+			if (*q == '\\')
+				*q = '/';
+		return s;
+	}
+#else
 	return fz_strdup(ctx, path);
+#endif
 }
 
 fo_doc *fo_open(fo_ctx *c, const char *path)
@@ -217,6 +227,46 @@ fo_doc *fo_open(fo_ctx *c, const char *path)
 	}
 	fz_always(CTX)
 		fz_free(CTX, p);
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return (fo_doc *)doc;
+}
+
+/* A document from bytes in memory (`magic`: its kind, e.g. "md"), reading what it links to (pictures) from the
+ * folder `dir` if given. */
+fo_doc *fo_open_buffer(fo_ctx *c, const char *magic, const unsigned char *data, size_t len, const char *dir)
+{
+	fz_document *doc = NULL;
+	fz_buffer *buf = NULL;
+	fz_stream *stm = NULL;
+	fz_archive *arch = NULL;
+	char *p = NULL;
+	fz_var(buf);
+	fz_var(stm);
+	fz_var(arch);
+	fz_var(p);
+	fz_try(CTX)
+	{
+		buf = fz_new_buffer_from_copied_data(CTX, data, len);
+		stm = fz_open_buffer(CTX, buf);
+		if (dir && *dir)
+		{
+			p = os_path(CTX, dir);
+			if (fz_is_directory(CTX, p))
+				arch = fz_open_directory(CTX, p);
+		}
+		doc = fz_open_document_with_stream_and_dir(CTX, magic, stm, arch);
+	}
+	fz_always(CTX)
+	{
+		fz_free(CTX, p);
+		fz_drop_archive(CTX, arch);
+		fz_drop_stream(CTX, stm);
+		fz_drop_buffer(CTX, buf);
+	}
 	fz_catch(CTX)
 	{
 		FAIL();

@@ -261,7 +261,7 @@ async function pickFiles(web = false): Promise<string[]> {
   const pages = { name: "Web pages", extensions: WEB_EXT };
   const res =
     testHook()?.pick ??
-    (await open({ multiple: true, title: web ? "Web pages to convert" : "Files to convert", filters: web ? [pages, office] : [office, pages, { name: "E-books, XPS, text", extensions: ["epub", "mobi", "fb2", "xps", "oxps", "txt"] }] }));
+    (await open({ multiple: true, title: web ? "Web pages to convert" : "Files to convert", filters: web ? [pages, office] : [office, pages, { name: "Markdown, e-books, XPS, text", extensions: ["md", "markdown", "epub", "mobi", "fb2", "xps", "oxps", "txt"] }] }));
   return Array.isArray(res) ? res : res ? [res] : [];
 }
 
@@ -286,7 +286,7 @@ export function FilesToPdf() {
   };
   return (
     <>
-      <span class="hint">Word, Excel and PowerPoint files, web pages and e-books.</span>
+      <span class="hint">Word, Excel and PowerPoint files, Markdown, web pages and e-books.</span>
       {d.items.length > 0 && (
         <div class="convert-list">
           {d.items.map((it, i) => {

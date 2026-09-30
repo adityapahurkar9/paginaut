@@ -31,7 +31,8 @@ fn layout_reflowable(d: &Document, path: &str) -> Result<(), String> {
         return Ok(());
     }
     let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-    if matches!(ext.as_str(), "docx" | "xlsx" | "pptx" | "hwpx") {
+    // Documents (Office files shown by MuPDF itself, Markdown) are laid out on A4; e-books and web pages smaller.
+    if matches!(ext.as_str(), "docx" | "xlsx" | "pptx" | "hwpx" | "md" | "markdown") {
         d.layout(595.0, 842.0, 10.0)
     } else {
         d.layout(REFLOW.0, REFLOW.1, REFLOW.2)
@@ -1464,6 +1465,32 @@ impl Engine {
 
     pub fn open(&self, path: &str) -> Result<DocInfo, String> {
         self.open_with(path, None)
+    }
+
+    /// A Markdown file shown from `text` (being edited) rather than from disk: it keeps the file's path (and reads
+    /// pictures from its folder), and background jobs read it from memory.
+    pub fn open_markdown(&self, path: &str, text: &str) -> Result<DocInfo, String> {
+        let dir = std::path::Path::new(path).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        let doc = Document::open_buffer("md", text.as_bytes(), &dir)?;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let d = Arc::new(Doc {
+            id,
+            path: RwLock::new(path.to_string()),
+            inner: Mutex::new(DocInner { doc, pages: Lru::new(32) }),
+            page_count: AtomicUsize::new(0),
+            bounds: RwLock::new(Vec::new()),
+            lists: Mutex::new(Lru::new(96)),
+            texts: Mutex::new(Lru::new(24)),
+            password: Mutex::new(None),
+            bg_gen: AtomicU64::new(0),
+            edit_rev: AtomicU64::new(0),
+            content_edited: AtomicBool::new(true),
+            file_pages: AtomicUsize::new(0),
+            converted: RwLock::new(None),
+        });
+        d.prepare()?;
+        self.docs.write().insert(id, d.clone());
+        Ok(d.info())
     }
 
     /// Opens a file; an Office file through a PDF made with `engine` (or the preferred converter).

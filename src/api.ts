@@ -39,7 +39,7 @@ export interface OfficeEngines {
 }
 
 /** Converting the document's pages to another format (the Convert menu). */
-export type ExportFormat = "docx" | "xlsx" | "pptx" | "png" | "jpg" | "tiff" | "txt";
+export type ExportFormat = "docx" | "xlsx" | "pptx" | "md" | "png" | "jpg" | "tiff" | "txt";
 export interface ExportRequest {
   doc: number;
   order: number[];
@@ -447,6 +447,10 @@ export const api = {
     return invoke<ExportDone>("convert_from_pdf", { req, onEvent: ch });
   },
   convertStop: () => invoke<void>("convert_stop"),
+  markdownRead: (path: string) => invoke<string>("markdown_read", { path }),
+  /** The Markdown file at `path` shown from `text` (a new document; pictures from its folder). */
+  markdownPreview: (path: string, text: string) => invoke<DocInfo>("markdown_preview", { path, text }),
+  markdownSave: (path: string, text: string) => invoke<void>("markdown_save", { path, text }),
   /** Opens a file Paginaut made in its usual program. */
   openPath: (path: string) => invoke<void>("open_path", { path }),
   ocrLanguages: () => invoke<import("./ocr").OcrLang[]>("ocr_languages"),

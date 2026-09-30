@@ -295,6 +295,19 @@ impl Document {
         Self::open_kind(path, Kind::Private)
     }
 
+    /// A document from bytes (`magic`: its kind, like "md"), with what it links to read from the folder `dir`.
+    pub fn open_buffer(magic: &str, data: &[u8], dir: &str) -> Result<Self> {
+        let (m, d) = (CString::new(magic).map_err(|e| e.to_string())?, CString::new(dir).map_err(|e| e.to_string())?);
+        with_kind(Kind::Shared, |c| {
+            let doc = unsafe { fo_open_buffer(c, m.as_ptr(), data.as_ptr(), data.len(), d.as_ptr()) };
+            if doc.is_null() {
+                Err(last_error(c))
+            } else {
+                Ok(Document(doc, Kind::Shared))
+            }
+        })
+    }
+
     /// Replaces the bookmarks with `items` (inside the current operation).
     pub fn set_outline(&self, items: &[OutlineNode]) -> Result<()> {
         fn add(c: *mut fo_ctx, d: *mut fo_doc, parent: c_int, items: &[OutlineNode], depth: usize) -> Result<()> {
