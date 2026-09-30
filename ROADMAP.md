@@ -641,6 +641,12 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       script match; voice/speed changes while paused stay paused; the Recognize dialog counts recognized pages
       from the page objects (no page loads under the document lock); Excel keeps "12.0%"'s decimals
 
+### 0.8.4: tables and pictures
+- [x] Table rows adjustable, group headings over their columns, the table menu in Read and Book modes (Phase 6.2's
+      tables); a moved or replaced picture keeps its place in the drawing order (Phase 6.3)
+- [x] Review fixes: a cell spanning rows no longer hid the cell under it in the preview and Copy (that row shifted
+      left; Excel's merges were right); only a real drag of a table line counts, so a click leaves the found rows
+
 ### 0.8.3
 - [x] Copy and search of stamped and edited Devanagari text (see Phase 6.2)
 - [x] Fix: 0.8.2's review change ended COM's multithreaded apartment after each spoken paragraph; as the last

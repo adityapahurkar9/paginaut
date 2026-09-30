@@ -101,16 +101,17 @@ function tablesOf(tab: Tab, src: number): Promise<Table[]> {
 }
 
 /** The table's text in rows and columns; rows with nothing in them left out. */
-/** The table's rows as cells with how many columns each spans (cells covered by a spanning one left out). */
+/** The table's rows as cells with how many columns each spans (cells covered by a spanning one left out). A cell
+ * spanning rows keeps its text in its first row and blanks below, so no row shifts (Excel merges them anyway). */
 export function spansOf(t: Table): { s: string; cs: number }[][] {
   const h = t.ys.length - 1, w = t.xs.length - 1;
   const rows = Array.from({ length: h }, () => Array<{ s: string; cs: number } | null>(w).fill(null));
   const covered = Array.from({ length: h }, () => Array<boolean>(w).fill(false));
-  for (const [r, c, rs, cs, s] of t.cells) {
+  for (const [r, c, , cs, s] of t.cells) {
     if (r >= h || c >= w) continue;
     const cell = rows[r][c];
     rows[r][c] = cell ? { s: `${cell.s} ${s}`, cs: Math.max(cell.cs, cs) } : { s, cs: Math.min(cs, w - c) };
-    for (let y = r; y < Math.min(h, r + rs); y++) for (let x = c; x < Math.min(w, c + cs); x++) if (y !== r || x !== c) covered[y][x] = true;
+    for (let x = c + 1; x < Math.min(w, c + cs); x++) covered[r][x] = true;
   }
   return rows
     .map((row, r) => row.flatMap((cell, c) => (covered[r][c] ? [] : [cell ?? { s: "", cs: 1 }])))

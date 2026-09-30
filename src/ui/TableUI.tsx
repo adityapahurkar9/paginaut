@@ -93,9 +93,11 @@ function TableInner({ tab, view, area, initial }: { tab: Tab; view: number; area
   const drag = (i: number, e: PointerEvent, row = false) => {
     e.preventDefault();
     e.stopPropagation();
-    // A found row line moved: from now on the rows are yours.
-    if (row && !rows) setRows(shownRows);
+    // Only a drag counts: a click (or the first of a double-click) leaves the lines as found.
+    let moved = false;
     const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 3) return;
+      moved = true;
       edited.current = true;
       if (row) {
         const y = toPageY(ev.clientY);
@@ -108,7 +110,8 @@ function TableInner({ tab, view, area, initial }: { tab: Tab; view: number; area
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      edited.current = true;
+      if (!moved) return;
+      // A found row line moved: from now on the rows are yours.
       if (row) setRows((r) => r && sorted(r));
       else setCols((c) => sorted(c));
     };
