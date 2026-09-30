@@ -13,3 +13,6 @@ native/mupdf/
 
 # OCR models built into the installer (Tesseract's; see native/get-tessdata.ps1)
 native/tessdata/
+
+# Releases staged by tools/release.ps1 (installers, signatures)
+release/

@@ -1,6 +1,9 @@
 pub mod engine;
 mod app;
 mod base64;
+pub mod addons;
+mod update;
+mod defaults;
 pub mod compare;
 pub mod convert;
 mod docx;
@@ -108,6 +111,27 @@ fn migrate_from_folio() {
             let _ = fs::remove_dir_all(&to);
         }
     }
+}
+
+/// The installer's switches: `--register-types` after installing, `--unregister-types` before uninstalling
+/// (Paginaut offered for its file types in Windows, or withdrawn). Handled before anything else starts, so they
+/// never reach a running Paginaut. Returns the exit code, or None to start as usual.
+pub fn installer_switch() -> Option<i32> {
+    let arg = std::env::args().nth(1)?;
+    #[cfg(windows)]
+    {
+        let exe = std::env::current_exe().ok()?;
+        match arg.as_str() {
+            "--register-types" => return Some(defaults::register_for_install(&defaults::PAGINAUT, &exe).map_or(1, |_| 0)),
+            "--unregister-types" => {
+                defaults::unregister(&defaults::PAGINAUT, &exe);
+                return Some(0);
+            }
+            _ => {}
+        }
+    }
+    let _ = arg;
+    None
 }
 
 pub fn run() {
@@ -235,6 +259,12 @@ pub fn run() {
             app::skin_set,
             app::skin_bytes,
             app::skin_clear,
+            app::default_apps_status,
+            app::default_apps_set,
+            app::default_apps_open,
+            app::update_check,
+            app::update_install,
+            app::update_stop,
             app::open_path,
             app::markdown_read,
             app::markdown_preview,
@@ -250,6 +280,10 @@ pub fn run() {
             let builtin = app.path().resource_dir().map(|d| d.join("tessdata")).unwrap_or_default();
             let user = app.path().app_local_data_dir().map(|d| d.join("tessdata")).unwrap_or_default();
             app.manage(ocr::ModelDirs { builtin, user });
+            // The signed add-on list kept from the last check (which OCR languages, which LibreOffice).
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                addons::load_cached(&dir);
+            }
             // Office files open through PDFs made by Microsoft Office or LibreOffice (see office/).
             let local = app.path().app_local_data_dir().unwrap_or_default();
             let office = std::sync::Arc::new(office::Office::new(&local));

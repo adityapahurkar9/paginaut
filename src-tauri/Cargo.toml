@@ -1,6 +1,6 @@
 [package]
 name = "paginaut"
-version = "0.7.72"
+version = "0.8.0"
 description = "Fast PDF reader, annotator and toolkit"
 edition = "2021"
 license = "AGPL-3.0-or-later"
@@ -26,6 +26,7 @@ sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 tauri-plugin-opener = "2"
 # Compare: lining two documents' words up.
 similar = { version = "2", default-features = false }
+minisign-verify = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # Same versions Tauri uses, to reach WebView2 settings it doesn't expose (touchpad pinch).
@@ -42,6 +43,8 @@ windows = { version = "0.62", features = [
   "Win32_Storage_FileSystem",
   # The status bar's memory figure: the app's own processes asked directly.
   "Win32_System_ProcessStatus",
+  # Default app: file types offered in Windows (Open with, Default apps) and who opens them now.
+  "Win32_UI_Shell",
   # Compare: Excel's short date follows Windows' own.
   "Win32_Globalization",
 ] }

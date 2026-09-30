@@ -9,6 +9,7 @@ import * as P from "./pages";
 import * as C from "./compare";
 import "./themes";
 import "./skin";
+import "./update";
 import { renderer } from "./render/RenderManager";
 import { App, dropping, tool } from "./ui/App";
 import { bookScreen, exitBook } from "./modes";

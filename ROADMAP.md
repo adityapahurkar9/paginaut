@@ -552,15 +552,33 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       only saved when they moved
 
 ## Phase 8 (0.8.0): Packaging, updates and signing
-- [ ] GitHub repository (the user has an account) hosting source, releases and update files
-- [ ] "Check for updates" button that checks the repo's releases, plus optional automatic checks
-      (Tauri updater: signed updates, verified before installing)
-- [ ] Signed add-on list (voices, OCR languages, LibreOffice pack) hosted with releases, so add-ons can update
-      without a full app update
-- [ ] Dependency update routine: bump MuPDF / Tesseract / Rust and JS packages on a schedule (immediately for
-      security fixes), each bump gated by the test suite (rendering, speed, memory, Office quality)
-- [ ] Installer code signing
-- [ ] Settings › "Make Paginaut the default for PDFs" (and, as the user picks, the other files it opens): register
-      Paginaut's file types with Windows as a choice (Open with, Default apps) without taking any over, then open
-      Windows' Default apps page at Paginaut for the user to confirm (Windows 10/11 don't let programs set defaults
-      themselves); shows whether it's the default now. Office files stay with Office unless picked
+- [ ] GitHub repository hosting releases and update files — built, not yet created: the source repo is private
+      and the app can't read a private repo's releases, so releases go to a public repo
+      (update.rs `RELEASES` = adityapahurkar9/paginaut-releases). Waiting on the user's decision; nothing published
+- [x] Help › Check for updates and Settings › About › Updates (check, "Update and restart", progress, stop),
+      plus a quiet check once a day (on by default, can be turned off; only github.com is asked). Our own updater
+      on WinHTTP, no second HTTP stack: reads latest.json (Tauri's format), accepts only installers from the
+      releases repo, checks the minisign signature against the key built in (update key in
+      %USERPROFILE%\.paginaut, never in the repo), runs the installer as Tauri's updater would (/P /UPDATE /R)
+      and quits; unsaved documents must be saved first
+- [x] Signed add-on list (addons.json + .sig, published with each release; `-AddonsOnly` re-signs an edited one):
+      the OCR languages on offer (Tesseract tag, sizes, hashes) and optionally a LibreOffice release pinned by
+      version and SHA-256. Checked lists are kept for offline use; a list can only name files from the places
+      Paginaut already downloads from. (No voices yet: there are no voice add-ons to list)
+- [x] Dependency routine: tools/deps.ps1 (MuPDF and tessdata releases, cargo update --dry-run, cargo audit if
+      installed, npm outdated/audit; -Apply updates within compatible versions behind the test gate and puts the
+      lock files back if anything fails), tools/test-all.ps1 (TypeScript, unit tests, 10 engine suites, -Office
+      for the Office ones), .github/dependabot.yml (monthly grouped PRs + security alerts once on GitHub)
+- [ ] Installer code signing — prepared: bundle.windows.signCommand runs tools/sign.ps1 on every binary and the
+      installer, a no-op until PAGINAUT_SIGN_THUMBPRINT (certificate in the store) or PAGINAUT_SIGN_DLIB/METADATA
+      (Azure Trusted Signing) is set. Waiting on a certificate (options in the Phase 8 notes)
+- [x] Settings › Default app: tick the kinds Paginaut is offered for (PDF, XPS, e-books, comics, Markdown;
+      pictures and Office files unticked unless picked), "Make Paginaut the default…" opens Windows' Default apps
+      at Paginaut (IApplicationAssociationRegistrationUI, the ms-settings link as a fallback), each kind shows
+      whether Paginaut opens it now. Everything under HKCU (ProgIDs Paginaut.<kind>, OpenWithProgids,
+      Capabilities, RegisteredApplications); never takes a default. The installer runs `paginaut
+      --register-types` (keeps the user's choice, first install offers the core kinds) and a real uninstall
+      `--unregister-types`. ProgIDs that may be someone's default are never deleted while installed (Windows
+      resets a default whose ProgID disappears); a kind Paginaut is the default for can't be unticked
+- Replaces the installer's own file associations (Tauri's, which set each type's class): earlier versions'
+  ProgIDs ("PDF document" …) are kept and pointed at the new copy, and removed on uninstall

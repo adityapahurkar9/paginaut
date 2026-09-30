@@ -1394,6 +1394,81 @@ pub async fn skin_clear(app: tauri::AppHandle) -> Res<()> {
     .await
 }
 
+// ---------------------------------------------------------------- updates
+
+static UPDATE_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Checks the releases for a newer Paginaut, and fetches the newest signed add-on list on the way (a list that's
+/// missing or doesn't check out is ignored: the one there already stays).
+#[tauri::command]
+pub async fn update_check(app: tauri::AppHandle) -> Res<crate::update::Checked> {
+    let data = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    blocking(move || {
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let checked = crate::update::check(&stop)?;
+        let _ = crate::addons::refresh(&data, &stop);
+        Ok(checked)
+    })
+    .await
+}
+
+/// Downloads the newer version found by the check, checks its signature, starts its installer and quits.
+#[tauri::command]
+pub async fn update_install(app: tauri::AppHandle, on_event: Channel<DownloadEvent>) -> Res<()> {
+    let dir = std::env::temp_dir().join("Paginaut update");
+    UPDATE_STOP.store(false, std::sync::atomic::Ordering::Release);
+    let installer = blocking(move || {
+        let mut last = 0u64;
+        crate::update::download(&dir, &UPDATE_STOP, &mut |done, total| {
+            if done == total || done - last >= total / 100 {
+                last = done;
+                let _ = on_event.send(DownloadEvent::Progress { done, total });
+            }
+        })
+    })
+    .await?;
+    crate::update::run_installer(&installer)?;
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_stop() {
+    UPDATE_STOP.store(true, std::sync::atomic::Ordering::Release);
+}
+
+// ---------------------------------------------------------------- default app
+
+/// Which file types Paginaut is offered for, and where it's the default now.
+#[tauri::command]
+pub async fn default_apps_status() -> Res<Vec<crate::defaults::KindStatus>> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    blocking(move || Ok(crate::defaults::status(&crate::defaults::PAGINAUT, &exe))).await
+}
+
+/// Offers Paginaut for exactly these kinds of file (withdrawn from the rest).
+#[tauri::command]
+pub async fn default_apps_set(kinds: Vec<String>) -> Res<Vec<crate::defaults::KindStatus>> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    blocking(move || {
+        let ids: Vec<&str> = kinds.iter().map(String::as_str).collect();
+        crate::defaults::register(&crate::defaults::PAGINAUT, &exe, &ids)?;
+        Ok(crate::defaults::status(&crate::defaults::PAGINAUT, &exe))
+    })
+    .await
+}
+
+/// Windows' Default apps page, opened at Paginaut: Windows' own call for it first (what browsers use), else the
+/// Settings link (which some Windows versions open at the list of apps instead).
+#[tauri::command]
+pub async fn default_apps_open(app: tauri::AppHandle) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    if blocking(|| crate::defaults::open_settings(&crate::defaults::PAGINAUT)).await.is_ok() {
+        return Ok(());
+    }
+    app.opener().open_url("ms-settings:defaultapps?registeredAppUser=Paginaut", None::<&str>).map_err(|e| e.to_string())
+}
+
 /// Opens a file Paginaut just made in the program Windows uses for it.
 #[tauri::command]
 pub fn open_path(app: tauri::AppHandle, path: String) -> Res<()> {

@@ -32,6 +32,7 @@ import { closePane, pane, togglePane } from "../panes";
 import { railMenuItems } from "./Rail";
 import { currentTheme } from "../themes";
 import { setSkin } from "../skin";
+import { checkFromMenu } from "../update";
 import { isMarkdown, toggleMdPane } from "../markdown";
 import { pickAndConvert } from "./OfficeUI";
 import { openCompareSetup } from "../compare";
@@ -518,7 +519,7 @@ function HelpTools() {
       <div class="sep" />
       <TB icon={I(Keyboard, 17)} label="Keyboard shortcuts" title="Keyboard shortcuts (F1)" onClick={() => openSettings("shortcuts")} />
       <TB icon={I(Info, 17)} label="About Paginaut" onClick={() => openSettings("about")} />
-      <TB icon={I(RefreshCw, 17)} label="Check for updates" title="Coming in a later version (checks the GitHub releases)" disabled onClick={() => {}} />
+      <TB icon={I(RefreshCw, 17)} label="Check for updates" title="Look for a newer Paginaut (Settings › About)" onClick={checkFromMenu} />
     </>
   );
 }

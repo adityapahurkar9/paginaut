@@ -1,0 +1,20 @@
+# Dependabot (on GitHub): security alerts and a monthly pull request per ecosystem. Every bump still has to pass
+# tools/test-all.ps1 before it's merged (see tools/deps.ps1).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      rust:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      js:
+        patterns: ["*"]

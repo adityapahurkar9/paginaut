@@ -10,9 +10,11 @@ import { About, Shortcuts } from "./HelpDialogs";
 import { OfficeSettings } from "./OfficeUI";
 import { PANES } from "./Rail";
 import { ThemesTab } from "./ThemesTab";
+import { DefaultAppTab } from "./DefaultAppTab";
 
 const TABS: [SettingsTab, string][] = [
   ["general", "General"],
+  ["defaults", "Default app"],
   ["themes", "Themes"],
   ["sidebar", "Side bar"],
   ["signing", "Signing"],
@@ -53,6 +55,7 @@ export function SettingsDialog() {
         </nav>
         <div class="set-body" onKeyDown={(e) => e.stopPropagation()}>
           {tab === "general" && <General />}
+          {tab === "defaults" && <DefaultAppTab />}
           {tab === "themes" && <ThemesTab />}
           {tab === "sidebar" && <SideBar />}
           {tab === "signing" && <Signing />}

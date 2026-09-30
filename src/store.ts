@@ -65,6 +65,8 @@ export interface Settings {
   look?: string;
   customThemes?: import("./themes").Theme[];
   skin?: import("./skin").Skin;
+  /** Update checks: automatically once a day (on unless turned off), and when the last one was. */
+  updates?: { auto: boolean; last?: number };
   /** Compare's options, as last chosen. */
   compare?: Partial<import("./api").CompareOptions>;
 }
@@ -228,7 +230,7 @@ export const activeTab = computed(() => tabs.value.find((t) => t.key === activeK
 
 export const paletteOpen = signal(false);
 /** The Settings dialog, at one of its tabs. */
-export type SettingsTab = "general" | "themes" | "sidebar" | "signing" | "ocr" | "office" | "compare" | "shortcuts" | "about";
+export type SettingsTab = "general" | "defaults" | "themes" | "sidebar" | "signing" | "ocr" | "office" | "compare" | "shortcuts" | "about";
 export const settingsOpen = signal<SettingsTab | null>(null);
 export function openSettings(tab: SettingsTab = "general") {
   settingsOpen.value = tab;

@@ -345,6 +345,26 @@ export interface EngineSearchOptions {
   start: number;
 }
 
+/** What a check of Paginaut's releases found. */
+export interface UpdateChecked {
+  current: string;
+  available: { version: string; notes: string; date: string } | null;
+  /** No release has been published yet. */
+  nonePublished: boolean;
+}
+
+/** A kind of file Paginaut can be offered for in Windows (Settings › Default app). */
+export interface DefaultKind {
+  id: string;
+  name: string;
+  exts: string[];
+  core: boolean;
+  /** Paginaut is offered for it (Open with, Default apps). */
+  offered: boolean;
+  /** How many of its extensions open in Paginaut now. */
+  defaultFor: number;
+}
+
 export const api = {
   /** Opens a file; an Office file through a PDF made with `engine` (default: the preferred one). */
   open: (path: string, engine?: OfficeEngine) => invoke<DocInfo>("open_document", { path, engine: engine ?? null }),
@@ -513,6 +533,16 @@ export const api = {
   skinSet: (jpeg: string) => invoke<string>("skin_set", { jpeg }),
   skinBytes: (file: string) => invoke<ArrayBuffer>("skin_bytes", { file }),
   skinClear: () => invoke<void>("skin_clear"),
+  defaultAppsStatus: () => invoke<DefaultKind[]>("default_apps_status"),
+  defaultAppsSet: (kinds: string[]) => invoke<DefaultKind[]>("default_apps_set", { kinds }),
+  defaultAppsOpen: () => invoke<void>("default_apps_open"),
+  updateCheck: () => invoke<UpdateChecked>("update_check"),
+  updateInstall: (onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
+    const ch = new Channel<{ kind: "progress"; done: number; total: number }>();
+    ch.onmessage = onEvent;
+    return invoke<void>("update_install", { onEvent: ch });
+  },
+  updateStop: () => invoke<void>("update_stop"),
   markdownRead: (path: string) => invoke<string>("markdown_read", { path }),
   /** The Markdown file at `path` shown from `text` (a new document; pictures from its folder). */
   markdownPreview: (path: string, text: string) => invoke<DocInfo>("markdown_preview", { path, text }),

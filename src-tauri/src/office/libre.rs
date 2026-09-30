@@ -246,11 +246,21 @@ pub fn install(dir: &Path, work: &Path, profile: &Path, cancel: &AtomicBool, pro
         return Err("Setting up LibreOffice needs about 2.3 GB of free space while it unpacks (600 MB afterwards). Free some space and try again.".into());
     }
     progress(Stage::Finding, 0, 0);
-    let version = latest_version(cancel)?;
+    // The add-on list may name a release Paginaut is known to work with (and its checksum); otherwise the newest.
+    let pin = crate::addons::libreoffice();
+    let version = match &pin {
+        Some(p) => p.version.clone(),
+        None => latest_version(cancel)?,
+    };
     let folder = format!("/libreoffice/stable/{version}/win/x86_64/");
     let name = format!("LibreOffice_{version}_Win_x86-64.msi");
-    let sums = crate::net::text(HOST, &format!("{folder}{name}.sha256"), cancel)?;
-    let want = sums.split_whitespace().next().filter(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit())).ok_or("Couldn't read LibreOffice's published checksum.")?.to_ascii_lowercase();
+    let want = match pin {
+        Some(p) => p.sha256.to_ascii_lowercase(),
+        None => {
+            let sums = crate::net::text(HOST, &format!("{folder}{name}.sha256"), cancel)?;
+            sums.split_whitespace().next().filter(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit())).ok_or("Couldn't read LibreOffice's published checksum.")?.to_ascii_lowercase()
+        }
+    };
     let msi = work.join(&name);
     let part = work.join(format!("{name}.part"));
     let path = format!("{folder}{name}");

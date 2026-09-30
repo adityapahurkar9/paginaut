@@ -1,6 +1,7 @@
-// Help content shown in Settings: keyboard shortcuts and about.
+// Help content shown in Settings: keyboard shortcuts, and About (with updates).
 import { useEffect, useState } from "preact/hooks";
 import { getVersion } from "@tauri-apps/api/app";
+import { checkForUpdates, installUpdate, setAutoUpdates, stopUpdate, updatesSetting, updateState } from "../update";
 
 const SHORTCUTS: [string, [string, string][]][] = [
   ["Files", [
@@ -62,8 +63,59 @@ export function About() {
         <div><span>App</span><span>Tauri 2 · WebView2</span></div>
         <div><span>Threads</span><span>{navigator.hardwareConcurrency} logical processors</span></div>
         <div><span>Licence</span><span>AGPL-3.0 (MuPDF's licence)</span></div>
-        <div><span>Updates</span><span>Update checks from GitHub are coming in a later version</span></div>
       </div>
+      <Updates />
     </>
+  );
+}
+
+function Updates() {
+  const s = updateState.value;
+  const auto = updatesSetting().auto;
+  const pct = s.phase === "downloading" && s.total ? Math.round((s.done / s.total) * 100) : 0;
+  return (
+    <div class="tool-field upd">
+      <label>Updates</label>
+      {s.phase === "checked" && s.result.available ? (
+        <div class="upd-new">
+          <b>Paginaut {s.result.available.version} is available</b>
+          {s.result.available.notes && <p class="upd-notes">{s.result.available.notes}</p>}
+          <div class="theme-row">
+            <button class="btn pri sm" onClick={() => void installUpdate()}>
+              Update and restart
+            </button>
+            <span class="hint">Downloaded, its signature checked, then installed; Paginaut restarts.</span>
+          </div>
+        </div>
+      ) : (
+        <div class="theme-row">
+          <button class="btn sm" disabled={s.phase === "checking" || s.phase === "downloading"} onClick={() => void checkForUpdates()}>
+            {s.phase === "checking" ? "Checking…" : "Check for updates"}
+          </button>
+          <span class="hint">
+            {s.phase === "checked" && (s.result.nonePublished ? "No releases have been published yet." : `You have the newest version (${s.result.current}).`)}
+            {s.phase === "error" && s.message}
+          </span>
+        </div>
+      )}
+      {s.phase === "downloading" && (
+        <div class="theme-row">
+          <span class="rf-bar upd-bar">
+            <span style={{ width: `${pct}%` }} />
+          </span>
+          <span class="hint">Downloading… {pct}%</span>
+          <button class="btn ghost sm" onClick={stopUpdate}>
+            Stop
+          </button>
+        </div>
+      )}
+      <label class="check-row set-check">
+        <input type="checkbox" checked={auto} onChange={(e) => setAutoUpdates((e.target as HTMLInputElement).checked)} />
+        <span>
+          Check automatically once a day
+          <small>Asks github.com for the newest release; nothing about you or your files is sent.</small>
+        </span>
+      </label>
+    </div>
   );
 }

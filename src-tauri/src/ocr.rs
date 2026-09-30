@@ -1,10 +1,11 @@
 //! OCR language models: which are available (built in, or downloaded into the
 //! app's local data folder), resolving a choice of languages to model files, and
 //! downloading more from Tesseract's own repositories, checked against the sizes
-//! and hashes in `ocr_langs` before they are used.
+//! and hashes of the add-on list (`addons`: the built-in `ocr_langs`, or a newer
+//! signed one) before they are used.
 
 use crate::engine::ocr::Models;
-use crate::ocr_langs::{Lang, LANGS, TAG};
+use crate::addons::OcrLang;
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -53,8 +54,8 @@ pub struct ModelDirs {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LangInfo {
-    code: &'static str,
-    name: &'static str,
+    code: String,
+    name: String,
     fast_size: u64,
     best_size: u64,
     /// The fast model ships with Paginaut.
@@ -79,16 +80,17 @@ impl ModelDirs {
     }
 
     pub fn languages(&self) -> Vec<LangInfo> {
-        LANGS
+        crate::addons::ocr()
+            .langs
             .iter()
             .map(|l| LangInfo {
-                code: l.code,
-                name: l.name,
+                code: l.code.clone(),
+                name: l.name.clone(),
                 fast_size: l.fast.0,
                 best_size: l.best.0,
                 builtin: self.builtin.join(format!("{}.traineddata", l.code)).is_file(),
-                fast: self.downloaded(l.code, Quality::Fast).is_file(),
-                best: self.downloaded(l.code, Quality::Best).is_file(),
+                fast: self.downloaded(&l.code, Quality::Fast).is_file(),
+                best: self.downloaded(&l.code, Quality::Best).is_file(),
             })
             .collect()
     }
@@ -126,14 +128,15 @@ impl ModelDirs {
     pub fn download(&self, code: &str, q: Quality, cancel: &AtomicBool, mut progress: impl FnMut(u64, u64)) -> Result<(), String> {
         let lang = find(code)?;
         let (size, sha) = match q {
-            Quality::Fast => lang.fast,
-            Quality::Best => lang.best,
+            Quality::Fast => lang.fast.clone(),
+            Quality::Best => lang.best.clone(),
         };
         let dest = self.downloaded(code, q);
         let dir = dest.parent().unwrap();
         std::fs::create_dir_all(dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
         let part = dest.with_extension("part");
-        let path = format!("/tesseract-ocr/{}/{TAG}/{code}.traineddata", q.repo());
+        let tag = crate::addons::ocr().tag.clone();
+        let path = format!("/tesseract-ocr/{}/{tag}/{code}.traineddata", q.repo());
         let get = crate::net::Get { host: "raw.githubusercontent.com", path: &path, cancel, progress: &mut progress, expect: Some(size), max: size, from: 0, min_rate: 0 };
         let res = crate::net::to_file(get, &part, None).and_then(|_| {
             let got = git_blob_sha1(&part)?;
@@ -149,8 +152,8 @@ impl ModelDirs {
     }
 }
 
-fn find(code: &str) -> Result<&'static Lang, String> {
-    LANGS.iter().find(|l| l.code == code).ok_or_else(|| format!("unknown language {code}"))
+fn find(code: &str) -> Result<OcrLang, String> {
+    crate::addons::ocr().langs.iter().find(|l| l.code == code).cloned().ok_or_else(|| format!("unknown language {code}"))
 }
 
 /// Downloads in progress, so they can be stopped: "code/quality" → stop flag.
