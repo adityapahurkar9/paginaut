@@ -47,6 +47,8 @@ windows = { version = "0.62", features = [
   "Win32_UI_Shell",
   # Compare: Excel's short date follows Windows' own.
   "Win32_Globalization",
+  # Read aloud: the voices installed in Windows.
+  "Foundation", "Foundation_Collections", "Media_Core", "Media_SpeechSynthesis", "Storage_Streams",
 ] }
 
 [profile.dev]

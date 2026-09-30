@@ -1,6 +1,8 @@
 // The Reading pane (right side): how Read and Book modes show the text (size, font, spacing, margins, alignment,
 // paper), changed next to the text itself. Book mode is full screen: it keeps its own Aa panel.
-import { Wrench, X } from "lucide-preact";
+import { AudioLines, Wrench, X } from "lucide-preact";
+import { speaking, toggleReadAloud } from "../speech";
+import { VoiceChoices } from "./SpeechBar";
 import { bookScreen, setViewMode, viewModeOf } from "../modes";
 import { closePane, pane } from "../panes";
 import { activeTab } from "../store";
@@ -33,6 +35,13 @@ export function ReadingPane() {
         )}
         <section class="pane-sec set-type">
           <TypeControls />
+        </section>
+        <section class="pane-sec read-aloud">
+          <label>Read aloud</label>
+          <VoiceChoices />
+          <button class="btn sm" disabled={!ready && !speaking.value} onClick={() => toggleReadAloud(ready)} title="From where you are, or the text you selected (Ctrl+Shift+U)">
+            <AudioLines size={15} strokeWidth={1.7} /> {speaking.value ? "Stop reading" : "Read aloud"}
+          </button>
         </section>
         {ready && (mode === "read" || mode === "book") && (
           <section class="pane-sec">

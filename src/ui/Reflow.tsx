@@ -15,6 +15,7 @@ import { isDark, settings, updateSettings, type ReflowSettings, type Tab } from 
 import { mix, themePaper } from "../themes";
 import { sourceCount } from "../edits";
 import { ocrState, recognize } from "../ocr";
+import { readFrom, speaking } from "../speech";
 
 // ---------------------------------------------------------------- loading
 
@@ -63,7 +64,7 @@ export function analysisOf(tab: Tab): Loaded {
 }
 
 /** The reflowed text for the tab's current page order and your corrections. */
-function flowOf(tab: Tab, a: Analysis): Flow {
+export function flowOf(tab: Tab, a: Analysis): Flow {
   const n = tab.edits.value ? sourceCount(tab.edits.value) : tab.info.value!.pageCount;
   const order = tab.edits.value?.order ?? Array.from({ length: n }, (_, i) => i);
   const t0 = performance.now();
@@ -218,7 +219,12 @@ export function ReflowHost({ tab }: { tab: Tab }) {
     const click = (e: MouseEvent) => {
       const fig = (e.target as HTMLElement).closest<HTMLElement>("figure.rf-img");
       const b = fig && (fig as HTMLElement & { _pic?: Block })._pic;
-      if (!b || b.k !== "img" || getSelection()?.toString()) return;
+      if (!b || b.k !== "img" || getSelection()?.toString()) {
+        // While reading aloud: a click on a paragraph carries on from there.
+        const at = (e.target as HTMLElement).closest<HTMLElement>("[data-b]");
+        if (!fig && at && speaking.value?.tab === tab && !getSelection()?.toString()) readFrom(tab, Number(at.dataset.b));
+        return;
+      }
       e.stopPropagation();
       setZoomed(b);
     };

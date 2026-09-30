@@ -1229,3 +1229,18 @@ body.text-edit .pg { cursor: default; }
 .cert-file-row { display: flex; align-items: center; gap: 4px; }
 .cert-file-row .cert { flex: 1; min-width: 0; }
 .cert-pfx { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--bd2); border-radius: 10px; }
+
+/* Read aloud: the bar at the bottom while it reads; the paragraph and word being read. */
+.speechbar {
+  position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 26; display: flex; align-items: center; gap: 3px;
+  padding: 5px 6px; background: var(--panel); border: 1px solid var(--bd); border-radius: 12px; box-shadow: var(--pop-shadow);
+  max-width: calc(100% - 32px); animation: fade 0.14s;
+}
+.speechbar .inp { max-width: 190px; }
+.speechbar .sb-doc { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx2); font-size: 12px; padding: 0 4px; }
+.speechbar .spin.sm { width: 12px; height: 12px; }
+.rf .rf-reading { background: color-mix(in srgb, var(--hit) 22%, transparent); border-radius: 3px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--hit) 22%, transparent); }
+::highlight(rf-speak) { background-color: var(--hit-active); color: inherit; }
+.pane-sec.read-aloud { display: flex; flex-direction: column; gap: 6px; }
+.pane-sec.read-aloud label { font-size: 11px; font-weight: 700; color: var(--tx3); text-transform: uppercase; letter-spacing: 0.04em; }
+.pane-sec.read-aloud .btn { align-self: flex-start; display: inline-flex; gap: 6px; align-items: center; }

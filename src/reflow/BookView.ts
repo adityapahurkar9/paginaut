@@ -576,16 +576,20 @@ export class BookView implements ReflowView {
   }
 
   showHit(h: FlowHit) {
-    this.turning?.finish();
     this.active = h;
-    const at = this.atOf({ b: h.b, o: h.from });
+    this.reveal(h.b, h.from);
+    paintHits(this.book, this.hits, this.active);
+  }
+
+  reveal(b: number, off: number) {
+    this.turning?.finish();
+    const at = this.atOf({ b, o: off });
     const right = this.nextAt(this.cur);
     const same = (a: At | null) => !!a && a.s === at.s && a.p === at.p;
     if (!same(this.cur) && !same(right)) {
       this.cur = at;
       this.show();
     }
-    paintHits(this.book, this.hits, this.active);
   }
 
   currentBlock() {

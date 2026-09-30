@@ -23,6 +23,7 @@ import { startProperties } from "./ui/MetaUI";
 import "./extract";
 import { endPageSize, pageSizeEdit } from "./pagesize";
 import { initOffice } from "./office";
+import { pauseOrResume, speaking, toggleReadAloud } from "./speech";
 
 // Before any file opens: which program converts Office files.
 initOffice();
@@ -132,6 +133,8 @@ window.addEventListener("keydown", (e) => {
     if (k === "n") { handled(); return A.toggleNight(); }
     if (k === "d") { handled(); return A.toggleTheme(); }
     if (k === "g" && ready) { handled(); return toggleGrid(ready); }
+    if (k === "u" && (ready || speaking.value)) { handled(); return toggleReadAloud(ready); }
+    if (e.key === " " && speaking.value) { handled(); return pauseOrResume(); }
   }
   if (e.altKey && !ctrl && k === "f") { handled(); fileMenuOpen.value = true; return; }
   if (e.key === "F1") { handled(); openSettings("shortcuts"); return; }

@@ -1716,3 +1716,25 @@ pub fn protocol<R: tauri::Runtime>(ctx: UriSchemeContext<'_, R>, request: Reques
         Err(e) => respond(responder, StatusCode::INTERNAL_SERVER_ERROR, e.into_bytes()),
     });
 }
+
+// ---------------------------------------------------------------- read aloud
+
+#[tauri::command]
+pub async fn tts_voices() -> Res<Vec<crate::tts::Voice>> {
+    blocking(crate::tts::voices).await
+}
+
+/// The spoken text as [u32 length of the words' JSON][the words' JSON][WAV], all in one reply.
+#[tauri::command]
+pub async fn tts_speak(text: String, voice: String, rate: f64) -> Res<tauri::ipc::Response> {
+    blocking(move || {
+        let (wav, words) = crate::tts::speak(&text, &voice, rate)?;
+        let json = serde_json::to_vec(&words).map_err(|e| e.to_string())?;
+        let mut out = Vec::with_capacity(4 + json.len() + wav.len());
+        out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        out.extend_from_slice(&json);
+        out.extend_from_slice(&wav);
+        Ok(tauri::ipc::Response::new(out))
+    })
+    .await
+}

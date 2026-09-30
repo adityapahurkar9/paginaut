@@ -71,6 +71,8 @@ export interface Settings {
   skin?: import("./skin").Skin;
   /** Update checks: automatically once a day (on unless turned off), and when the last one was. */
   updates?: { auto: boolean; last?: number };
+  /** Read aloud: the Windows voice (its id; empty for Windows' default) and speed (1 = normal). */
+  speech?: { voice: string; rate: number };
   /** Compare's options, as last chosen. */
   compare?: Partial<import("./api").CompareOptions>;
 }

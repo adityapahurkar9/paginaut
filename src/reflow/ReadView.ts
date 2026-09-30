@@ -19,6 +19,8 @@ export interface ReflowView {
   setHits(hits: FlowHit[], active: FlowHit | null): void;
   /** Brings a match into view. */
   showHit(h: FlowHit): void;
+  /** Brings character `off` of block `b` into view (read aloud), leaving the find marks alone. */
+  reveal(b: number, off: number): void;
   /** Block at the top of the view (to keep the place when switching modes). */
   currentBlock(): number;
   goToBlock(b: number): void;
@@ -132,6 +134,12 @@ export class ReadView implements ReflowView {
   }
 
   showHit(h: FlowHit) {
+    this.reveal(h.b, h.from);
+    paintHits(this.col, this.hits, this.active);
+  }
+
+  reveal(b: number, off: number) {
+    const h = { b, from: off, to: off + 1 };
     let r = hitRect(this.col, h);
     if (!r) return;
     const box = this.el.getBoundingClientRect();
@@ -143,7 +151,6 @@ export class ReadView implements ReflowView {
         if (r && (r.top < box.top || r.top > box.bottom - 40)) this.el.scrollTop += r.top - box.top - box.height / 3;
       });
     }
-    paintHits(this.col, this.hits, this.active);
   }
 
   next() {

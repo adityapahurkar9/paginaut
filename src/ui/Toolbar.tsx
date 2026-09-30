@@ -10,8 +10,9 @@ import {
   Minus, Moon, MousePointer2, MoveHorizontal, PanelLeft, PanelRight, Plus, Redo2, RefreshCw, RotateCcw, RotateCw, Save, ScanText, ScrollText,
   Search, Signature, SquareSplitHorizontal, Sun, SunMoon, Trash2, FilePlus2, LayoutGrid, Type, Undo2, Wrench, Underline, Strikethrough, SquareDashed,
   PenLine, StickyNote, TypeOutline, Square, Circle, Slash, MoveUpRight, Stamp, MessagesSquare, Check, X, CalendarDays, UserRound,
-  FileLock2, ShieldCheck, TextCursorInput, EyeOff, FileDiff, Settings2,
+  FileLock2, ShieldCheck, TextCursorInput, EyeOff, FileDiff, Settings2, AudioLines,
 } from "lucide-preact";
+import { speaking, toggleReadAloud } from "../speech";
 import * as A from "../actions";
 import * as P from "../pages";
 import { setCoverSeparate, setViewMode, viewModeOf, type ViewMode } from "../modes";
@@ -329,6 +330,14 @@ function ViewTools({ tab }: { tab: Tab | null }) {
         title="Read and Book modes' text: size, font, spacing, margins, paper (the Reading pane)"
         on={vm === "book" ? typeOpen.value : pane.value === "reading"}
         onClick={() => (vm === "book" ? (typeOpen.value = !typeOpen.value) : togglePane("reading"))}
+      />
+      <TB
+        icon={I(AudioLines, 17)}
+        label={speaking.value ? "Stop reading" : "Read aloud"}
+        title="Read the text aloud with a Windows voice, from where you are or the text you selected (Ctrl+Shift+U)"
+        on={!!speaking.value}
+        disabled={!tab && !speaking.value}
+        onClick={() => toggleReadAloud(tab)}
       />
       {(vm === "read" || vm === "book") && (
         <TB icon={I(Wrench, 17)} label="Fix layout" title="See how the page is read, and correct columns, order, pictures and text" onClick={() => tab && void startLayoutEdit(tab)} />

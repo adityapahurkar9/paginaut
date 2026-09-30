@@ -10,7 +10,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
   ]],
   ["Viewing", [
     ["Zoom in / out", "Ctrl+= / Ctrl+−  ·  Ctrl+wheel  ·  pinch"], ["Actual size", "Ctrl+0"], ["Fit page / fit width", "Ctrl+1 / Ctrl+2"],
-    ["Go to page", "Ctrl+G"], ["Next / previous page", "→ / ←"], ["Read mode (reflowed text)", "Ctrl+H"], ["Book mode (full screen)", "F5 · Esc to leave"],
+    ["Go to page", "Ctrl+G"], ["Next / previous page", "→ / ←"], ["Read mode (reflowed text)", "Ctrl+H"], ["Book mode (full screen)", "F5 · Esc to leave"], ["Read aloud / stop", "Ctrl+Shift+U"], ["Pause / resume reading", "Ctrl+Shift+Space"],
     ["Turn the page (Book)", "→ ← · Space · Page Up/Down · drag an edge"], ["Text size (Read, Book)", "Ctrl+= / Ctrl+− · pinch"],
     ["Full screen", "F11"], ["Sidebar", "F4"], ["Dark pages", "Ctrl+Shift+N"], ["Light / dark theme", "Ctrl+Shift+D"],
   ]],

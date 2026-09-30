@@ -45,6 +45,7 @@ import { TableDialog } from "./TableUI";
 import { PageDragGhost } from "./Sidebar";
 import { PageGrid } from "./PageGrid";
 import { selectedAnnot } from "../annots";
+import { SpeechBar } from "./SpeechBar";
 
 export const tool = signal<"select" | "hand">("select");
 export const dropping = signal(false);
@@ -78,6 +79,7 @@ export function App() {
               </div>
             )}
             {tab && tab.mode.value === "pages" && <AnnotBar tab={tab} />}
+            <SpeechBar />
           </div>
         </div>
         <OrganizePane />

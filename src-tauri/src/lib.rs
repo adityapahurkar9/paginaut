@@ -4,6 +4,7 @@ mod base64;
 pub mod addons;
 mod update;
 mod defaults;
+mod tts;
 pub mod compare;
 pub mod convert;
 mod docx;
@@ -262,6 +263,8 @@ pub fn run() {
             app::default_apps_status,
             app::default_apps_set,
             app::default_apps_open,
+            app::tts_voices,
+            app::tts_speak,
             app::pfx_summary,
             app::signature_revocation,
             app::update_check,

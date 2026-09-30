@@ -541,6 +541,9 @@ export const api = {
   skinSet: (jpeg: string) => invoke<string>("skin_set", { jpeg }),
   skinBytes: (file: string) => invoke<ArrayBuffer>("skin_bytes", { file }),
   skinClear: () => invoke<void>("skin_clear"),
+  ttsVoices: () => invoke<import("./speech").Voice[]>("tts_voices"),
+  /** [u32 length of the words' JSON][the words' JSON][WAV]. */
+  ttsSpeak: (text: string, voice: string, rate: number) => invoke<ArrayBuffer>("tts_speak", { text, voice, rate }),
   defaultAppsStatus: () => invoke<DefaultApps>("default_apps_status"),
   defaultAppsSet: (kinds: string[]) => invoke<DefaultApps>("default_apps_set", { kinds }),
   defaultAppsOpen: () => invoke<void>("default_apps_open"),

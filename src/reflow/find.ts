@@ -69,20 +69,7 @@ export function paintHits(root: HTMLElement, hits: FlowHit[], active: FlowHit | 
   for (const el of root.querySelectorAll<HTMLElement>("[data-b]")) {
     const list = byBlock.get(Number(el.dataset.b));
     if (!list) continue;
-    const base = Number(el.dataset.o ?? 0);
-    // Text nodes of the element with their starting offsets in the block.
-    const nodes: [Text, number][] = [];
-    let pos = base;
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
-      nodes.push([n, pos]);
-      pos += n.data.length;
-    }
-    const end = pos;
-    const at = (off: number): [Text, number] | null => {
-      for (let i = nodes.length - 1; i >= 0; i--) if (off >= nodes[i][1]) return [nodes[i][0], Math.min(nodes[i][0].data.length, off - nodes[i][1])];
-      return null;
-    };
+    const { base, end, at } = offsets(el);
     for (const h of list) {
       if (h.to <= base || h.from >= end) continue;
       const a = at(Math.max(h.from, base)), z = at(Math.min(h.to, end));
@@ -96,6 +83,47 @@ export function paintHits(root: HTMLElement, hits: FlowHit[], active: FlowHit | 
   }
   reg.set("rf-hit", new HighlightCtor(...all));
   reg.set("rf-hit-on", new HighlightCtor(...on));
+}
+
+/** Text positions in a block's element (it may hold only part of the block: data-o is where it starts). */
+function offsets(el: HTMLElement) {
+  const base = Number(el.dataset.o ?? 0);
+  // Text nodes of the element with their starting offsets in the block.
+  const nodes: [Text, number][] = [];
+  let pos = base;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+    nodes.push([n, pos]);
+    pos += n.data.length;
+  }
+  const at = (off: number): [Text, number] | null => {
+    for (let i = nodes.length - 1; i >= 0; i--) if (off >= nodes[i][1]) return [nodes[i][0], Math.min(nodes[i][0].data.length, off - nodes[i][1])];
+    return null;
+  };
+  return { base, end: pos, at };
+}
+
+/** The DOM range of characters [from, to) of block `b` inside `root`, if that part is rendered there. */
+export function rangeOf(root: HTMLElement, b: number, from: number, to: number): Range | null {
+  for (const el of root.querySelectorAll<HTMLElement>(`[data-b="${b}"]`)) {
+    const { base, end, at } = offsets(el);
+    if (from < base || from >= end) continue;
+    const a = at(from), z = at(Math.min(to, end));
+    if (!a || !z) return null;
+    const r = document.createRange();
+    r.setStart(a[0], a[1]);
+    r.setEnd(z[0], z[1]);
+    return r;
+  }
+  return null;
+}
+
+/** Marks `range` as highlight `name` (none clears it). */
+export function paintRange(name: string, range: Range | null) {
+  const reg = registry();
+  if (!reg || !HighlightCtor) return;
+  if (range) reg.set(name, new HighlightCtor(range));
+  else reg.delete(name);
 }
 
 /** Screen rectangle of a hit inside `root`, if it's rendered there. */

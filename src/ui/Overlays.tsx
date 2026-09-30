@@ -25,6 +25,7 @@ import { railShown, setRailShown, togglePane } from "../panes";
 import { addBookmarkHere } from "./Sidebar";
 import { removeStamps } from "../stamps";
 import { activeTab, baseName, dialog, findOpen, openFiles, openSettings, paletteOpen, recent, settings, toast, unlockTab, updateSettings, type Tab } from "../store";
+import { speaking, toggleReadAloud } from "../speech";
 
 // ---------------------------------------------------------------- menu
 
@@ -212,6 +213,7 @@ function commands(): Item[] {
     c("Zoom out", A.zoomOut, "Ctrl+−", hasDoc),
     c("Read mode (reflowed text, one column)", () => A.toggleMode("read"), "Ctrl+H", hasDoc),
     c("Book mode (reflowed text, two pages, full screen)", () => A.toggleMode("book"), "F5", hasDoc),
+    c("Read aloud (or stop reading)", () => toggleReadAloud(activeTab.value), "Ctrl+Shift+U", () => hasDoc() || !!speaking.value),
     c("Fix reading layout (columns, order, pictures)", withTab((t) => void startLayoutEdit(t)), "", hasDoc),
     c("Recognize text (OCR)…", withTab((t) => void recognize(t)), "", hasDoc),
     c("Convert Office files to PDF (Word, Excel, PowerPoint)…", () => void pickAndConvert(), ""),
