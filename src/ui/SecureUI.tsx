@@ -74,7 +74,8 @@ function SecureInner({ tab, kind }: { tab: Tab; kind: Kind }) {
   /** Saves with `opts` to a copy (asks where) or in place; reports the result. */
   const run = async (opts: SaveOptions, copy: boolean, suffix: string, doing: string, report: (saved: DocInfo, before: number) => string) => {
     let target: string | null = null;
-    if (copy) {
+    // A PDF made from an Office file lives in the app's cache: it's always saved as a new file.
+    if (copy || info.converted) {
       const stem = baseName(tab.path).replace(/\.[^.]+$/, "");
       target =
         testHook()?.save ??

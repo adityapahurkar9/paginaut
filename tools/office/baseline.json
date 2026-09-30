@@ -1,0 +1,102 @@
+{
+ "report": {
+  "mupdf": {
+   "visual": 0.0594,
+   "missing": 0.0454,
+   "reordered": 0.0076,
+   "pages": 7
+  },
+  "lo": {
+   "visual": 0.9754,
+   "missing": 0.0,
+   "reordered": 0.0061,
+   "pages": 5
+  },
+  "word": {
+   "visual": 1.0,
+   "missing": 0.0,
+   "reordered": 0.0,
+   "pages": 5
+  }
+ },
+ "letter": {
+  "mupdf": {
+   "visual": 0.231,
+   "missing": 0.0,
+   "reordered": 0.0,
+   "pages": 1
+  },
+  "lo": {
+   "visual": 1.0,
+   "missing": 0.0,
+   "reordered": 0.0,
+   "pages": 2
+  },
+  "word": {
+   "visual": 1.0,
+   "missing": 0.0,
+   "reordered": 0.0,
+   "pages": 2
+  }
+ },
+ "budget": {
+  "mupdf": {
+   "visual": 0.0383,
+   "missing": 0.8129,
+   "reordered": 0.0067,
+   "pages": 2
+  },
+  "lo": {
+   "visual": 0.6724,
+   "missing": 0.0,
+   "reordered": 0.009,
+   "pages": 7
+  },
+  "word": {
+   "visual": 1.0,
+   "missing": 0.0,
+   "reordered": 0.0,
+   "pages": 8
+  }
+ },
+ "invoice": {
+  "mupdf": {
+   "visual": 0.2426,
+   "missing": 0.2558,
+   "reordered": 0.4651,
+   "pages": 1
+  },
+  "lo": {
+   "visual": 0.9756,
+   "missing": 0.0,
+   "reordered": 0.2558,
+   "pages": 1
+  },
+  "word": {
+   "visual": 1.0,
+   "missing": 0.0,
+   "reordered": 0.0,
+   "pages": 1
+  }
+ },
+ "deck": {
+  "mupdf": {
+   "visual": 0.0,
+   "missing": 0.0,
+   "reordered": 0.0,
+   "pages": 2
+  },
+  "lo": {
+   "visual": 0.992,
+   "missing": 0.0,
+   "reordered": 0.0,
+   "pages": 7
+  },
+  "word": {
+   "visual": 1.0,
+   "missing": 0.0,
+   "reordered": 0.0,
+   "pages": 7
+  }
+ }
+}

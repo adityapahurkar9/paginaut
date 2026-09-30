@@ -1,6 +1,6 @@
 {
   "name": "paginaut",
-  "version": "0.6.50",
+  "version": "0.7.0",
   "description": "Fast PDF reader, annotator and toolkit",
   "main": "out/main/main.js",
   "scripts": {

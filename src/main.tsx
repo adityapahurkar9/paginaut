@@ -19,6 +19,10 @@ import { toggleGrid } from "./ui/PageGrid";
 import { startProperties } from "./ui/MetaUI";
 import "./extract";
 import { endPageSize, pageSizeEdit } from "./pagesize";
+import { initOffice } from "./office";
+
+// Before any file opens: which program converts Office files.
+initOffice();
 
 render(<App />, document.getElementById("app")!);
 

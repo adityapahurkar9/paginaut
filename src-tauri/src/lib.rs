@@ -1,7 +1,9 @@
 pub mod engine;
 mod app;
 mod base64;
+mod net;
 mod ocr;
+pub mod office;
 mod ocr_langs;
 mod sigstore;
 pub mod dsc;
@@ -103,6 +105,7 @@ pub fn run() {
     #[cfg(windows)]
     migrate_from_folio();
     let engine = engine::Engine::new(worker_count(), store_bytes()).expect("MuPDF failed to start");
+    let converter = engine.clone();
     let args: Vec<String> = std::env::args().collect();
     let launch = app::files_from_args(&args, None);
 
@@ -204,17 +207,29 @@ pub fn run() {
             app::ocr_check,
             app::ocr_run,
             app::ocr_remove,
+            app::office_engines,
+            app::office_set_preference,
+            app::office_install,
+            app::office_install_stop,
+            app::office_remove,
+            app::office_convert,
             app::cancel,
             app::system_info,
             app::take_launch_files,
             memory_level,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // OCR models: English, Hindi and Marathi ship with the app; more are
             // downloaded into the local (not roaming) data folder.
             let builtin = app.path().resource_dir().map(|d| d.join("tessdata")).unwrap_or_default();
             let user = app.path().app_local_data_dir().map(|d| d.join("tessdata")).unwrap_or_default();
             app.manage(ocr::ModelDirs { builtin, user });
+            // Office files open through PDFs made by Microsoft Office or LibreOffice (see office/).
+            let local = app.path().app_local_data_dir().unwrap_or_default();
+            let office = std::sync::Arc::new(office::Office::new(&local));
+            let o = office.clone();
+            converter.set_converter(std::sync::Arc::new(move |path: &str, engine: Option<&str>| o.convert(path, engine)));
+            app.manage(office);
             // Shown by the UI once the first frame is painted, so there's no white flash.
             #[cfg(windows)]
             if let Some(win) = app.get_webview_window("main") {

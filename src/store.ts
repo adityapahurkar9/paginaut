@@ -59,6 +59,8 @@ export interface Settings {
   dsc: { reason: string; location: string; showDate: boolean; lock: boolean; newFile: boolean; place: "box" | "invisible"; cert: string };
   /** Text recognition: the languages and model quality used last. */
   ocr: { langs: string[]; quality: "fast" | "best" };
+  /** Which converter opens Office files ("auto": Microsoft Office, else LibreOffice, else the text preview). */
+  officeEngine: "auto" | "msoffice" | "libreoffice" | "builtin";
 }
 
 export interface ReflowSettings {
@@ -76,11 +78,14 @@ export const REFLOW_DEFAULTS: ReflowSettings = { font: "sitka", size: 19, spacin
 export const settings = signal<Settings>(
   {
     theme: "system", night: false, sidebarOpen: true, sidebarWidth: 232, sidebarTab: "pages", gridSize: 190, autoSaveRotations: false,
-    ribbon: "home", coverSeparate: false, highlightFields: true, signPane: false,
+    ribbon: "home", coverSeparate: false, highlightFields: true,
     annot: { colors: { hl: "#ffd400", pen: "#e8453c", shape: "#e8453c", text: "#1c1c1c", note: "#ffd400" }, width: 1.5, fontSize: 12 }, reflow: REFLOW_DEFAULTS,
     dsc: { reason: "I approve this document", location: "", showDate: true, lock: false, newFile: true, place: "box", cert: "" },
     ocr: { langs: ["eng"], quality: "fast" },
+    officeEngine: "auto",
     ...load("paginaut.settings", {} as Partial<Settings>),
+    // The Sign pane starts closed; it opens from the Sign toolbar or when signing.
+    signPane: false,
   },
 );
 

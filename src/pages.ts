@@ -36,7 +36,7 @@ function maybeAutoSave(tab: Tab) {
   clearTimeout(autoSaveTimer);
   const e = tab.edits.value;
   // Only rotations: other unsaved changes (inserted pages, forms) wait for Save.
-  if (!settings.value.autoSaveRotations || !e || !tab.info.value?.isPdf || tab.docChanged.value || !E.onlyRotations(e) || E.isIdentity(e)) return;
+  if (!settings.value.autoSaveRotations || !e || !savesInPlace(tab) || tab.docChanged.value || !E.onlyRotations(e) || E.isIdentity(e)) return;
   autoSaveTimer = window.setTimeout(() => void save(tab), 1200);
 }
 
@@ -231,7 +231,8 @@ export async function adoptSaved(tab: Tab, saved: DocInfo, page?: number) {
   if (page === undefined) page = tab.viewer?.viewState().page;
   tab.viewer?.reset(saved);
   tab.info.value = saved;
-  tab.path = saved.path;
+  // A PDF made from an Office file goes by the Office file's name until it's saved as a PDF of its own.
+  tab.path = saved.converted?.from ?? saved.path;
   tab.sizes.value = sizes;
   tab.history.clear();
   tab.historyVersion.value++;
@@ -240,7 +241,7 @@ export async function adoptSaved(tab: Tab, saved: DocInfo, page?: number) {
   tab.docChanged.value = false;
   void initForms(tab);
   afterOpenHooks.forEach((f) => f(tab));
-  rememberFile(saved.path, { pages: saved.pageCount });
+  rememberFile(tab.path, { pages: saved.pageCount });
   api.outline(saved.docId).then((o) => (tab.outline.value = o)).catch(() => {});
   api.pageLabels(saved.docId).then((l) => (tab.labels.value = l)).catch(() => {});
 }
@@ -251,6 +252,12 @@ export function onDocReady(fn: (tab: Tab) => void) {
   afterOpenHooks.push(fn);
 }
 export const runDocReady = (tab: Tab) => afterOpenHooks.forEach((f) => f(tab));
+
+/**
+ * Saving writes back to the file itself: a PDF opened as it is. Other files (and PDFs made from Office
+ * files, which live in the app's cache) are saved as new PDFs.
+ */
+export const savesInPlace = (tab: Tab) => !!tab.info.value?.isPdf && !tab.info.value.converted;
 
 /** Set by ocr.ts: runs before saving (e.g. to stop text recognition); false cancels the save. */
 let beforeSave: (tab: Tab) => Promise<boolean> = async () => true;
@@ -264,11 +271,12 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
   const e = tab.edits.value;
   if (!info || !e || tab.saving.value) return false;
   let target: string | null = null;
-  if (saveAs || !info.isPdf) {
+  const inPlace = savesInPlace(tab);
+  if (saveAs || !inPlace) {
     const stem = baseName(tab.path).replace(/\.[^.]+$/, "");
     target = await saveDialog({
-      title: info.isPdf ? "Save a copy as" : "Save as PDF",
-      defaultPath: tab.path.replace(/[^\\/]+$/, `${stem}${saveAs && info.isPdf ? " (copy)" : ""}.pdf`),
+      title: inPlace ? "Save a copy as" : "Save as PDF",
+      defaultPath: tab.path.replace(/[^\\/]+$/, `${stem}${saveAs && inPlace ? " (copy)" : ""}.pdf`),
       filters: [{ name: "PDF", extensions: ["pdf"] }],
     });
     if (!target) return false;

@@ -23,10 +23,12 @@ fn blocking<T: Send + 'static>(f: impl FnOnce() -> Res<T> + Send + 'static) -> i
 
 // ---------------------------------------------------------------- documents
 
+/// Opens a file; an Office file through a PDF made with `engine` ("msoffice", "libreoffice", "builtin"),
+/// or the preferred converter.
 #[tauri::command]
-pub async fn open_document(state: State<'_, AppState>, path: String) -> Res<DocInfo> {
-    let engine = state.engine.clone();
-    blocking(move || engine.open(&path)).await
+pub async fn open_document(state: State<'_, AppState>, path: String, engine: Option<String>) -> Res<DocInfo> {
+    let engine_ = state.engine.clone();
+    blocking(move || engine_.open_with(&path, engine.as_deref())).await
 }
 
 #[tauri::command]
@@ -1103,6 +1105,78 @@ pub fn cancel(state: State<'_, AppState>, ids: Vec<u64>) {
     for id in ids {
         state.engine.cancel(id);
     }
+}
+
+// ---------------------------------------------------------------- Office files
+
+use crate::office::{libre::Stage, Engines, Office};
+
+/// What can convert Office files here (`fresh`: look again, e.g. after installing Office).
+#[tauri::command]
+pub async fn office_engines(office: State<'_, Arc<Office>>, fresh: bool) -> Res<Engines> {
+    let office = office.inner().clone();
+    blocking(move || {
+        if fresh {
+            office.forget();
+        }
+        Ok(office.engines())
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn office_set_preference(office: State<'_, Arc<Office>>, preference: String) {
+    office.set_preference(&preference);
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum InstallEvent {
+    Progress { stage: Stage, done: u64, total: u64 },
+}
+
+static OFFICE_INSTALL_STOP: once_cell::sync::Lazy<Arc<std::sync::atomic::AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
+
+/// Downloads and sets up Paginaut's LibreOffice; resolves when it's ready.
+#[tauri::command]
+pub async fn office_install(office: State<'_, Arc<Office>>, on_event: Channel<InstallEvent>) -> Res<Engines> {
+    let office = office.inner().clone();
+    OFFICE_INSTALL_STOP.store(false, std::sync::atomic::Ordering::Release);
+    blocking(move || {
+        let mut last = (0u64, 99u8);
+        office.install_pack(&OFFICE_INSTALL_STOP, &mut |stage, done, total| {
+            // A progress event per 1% is plenty.
+            let s = stage as u8;
+            if s != last.1 || done == total || done.saturating_sub(last.0) >= total / 100 {
+                last = (done, s);
+                let _ = on_event.send(InstallEvent::Progress { stage, done, total });
+            }
+        })?;
+        Ok(office.engines())
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn office_install_stop() {
+    OFFICE_INSTALL_STOP.store(true, std::sync::atomic::Ordering::Release);
+}
+
+#[tauri::command]
+pub async fn office_remove(office: State<'_, Arc<Office>>) -> Res<Engines> {
+    let office = office.inner().clone();
+    blocking(move || {
+        office.remove_pack()?;
+        Ok(office.engines())
+    })
+    .await
+}
+
+/// Converts an Office file into the PDF `out`. Returns the converter's name.
+#[tauri::command]
+pub async fn office_convert(office: State<'_, Arc<Office>>, path: String, out: String, engine: Option<String>) -> Res<String> {
+    let office = office.inner().clone();
+    blocking(move || office.convert_to(&path, &out, engine.as_deref())).await
 }
 
 // ---------------------------------------------------------------- app

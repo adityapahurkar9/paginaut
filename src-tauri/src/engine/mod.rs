@@ -25,6 +25,37 @@ const LIST_BUDGET: u64 = 96 << 20;
 /// Page size used to lay out reflowable formats (EPUB, FB2, HTML…), in points.
 const REFLOW: (f32, f32, f32) = (450.0, 640.0, 11.0);
 
+/// Office files MuPDF shows itself (text only) when no converter is available: laid out on A4.
+fn layout_reflowable(d: &Document, path: &str) -> Result<(), String> {
+    if !d.is_reflowable() {
+        return Ok(());
+    }
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    if matches!(ext.as_str(), "docx" | "xlsx" | "pptx" | "hwpx") {
+        d.layout(595.0, 842.0, 10.0)
+    } else {
+        d.layout(REFLOW.0, REFLOW.1, REFLOW.2)
+    }
+}
+
+/// An Office file (Word, Excel, PowerPoint…) opened through a PDF made from it.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Converted {
+    /// The original file.
+    pub from: String,
+    /// The converter ("msoffice", "libreoffice") and its name for people ("Microsoft Word").
+    pub engine: String,
+    pub engine_name: String,
+    /// The PDF made from it (in the app's cache).
+    #[serde(skip)]
+    pub pdf: String,
+}
+
+/// Turns an Office file into a PDF, with a named converter or the preferred one. Ok(None): the file
+/// isn't an Office file, or only MuPDF's own (text only) preview is available for it.
+pub type Converter = dyn Fn(&str, Option<&str>) -> Result<Option<Converted>, String> + Send + Sync;
+
 /// Small insertion-ordered LRU; capacities here are tiny so linear scans are fine.
 struct Lru<K: PartialEq + Copy, V> {
     cap: usize,
@@ -86,6 +117,8 @@ pub struct Doc {
     content_edited: AtomicBool,
     /// Pages in the file on disk; pages from index on were added in memory.
     file_pages: AtomicUsize,
+    /// Office file this PDF was made from, until it's saved as a PDF of its own.
+    converted: RwLock<Option<Converted>>,
 }
 
 /// Where a background job reads pages from: a private copy of the file (fast,
@@ -173,6 +206,8 @@ pub struct DocInfo {
     pub file_size: u64,
     /// Width/height of page 0 in points, after its own rotation.
     pub first_size: [f32; 2],
+    /// Set for an Office file shown through a PDF made from it (`path` is that PDF).
+    pub converted: Option<Converted>,
 }
 
 /// A file to take pages from (all of them unless `pages` lists some, 0-based).
@@ -500,9 +535,7 @@ impl Doc {
                         d.authenticate(pw);
                     }
                 }
-                if d.is_reflowable() {
-                    d.layout(REFLOW.0, REFLOW.1, REFLOW.2)?;
-                }
+                layout_reflowable(&d, &self.path())?;
                 m.insert(self.id, d);
             }
             f(&m[&self.id])
@@ -1309,6 +1342,7 @@ impl Doc {
             author: String::new(),
             file_size,
             first_size: [612.0, 792.0],
+            converted: self.converted.read().clone(),
         };
         if needs_password {
             return info;
@@ -1327,9 +1361,7 @@ impl Doc {
     /// Runs after the document is readable (opened or unlocked).
     fn prepare(&self) -> Result<(), String> {
         let inner = self.inner.lock();
-        if inner.doc.is_reflowable() {
-            inner.doc.layout(REFLOW.0, REFLOW.1, REFLOW.2)?;
-        }
+        layout_reflowable(&inner.doc, &self.path())?;
         let n = inner.doc.page_count()?;
         self.page_count.store(n, Ordering::Relaxed);
         self.file_pages.store(n, Ordering::Relaxed);
@@ -1345,12 +1377,33 @@ pub struct Engine {
     pool: Pool,
     docs: RwLock<HashMap<DocId, Arc<Doc>>>,
     next_id: AtomicU64,
+    /// Makes PDFs of Office files (set by the app; none in tests).
+    converter: RwLock<Option<Arc<Converter>>>,
 }
 
 impl Engine {
     pub fn new(workers: usize, store_bytes: usize) -> Result<Arc<Self>, String> {
         mupdf::init(store_bytes)?;
-        Ok(Arc::new(Engine { pool: Pool::new(workers, Arc::new(purge_private_docs)), docs: RwLock::new(HashMap::new()), next_id: AtomicU64::new(1) }))
+        Ok(Arc::new(Engine {
+            pool: Pool::new(workers, Arc::new(purge_private_docs)),
+            docs: RwLock::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
+            converter: RwLock::new(None),
+        }))
+    }
+
+    pub fn set_converter(&self, f: Arc<Converter>) {
+        *self.converter.write() = Some(f);
+    }
+
+    /// The file to read for `path`: a PDF made from it when it's an Office file (with `engine`, or the
+    /// preferred converter), or the file itself.
+    fn source(&self, path: &str, engine: Option<&str>) -> Result<(String, Option<Converted>), String> {
+        let convert = self.converter.read().clone();
+        match convert.map(|f| f(path, engine)).transpose()?.flatten() {
+            Some(c) => Ok((c.pdf.clone(), Some(c))),
+            None => Ok((path.to_string(), None)),
+        }
     }
 
     pub fn workers(&self) -> usize {
@@ -1402,11 +1455,17 @@ impl Engine {
     }
 
     pub fn open(&self, path: &str) -> Result<DocInfo, String> {
-        let doc = Document::open(path)?;
+        self.open_with(path, None)
+    }
+
+    /// Opens a file; an Office file through a PDF made with `engine` (or the preferred converter).
+    pub fn open_with(&self, path: &str, engine: Option<&str>) -> Result<DocInfo, String> {
+        let (file, converted) = self.source(path, engine)?;
+        let doc = Document::open(&file)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let d = Arc::new(Doc {
             id,
-            path: RwLock::new(path.to_string()),
+            path: RwLock::new(file),
             inner: Mutex::new(DocInner { doc, pages: Lru::new(32) }),
             page_count: AtomicUsize::new(0),
             bounds: RwLock::new(Vec::new()),
@@ -1417,6 +1476,7 @@ impl Engine {
             edit_rev: AtomicU64::new(0),
             content_edited: AtomicBool::new(false),
             file_pages: AtomicUsize::new(0),
+            converted: RwLock::new(converted),
         });
         let locked = d.inner.lock().doc.needs_password();
         if !locked {
@@ -1512,6 +1572,9 @@ impl Engine {
         let cur = d.path();
         let out = target.unwrap_or_else(|| cur.clone());
         let in_place = same_file(&out, &cur);
+        if in_place && d.converted.read().is_some() {
+            return Err("This PDF was made from an Office file. Use Save as to keep it.".into());
+        }
         let tmp = format!("{cur}.paginaut-tmp");
         {
             let mut inner = d.inner.lock();
@@ -1583,6 +1646,7 @@ impl Engine {
             }
         }
         *d.path.write() = out;
+        *d.converted.write() = None;
         d.content_edited.store(false, Ordering::Release);
         d.prepare()?;
         Ok(d.info())
@@ -1606,6 +1670,9 @@ impl Engine {
         let cur = d.path();
         let out = target.unwrap_or_else(|| cur.clone());
         let in_place = same_file(&out, &cur);
+        if in_place && d.converted.read().is_some() {
+            return Err("This PDF was made from an Office file. Use Save as to keep it.".into());
+        }
         {
             let inner = d.inner.lock();
             if !inner.doc.is_pdf() {
@@ -1668,7 +1735,7 @@ impl Engine {
     /// fails with "PASSWORD:<path>" (or "WRONG_PASSWORD:<path>").
     pub fn insert_pages(&self, id: DocId, sources: Vec<InsertSource>, fit: Option<[f32; 2]>) -> Result<Inserted, String> {
         let d = self.doc(id)?;
-        let docs = open_sources(&sources)?;
+        let docs = self.open_sources(&sources)?;
         d.insert("Insert pages", |doc| {
             for (src, pages) in &docs {
                 doc.insert_pages(src, pages, fit)?;
@@ -1681,7 +1748,7 @@ impl Engine {
     /// `bookmarks`) a bookmark per file holding that file's own bookmarks. Errors
     /// as for insert_pages. Returns the page count.
     pub fn merge(&self, sources: Vec<InsertSource>, fit: Option<[f32; 2]>, bookmarks: bool, target: &str) -> Result<usize, String> {
-        let docs = open_sources(&sources)?;
+        let docs = self.open_sources(&sources)?;
         let out = Document::new_pdf()?;
         let mut base = 0;
         for ((src, pages), s) in docs.iter().zip(&sources) {
@@ -1789,22 +1856,53 @@ impl Engine {
 
     /// Size (points) of a file's first page: for a picture, its size at its own resolution.
     pub fn first_page_size(&self, path: &str) -> Result<[f32; 2], String> {
-        let d = Document::open(path).map_err(|e| format!("Couldn't open {}: {e}", file_name(path)))?;
+        let (file, _) = self.source(path, None)?;
+        let d = Document::open(&file).map_err(|e| format!("Couldn't open {}: {e}", file_name(path)))?;
+        layout_reflowable(&d, &file)?;
         let b = d.load_page(0)?.bounds()?;
         Ok([b[2] - b[0], b[3] - b[1]])
     }
 
     /// Page count and kind of a file, without keeping it open.
     pub fn peek(&self, path: &str, password: Option<&str>) -> Result<Peek, String> {
-        let d = Document::open(path).map_err(|e| format!("Couldn't open {}: {e}", file_name(path)))?;
+        let (file, _) = self.source(path, None)?;
+        let d = Document::open(&file).map_err(|e| format!("Couldn't open {}: {e}", file_name(path)))?;
         let is_pdf = d.is_pdf();
         if d.needs_password() && !password.is_some_and(|pw| d.authenticate(pw)) {
             return Ok(Peek { pages: 0, is_pdf, locked: true });
         }
-        if d.is_reflowable() {
-            d.layout(REFLOW.0, REFLOW.1, REFLOW.2)?;
-        }
+        layout_reflowable(&d, &file)?;
         Ok(Peek { pages: d.page_count()?, is_pdf, locked: false })
+    }
+
+    /// Opens every file pages will be taken from (Office files through PDFs made from them) and checks the
+    /// pages asked for, before anything is changed.
+    fn open_sources(&self, sources: &[InsertSource]) -> Result<Vec<(Document, Vec<usize>)>, String> {
+        let mut docs = Vec::with_capacity(sources.len());
+        for s in sources {
+            let (file, _) = self.source(&s.path, None)?;
+            let src = Document::open(&file).map_err(|e| format!("Couldn't open {}: {e}", file_name(&s.path)))?;
+            if src.needs_password() {
+                match s.password.as_deref() {
+                    None => return Err(format!("PASSWORD:{}", s.path)),
+                    Some(pw) if !src.authenticate(pw) => return Err(format!("WRONG_PASSWORD:{}", s.path)),
+                    _ => {}
+                }
+            }
+            layout_reflowable(&src, &file)?;
+            let n = src.page_count()?;
+            let pages = match &s.pages {
+                Some(p) => {
+                    if let Some(bad) = p.iter().find(|&&i| i >= n) {
+                        return Err(format!("{} has no page {} (it has {n})", file_name(&s.path), bad + 1));
+                    }
+                    p.clone()
+                }
+                None => (0..n).collect(),
+            };
+            docs.push((src, pages));
+        }
+        Ok(docs)
     }
 
     /// Adds `count` empty pages of w×h points at the end, as one undo step.
@@ -2048,36 +2146,6 @@ impl Engine {
     }
 }
 
-/// Opens every file pages will be taken from and checks the pages asked for,
-/// before anything is changed.
-fn open_sources(sources: &[InsertSource]) -> Result<Vec<(Document, Vec<usize>)>, String> {
-    let mut docs = Vec::with_capacity(sources.len());
-    for s in sources {
-        let src = Document::open(&s.path).map_err(|e| format!("Couldn't open {}: {e}", file_name(&s.path)))?;
-        if src.needs_password() {
-            match s.password.as_deref() {
-                None => return Err(format!("PASSWORD:{}", s.path)),
-                Some(pw) if !src.authenticate(pw) => return Err(format!("WRONG_PASSWORD:{}", s.path)),
-                _ => {}
-            }
-        }
-        if src.is_reflowable() {
-            src.layout(REFLOW.0, REFLOW.1, REFLOW.2)?;
-        }
-        let n = src.page_count()?;
-        let pages = match &s.pages {
-            Some(p) => {
-                if let Some(bad) = p.iter().find(|&&i| i >= n) {
-                    return Err(format!("{} has no page {} (it has {n})", file_name(&s.path), bad + 1));
-                }
-                p.clone()
-            }
-            None => (0..n).collect(),
-        };
-        docs.push((src, pages));
-    }
-    Ok(docs)
-}
 
 /// A file in the temp folder for a copy of a document.
 fn temp_path(id: DocId, what: &str) -> String {

@@ -374,18 +374,51 @@ Extract content (right-click the item on the page; Tools › Organize; command p
       patterns like [..]+@; the email pattern avoids both, and a pattern that gives up on some pages keeps what it
       found elsewhere (the panel says so) (src-tauri/examples/redact_test.rs)
 
-## Phase 7 (0.7.0): Conversions
-- [ ] Office quality test first: convert a mixed set of real Office files with MuPDF and with Microsoft Office,
-      then compare visually (page similarity score), by text (missing or reordered words) and by layout
-      (page count, table breaks, images). Results go into a side-by-side report and stay as a regression test.
-- [ ] Open .docx / .xlsx / .pptx directly via MuPDF's built-in Office support
-- [ ] Office conversion engines, tiered: MuPDF built-in (always) → LibreOffice (installed or our pack) →
-      Microsoft Office when present
-- [ ] Engine checker: detects Microsoft Office (registry, version), an installed LibreOffice, and our pack
-- [ ] Settings → Office conversion: shows detected engines, preference order (Auto or a fixed pick),
-      "Download LibreOffice (~300 MB)". Each conversion dialog can override the engine for that file.
-- [ ] LibreOffice pack: official TDF installer, verified against its published checksum, unpacked into
-      Paginaut's own folder (no system install, no admin rights)
+## Phase 7 (0.7.0): Office files (done)
+- [x] Office quality test first (tools/office): make-samples.py makes a mixed set with Microsoft Office itself (a report
+      with headings, lists, a table crossing pages, a picture, footnote, header/footer, two columns, a text box,
+      Hindi/Marathi, a landscape section; a letter; a budget with formats, formulas, a chart and a too-wide sheet; an
+      invoice fitted to a page; a 7-slide deck with a picture, table, shapes, chart and Devanagari; plus
+      password-protected ones) and Office's own PDFs as the reference. compare.py scores each converter: ink in the same
+      places per page (plain SSIM rated blank-ish pages highly whatever was on them), words missing / out of order /
+      added (Indic text by the picture only: Word's PDFs give it back garbled), page count and size; writes a side-by-side
+      report.html and checks against baseline.json (the regression test)
+- [x] Results: MuPDF's built-in Office support is a text extractor (0.00–0.24; no fonts, pictures, bullets, table grid,
+      number formats or slides: a 7-slide deck becomes 2 pages of lines). LibreOffice 0.97–1.00 once it has the fonts
+      (0.74 on the report before: Office's default font Aptos is a cloud font only Office sees); the budget scores 0.67
+      because a too-wide sheet breaks into pages one column differently (its tables, formats and chart are right).
+      Microsoft Office 1.00
+- [x] Open .docx/.doc/.rtf/.odt, .xlsx/.xls/.ods, .pptx/.ppt/.odp (and templates, macro-enabled): converted to a PDF
+      (cached, so reopening is instant), shown as that PDF under the Office file's name. Everything PDF works on it
+      (mark up, sign, redact, edit); Save means Save as PDF (the cached PDF is never overwritten). Merge and Insert take
+      Office files too. Bar over the document: which program made it, Save as PDF, Convert with… another one
+- [x] Converters, tiered: Microsoft Office when installed (Word/Excel/PowerPoint each detected; driven through COM by
+      name, as the typed interfaces are often broken by click-to-run installs; read-only, macros off, no prompts:
+      password-protected files fail with a message instead of asking; 1–3 s a file) → LibreOffice (installed, found
+      through its registry entry, or our pack; ~1.5 s a file, the first after setup ~10 s) → MuPDF's text preview
+      (.docx/.xlsx/.pptx only, laid out on A4)
+- [x] Office files dialog (File menu, command palette): programs found (Office version, LibreOffice version/size),
+      preference (best here / Microsoft Office / LibreOffice / text preview), Download LibreOffice / Remove
+- [x] LibreOffice pack: newest stable release from download.documentfoundation.org, SHA-256 checked against the one the
+      Document Foundation publishes, code signature checked (The Document Foundation), unpacked with an administrative
+      install (no system install, no admin rights), trimmed to what converting needs (1.6 GB → 633 MB: other languages'
+      menus and dictionaries, help, icon themes left out; its own fonts and the C++ runtime moved where it looks for
+      them), profile built. Office's cloud fonts (Aptos…) copied into its font folder. Conversions run one at a time in
+      a job object (a stuck LibreOffice is stopped along with everything it started, after 3 minutes)
+- [x] Downloads resume after a dropped connection, and move on from a slow mirror (the download site hands out a mirror
+      per request; some send at 70 KB/s)
+- [x] Convert to PDF for many files: each with its own program (Auto or a pick), PDFs next to the files or in a folder,
+      never over an existing file ("report (2).pdf"), Open / Show in folder
+- [x] Fixes found on the way: click-to-run Word can't see folders made in the local app data folder after it was set up
+      ("The directory name isn't valid"), so it writes to the temp folder; Windows Installer won't open a package kept
+      in the app's data folder (error 1619), so the download goes to the temp folder; LibreOffice needs absolute paths
+      (a relative profile path stops it with a "bootstrap.ini is corrupt" message box)
+- [x] Office file types aren't registered with the installer: Tauri's installer would make Paginaut their default
+      program, taking .docx away from Word
+- [x] Also: the Sign tab no longer opens the Sign pane by itself, and the pane starts closed
+- Tests: src-tauri/examples/office_test.rs (both converters, protected files, opening through the engine, cache,
+      Save as), office_convert.rs (MuPDF conversion + page dumps for compare.py), lo_setup.rs (pack from a downloaded
+      installer)
 
 ## Phase 7.5 (0.7.50): Compare
 - [ ] Two PDFs side by side, scrolling together: word-by-word text diff with a list of changes, plus a picture overlay

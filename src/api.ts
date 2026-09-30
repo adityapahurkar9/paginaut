@@ -15,7 +15,31 @@ export interface DocInfo {
   author: string;
   fileSize: number;
   firstSize: [number, number];
+  /** An Office file shown through a PDF made from it (`path` is that PDF, in the app's cache). */
+  converted: Converted | null;
 }
+
+export interface Converted {
+  /** The Office file. */
+  from: string;
+  engine: OfficeEngine;
+  engineName: string;
+}
+
+/** Office converters: Microsoft Office, LibreOffice, or MuPDF's own text preview. */
+export type OfficeEngine = "msoffice" | "libreoffice" | "builtin";
+
+export interface OfficeEngines {
+  msoffice: { word: boolean; excel: boolean; powerpoint: boolean; version: string } | null;
+  /** A LibreOffice installed on the system. */
+  installed: { version: string; path: string; size: number } | null;
+  /** Paginaut's own LibreOffice. */
+  pack: { version: string; path: string; size: number } | null;
+  preference: "auto" | OfficeEngine;
+}
+
+export type InstallStage = "finding" | "downloading" | "checking" | "unpacking" | "preparing";
+export type InstallEvent = { kind: "progress"; stage: InstallStage; done: number; total: number };
 
 /** A file to take pages from: all of them, or `pages` (0-based). */
 export interface InsertSource {
@@ -255,7 +279,8 @@ export interface EngineSearchOptions {
 }
 
 export const api = {
-  open: (path: string) => invoke<DocInfo>("open_document", { path }),
+  /** Opens a file; an Office file through a PDF made with `engine` (default: the preferred one). */
+  open: (path: string, engine?: OfficeEngine) => invoke<DocInfo>("open_document", { path, engine: engine ?? null }),
   unlock: (doc: number, password: string) => invoke<DocInfo | null>("unlock_document", { doc, password }),
   close: (doc: number) => invoke<void>("close_document", { doc }),
   trim: (doc: number) => invoke<void>("trim_document", { doc }),
@@ -386,6 +411,17 @@ export const api = {
   formReset: (doc: number) => invoke<FormChange>("form_reset", { doc }),
   saveFlattened: (doc: number, target: string, order: number[], rot: number[], annots: boolean) =>
     invoke<void>("save_flattened", { doc, target, order, rot, annots }),
+  officeEngines: (fresh = false) => invoke<OfficeEngines>("office_engines", { fresh }),
+  officeSetPreference: (preference: string) => invoke<void>("office_set_preference", { preference }),
+  officeInstall: (onEvent: (e: InstallEvent) => void) => {
+    const ch = new Channel<InstallEvent>();
+    ch.onmessage = onEvent;
+    return invoke<OfficeEngines>("office_install", { onEvent: ch });
+  },
+  officeInstallStop: () => invoke<void>("office_install_stop"),
+  officeRemove: () => invoke<OfficeEngines>("office_remove"),
+  /** Converts an Office file into the PDF `out`; resolves with the converter's name. */
+  officeConvert: (path: string, out: string, engine?: OfficeEngine) => invoke<string>("office_convert", { path, out, engine: engine ?? null }),
   ocrLanguages: () => invoke<import("./ocr").OcrLang[]>("ocr_languages"),
   ocrDownload: (code: string, quality: string, onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
     const ch = new Channel<{ kind: "progress"; done: number; total: number }>();

@@ -3,6 +3,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as S from "./search";
+import { OFFICE_EXT } from "./office";
 import { searchFlow } from "./reflow/find";
 import { setViewMode, viewModeOf } from "./modes";
 import { updateReflow, zoomText } from "./ui/Reflow";
@@ -13,6 +14,7 @@ import {
 export const OPENABLE = [
   "pdf", "xps", "oxps", "epub", "mobi", "fb2", "fbz", "cbz", "svg", "txt", "html", "htm", "xhtml",
   "png", "jpg", "jpeg", "jfif", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "pnm", "pbm", "pgm", "ppm", "pam", "jxr",
+  ...OFFICE_EXT,
 ];
 
 export async function openDialog() {
@@ -21,6 +23,7 @@ export async function openDialog() {
     filters: [
       { name: "Documents and images", extensions: OPENABLE },
       { name: "PDF", extensions: ["pdf"] },
+      { name: "Office documents", extensions: OFFICE_EXT },
       { name: "All files", extensions: ["*"] },
     ],
   });

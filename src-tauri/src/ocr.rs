@@ -134,7 +134,8 @@ impl ModelDirs {
         std::fs::create_dir_all(dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
         let part = dest.with_extension("part");
         let path = format!("/tesseract-ocr/{}/{TAG}/{code}.traineddata", q.repo());
-        let res = net::get("raw.githubusercontent.com", &path, &part, size, cancel, &mut progress).and_then(|()| {
+        let get = crate::net::Get { host: "raw.githubusercontent.com", path: &path, cancel, progress: &mut progress, expect: Some(size), max: size, from: 0, min_rate: 0 };
+        let res = crate::net::to_file(get, &part, None).and_then(|_| {
             let got = git_blob_sha1(&part)?;
             if got != sha {
                 return Err(format!("The downloaded {} model didn't match the expected one; try again.", lang.name));
@@ -168,126 +169,10 @@ pub fn download_key(code: &str, q: Quality) -> String {
 /// Git's hash of a file ("blob <size>\0" + contents), as GitHub lists it.
 fn git_blob_sha1(path: &Path) -> Result<String, String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
-    let mut input = format!("blob {}\0", data.len()).into_bytes();
-    input.extend_from_slice(&data);
-    let digest = hash::sha1(&input)?;
-    Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
-}
-
-#[cfg(windows)]
-mod hash {
-    use windows::Win32::Security::Cryptography::{BCryptCreateHash, BCryptDestroyHash, BCryptFinishHash, BCryptHashData, BCRYPT_HASH_HANDLE, BCRYPT_SHA1_ALG_HANDLE};
-
-    pub fn sha1(data: &[u8]) -> Result<[u8; 20], String> {
-        let mut h = BCRYPT_HASH_HANDLE::default();
-        let mut out = [0u8; 20];
-        unsafe {
-            BCryptCreateHash(BCRYPT_SHA1_ALG_HANDLE, &mut h, None, None, 0).ok().map_err(|e| e.to_string())?;
-            let r = BCryptHashData(h, data, 0).ok().and_then(|_| BCryptFinishHash(h, &mut out, 0).ok());
-            let _ = BCryptDestroyHash(h);
-            r.map_err(|e| e.to_string())?;
-        }
-        Ok(out)
-    }
-}
-
-#[cfg(not(windows))]
-mod hash {
-    pub fn sha1(_: &[u8]) -> Result<[u8; 20], String> {
-        Err("not supported on this system".into())
-    }
-}
-
-/// HTTPS downloads through Windows' own HTTP stack (WinHTTP): the system's proxy
-/// settings and certificate store apply, and no HTTP library ships with the app.
-#[cfg(windows)]
-mod net {
-    use std::io::Write;
-    use std::path::Path;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use windows::core::{w, HSTRING, PCWSTR};
-    use windows::Win32::Networking::WinHttp::*;
-
-    struct Handle(*mut core::ffi::c_void);
-    impl Drop for Handle {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                unsafe {
-                    let _ = WinHttpCloseHandle(self.0);
-                }
-            }
-        }
-    }
-
-    fn open(h: *mut core::ffi::c_void, what: &str) -> Result<Handle, String> {
-        if h.is_null() {
-            Err(format!("{what}: {}", std::io::Error::last_os_error()))
-        } else {
-            Ok(Handle(h))
-        }
-    }
-
-    pub fn get(host: &str, path: &str, dest: &Path, expect: u64, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
-        let offline = |e: windows::core::Error| format!("Couldn't download (are you online?): {}", e.message());
-        unsafe {
-            let session = open(WinHttpOpen(w!("Paginaut"), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0), "Couldn't start downloading")?;
-            let _ = WinHttpSetTimeouts(session.0, 15_000, 15_000, 30_000, 30_000);
-            let conn = open(WinHttpConnect(session.0, &HSTRING::from(host), INTERNET_DEFAULT_HTTPS_PORT, 0), "Couldn't connect")?;
-            let req = open(
-                WinHttpOpenRequest(conn.0, w!("GET"), &HSTRING::from(path), PCWSTR::null(), PCWSTR::null(), std::ptr::null(), WINHTTP_FLAG_SECURE),
-                "Couldn't connect",
-            )?;
-            WinHttpSendRequest(req.0, None, None, 0, 0, 0).map_err(offline)?;
-            WinHttpReceiveResponse(req.0, std::ptr::null_mut()).map_err(offline)?;
-            let mut status = 0u32;
-            let mut len = std::mem::size_of::<u32>() as u32;
-            WinHttpQueryHeaders(
-                req.0,
-                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                PCWSTR::null(),
-                Some((&mut status as *mut u32).cast()),
-                &mut len,
-                std::ptr::null_mut(),
-            )
-            .map_err(offline)?;
-            if status != 200 {
-                return Err(format!("The download server answered {status}."));
-            }
-            let mut file = std::fs::File::create(dest).map_err(|e| format!("Couldn't write {}: {e}", dest.display()))?;
-            let mut buf = vec![0u8; 256 << 10];
-            let mut total = 0u64;
-            loop {
-                if cancel.load(Ordering::Acquire) {
-                    return Err("stopped".into());
-                }
-                let mut read = 0u32;
-                WinHttpReadData(req.0, buf.as_mut_ptr().cast(), buf.len() as u32, &mut read).map_err(offline)?;
-                if read == 0 {
-                    break;
-                }
-                file.write_all(&buf[..read as usize]).map_err(|e| e.to_string())?;
-                total += read as u64;
-                if total > expect + (1 << 20) {
-                    return Err("The download was larger than expected.".into());
-                }
-                progress(total, expect);
-            }
-            file.flush().map_err(|e| e.to_string())?;
-            if total != expect {
-                return Err("The download was cut short; try again.".into());
-            }
-        }
-        Ok(())
-    }
-}
-
-#[cfg(not(windows))]
-mod net {
-    use std::path::Path;
-    use std::sync::atomic::AtomicBool;
-    pub fn get(_: &str, _: &str, _: &Path, _: u64, _: &AtomicBool, _: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
-        Err("Downloads aren't supported on this system.".into())
-    }
+    let mut h = crate::net::Hasher::new(crate::net::Alg::Sha1)?;
+    h.update(format!("blob {}\0", data.len()).as_bytes())?;
+    h.update(&data)?;
+    Ok(crate::net::hex(&h.finish()?))
 }
 
 #[cfg(test)]

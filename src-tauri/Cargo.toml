@@ -1,6 +1,6 @@
 [package]
 name = "paginaut"
-version = "0.6.50"
+version = "0.7.0"
 description = "Fast PDF reader, annotator and toolkit"
 edition = "2021"
 license = "AGPL-3.0-or-later"
@@ -31,7 +31,14 @@ webview2-com = "0.39"
 windows-core = "0.62"
 # DPAPI: saved signatures are encrypted for the Windows user. WinHTTP and BCrypt:
 # downloading OCR language models and checking them.
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Networking_WinHttp"] }
+windows = { version = "0.62", features = [
+  "Win32_Foundation", "Win32_Security_Cryptography", "Win32_Networking_WinHttp",
+  # Office conversion: Word/Excel/PowerPoint through COM, LibreOffice run in a job object, its installer's
+  # signature checked, installed copies found in the registry.
+  "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_System_Registry", "Win32_System_JobObjects",
+  "Win32_System_Threading", "Win32_Security_WinTrust", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip",
+  "Win32_Storage_FileSystem",
+] }
 
 [profile.dev]
 # MuPDF is always an optimised static library; keep our own code quick too.

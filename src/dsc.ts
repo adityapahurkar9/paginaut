@@ -194,7 +194,8 @@ async function finish(tab: Tab, setup: SignSetup, src: number, rect?: number[], 
   const info = tab.info.value;
   if (!info) return;
   let target: string | null = null;
-  if (setup.newFile) {
+  // A PDF made from an Office file lives in the app's cache: the signed one is always a new file.
+  if (setup.newFile || info.converted) {
     const stem = baseName(tab.path).replace(/\.[^.]+$/, "");
     target = await saveDialog({
       title: "Save the signed document as",

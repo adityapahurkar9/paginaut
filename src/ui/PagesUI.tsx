@@ -5,6 +5,7 @@ import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { ArrowDown, ArrowUp, FileText, GripVertical, Image, Lock, X } from "lucide-preact";
 import { OPENABLE } from "../actions";
+import { OFFICE_EXT } from "../office";
 import { api, type InsertSource } from "../api";
 import { docSigs } from "../dsc";
 import { parsePages } from "../ocr";
@@ -62,6 +63,7 @@ async function pickFiles(title: string): Promise<FileEntry[]> {
       filters: [
         { name: "Documents and pictures", extensions: OPENABLE },
         { name: "PDF", extensions: ["pdf"] },
+        { name: "Office documents", extensions: OFFICE_EXT },
         { name: "Pictures", extensions: [...PICTURES] },
       ],
     }));

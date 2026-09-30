@@ -31,6 +31,8 @@ import { startSecure } from "./SecureUI";
 import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
 import { addPicture, textEdit, toggleTextEdit } from "../textedit";
 import { redactTab, startRedact, stopRedact } from "../redact";
+import { officeDialog } from "../office";
+import { pickAndConvert } from "./OfficeUI";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -60,7 +62,7 @@ export const fileMenuOpen = signal(false);
 function fileItems(): MenuItem[] {
   const tab = activeTab.value;
   const ready = tab?.status.value === "ready" ? tab : null;
-  const isPdf = !!ready?.info.value?.isPdf;
+  const isPdf = !!ready && P.savesInPlace(ready);
   const files = recent.value.slice(0, 6);
   return [
     { label: "Open…", hint: "Ctrl+O", icon: <FolderOpen size={15} />, run: A.openDialog },
@@ -68,6 +70,9 @@ function fileItems(): MenuItem[] {
     { label: "Save as…", hint: "Ctrl+Shift+S", icon: <FileOutput size={15} />, disabled: !ready, run: () => ready && void P.save(ready, true) },
     { sep: true },
     { label: "Document properties…", hint: "Ctrl+D", disabled: !ready, run: () => ready && startProperties(ready) },
+    { sep: true },
+    { label: "Convert Office files to PDF…", run: () => void pickAndConvert() },
+    { label: "Office files…", run: () => (officeDialog.value = true) },
     { sep: true },
     { label: "Auto-save rotations", check: settings.value.autoSaveRotations, run: () => updateSettings({ autoSaveRotations: !settings.value.autoSaveRotations }) },
     ...(files.length ? [{ sep: true } as MenuItem, { head: "Recent" } as MenuItem] : []),
@@ -103,7 +108,7 @@ export function Ribbon() {
         File
       </button>
       {TABS.map(([key, label]) => (
-        <button key={key} role="tab" aria-selected={cur === key} class={`rtab ${cur === key ? "on" : ""}`} onClick={() => updateSettings(key === "sign" ? { ribbon: key, signPane: true } : { ribbon: key })}>
+        <button key={key} role="tab" aria-selected={cur === key} class={`rtab ${cur === key ? "on" : ""}`} onClick={() => updateSettings({ ribbon: key })}>
           {label}
         </button>
       ))}
@@ -251,7 +256,7 @@ function MorePanel({ anchor, onClose, children }: { anchor: HTMLElement; onClose
 
 function HomeTools({ tab }: { tab: Tab | null }) {
   if (tab) void tab.historyVersion.value; // refresh when history changes
-  const isPdf = !!tab?.info.value?.isPdf;
+  const isPdf = !!tab && P.savesInPlace(tab);
   const dirty = !!tab?.dirty.value;
   const saving = !!tab?.saving.value;
   return (
@@ -493,7 +498,7 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
       <div class="sep" />
       <TB icon={I(FormInput, 17)} label="Forms" menu onClick={(e) => openMenu(e, formItems(tab), "left", 270)} />
       <TB icon={I(Highlighter, 17)} label="Comment" title="Highlight, draw, add notes and text (Comment tab)" onClick={() => updateSettings({ ribbon: "comment" })} />
-      <TB icon={I(Signature, 17)} label="Sign" title="Signatures, initials and Fill & Sign (Sign tab)" onClick={() => updateSettings({ ribbon: "sign", signPane: true })} />
+      <TB icon={I(Signature, 17)} label="Sign" title="Signatures, initials and Fill & Sign (Sign tab)" onClick={() => updateSettings({ ribbon: "sign" })} />
       <TB icon={I(ScanText, 17)} label="OCR" menu disabled={!tab} onClick={(e) => openMenu(e, [
         { label: "Recognize text…", run: () => tab && void recognize(tab) },
         { label: "Remove recognized text", disabled: !tab?.info.value?.isPdf, run: () => tab && void removeRecognized(tab) },

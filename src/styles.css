@@ -929,3 +929,31 @@ body.text-edit .pg { cursor: default; }
 .rd-opt small { font-weight: 400; color: var(--tx3); font-size: 11.5px; line-height: 1.3; }
 .rd-opt { align-items: flex-start; }
 .linkish { border: 0; background: none; color: var(--acc); padding: 0 0 0 6px; font: inherit; cursor: pointer; text-decoration: underline; }
+
+/* ---------------------------------------------------------------- Office files */
+.officebar .office-other { height: 28px; width: auto; flex-shrink: 0; }
+.officebar .spin { flex-shrink: 0; }
+.dialog.office-dialog { width: 560px; display: flex; flex-direction: column; gap: 14px; }
+.office-dialog > .hint { font-size: 12.5px; color: var(--tx2); line-height: 1.4; padding-right: 24px; }
+.office-engines { display: flex; flex-direction: column; gap: 6px; }
+.office-engine { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 8px; background: var(--hover); font-size: 12.5px; }
+.office-engine > span { color: var(--tx); overflow-wrap: anywhere; }
+.office-engine > small { color: var(--tx3); font-size: 11.5px; line-height: 1.35; }
+.office-engine .ps-line { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.office-engine .ps-line .hint { font-size: 11.5px; color: var(--tx3); line-height: 1.3; }
+.office-engine .btn { flex-shrink: 0; }
+.office-dl { margin-top: 4px; }
+.office-choice { align-items: flex-start; }
+.office-choice span { display: flex; flex-direction: column; font-size: 13px; }
+.office-choice small { color: var(--tx3); font-size: 11.5px; }
+.office-choice.off { opacity: 0.5; }
+.dialog.convert-dialog { width: 580px; display: flex; flex-direction: column; gap: 14px; }
+.convert-list { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
+.convert-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: var(--hover); font-size: 12.5px; }
+.convert-row .inp { width: 200px; flex-shrink: 0; }
+.convert-name { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.convert-name, .convert-name small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.convert-name small { color: var(--tx3); font-size: 11.5px; }
+.convert-row.error .convert-name small { color: #c42b1c; white-space: normal; }
+.convert-state { width: 76px; flex-shrink: 0; text-align: right; color: var(--tx2); }
+.convert-row.done .convert-state { color: var(--acc); }

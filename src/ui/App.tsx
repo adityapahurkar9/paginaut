@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { BookOpen, FileImage, FileText, House, Plus, X } from "lucide-preact";
+import { BookOpen, FileImage, FileSpreadsheet, FileText, House, Plus, Presentation, X } from "lucide-preact";
 import * as A from "../actions";
 import { api, type SystemInfo } from "../api";
 import { Viewer } from "../render/Viewer";
@@ -27,6 +27,8 @@ import { Home } from "./Home";
 import { SignPane } from "./SignPane";
 import { SigBar } from "./SigPanel";
 import { OcrBar, OcrDialog } from "./OcrUI";
+import { ConvertDialog, OfficeBar, OfficeDialog, openingText } from "./OfficeUI";
+import { officeKind } from "../office";
 import { InsertDialog, MergeDialog, SplitDialog } from "./PagesUI";
 import { HeaderDialog, WatermarkDialog } from "./StampUI";
 import { LabelsDialog, PropertiesDialog } from "./MetaUI";
@@ -62,6 +64,7 @@ export function App() {
             {tab && tab.mode.value === "pages" && selectedAnnot.value?.tab !== tab && (
               <div class="topbars">
                 <SigBar tab={tab} />
+                <OfficeBar tab={tab} />
                 <OcrBar tab={tab} />
                 <FormBar tab={tab} />
               </div>
@@ -76,6 +79,8 @@ export function App() {
       <AskDialog />
       <HelpDialogs />
       <OcrDialog />
+      <OfficeDialog />
+      <ConvertDialog />
       <InsertDialog />
       <MergeDialog />
       <SplitDialog />
@@ -99,6 +104,9 @@ function tabIcon(t: Tab) {
   const ext = t.path.split(".").pop()?.toLowerCase() ?? "";
   if (["epub", "mobi", "fb2", "fbz"].includes(ext)) return <BookOpen size={15} />;
   if (["png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "jfif"].includes(ext)) return <FileImage size={15} />;
+  const office = officeKind(t.path);
+  if (office === "excel") return <FileSpreadsheet size={15} />;
+  if (office === "powerpoint") return <Presentation size={15} />;
   return <FileText size={15} />;
 }
 
@@ -260,7 +268,7 @@ function TabView({ tab, active }: { tab: Tab; active: boolean }) {
     <div class={`tabhost ${settings.value.night ? "night" : ""} ${reflowing ? "reflowing" : ""} ${fieldHighlightClass()} ${annotTool.value ? `tool-${annotTool.value.split(":")[0]}` : ""}`} style={{ display: active ? "block" : "none" }} ref={host}>
       {grid && active && <PageGrid key={tab.info.value?.docId} tab={tab} />}
       {!grid && reflowing && status === "ready" && active && <ReflowHost key={tab.info.value?.docId} tab={tab} />}
-      {status === "loading" && <div class="state-msg">Opening {tab.name}…</div>}
+      {status === "loading" && <div class="state-msg">{openingText(tab)}</div>}
       {status === "error" && (
         <div class="state-msg">
           <strong>Couldn't open {tab.name}</strong>

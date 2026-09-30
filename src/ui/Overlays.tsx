@@ -17,6 +17,8 @@ import { startSecure } from "./SecureUI";
 import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
 import { addPicture, toggleTextEdit } from "../textedit";
 import { startRedact } from "../redact";
+import { officeDialog } from "../office";
+import { pickAndConvert } from "./OfficeUI";
 import { addBookmarkHere } from "./Sidebar";
 import { removeStamps } from "../stamps";
 import { helpPanel } from "./HelpDialogs";
@@ -210,6 +212,8 @@ function commands(): Item[] {
     c("Book mode (reflowed text, two pages, full screen)", () => A.toggleMode("book"), "F5", hasDoc),
     c("Fix reading layout (columns, order, pictures)", withTab((t) => void startLayoutEdit(t)), "", hasDoc),
     c("Recognize text (OCR)…", withTab((t) => void recognize(t)), "", hasDoc),
+    c("Convert Office files to PDF (Word, Excel, PowerPoint)…", () => void pickAndConvert(), ""),
+    c("Office files: programs that open them, get LibreOffice…", () => (officeDialog.value = true), ""),
     c("Remove recognized text", withTab((t) => void removeRecognized(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Clear form", withTab((t) => void clearForm(t)), "", () => !!activeTab.value?.forms.value?.fields),
     c("Save a flattened copy of the form…", withTab((t) => void P.saveFlattened(t)), "", () => !!activeTab.value?.forms.value?.fields),
