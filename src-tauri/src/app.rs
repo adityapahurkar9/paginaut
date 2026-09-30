@@ -592,6 +592,13 @@ pub async fn redaction_pages(state: State<'_, AppState>, doc: DocId) -> Res<Vec<
     blocking(move || engine.doc(doc)?.redaction_pages()).await
 }
 
+/// Takes every redaction mark off (one undo step).
+#[tauri::command]
+pub async fn redact_clear(state: State<'_, AppState>, doc: DocId) -> Res<usize> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.redact_clear()).await
+}
+
 /// Applies every redaction mark (one undo step).
 #[tauri::command]
 pub async fn redact_apply(state: State<'_, AppState>, doc: DocId, cover: bool, rgb: [f32; 3], label: String) -> Res<crate::engine::Redacted> {

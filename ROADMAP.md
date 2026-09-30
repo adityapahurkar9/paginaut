@@ -354,15 +354,25 @@ Extract content (right-click the item on the page; Tools › Organize; command p
 - [ ] Later: edit a single line inside a table cell; bold/italic changes within a paragraph; keep a moved
       picture's place in the drawing order (it goes on top now)
 
-### Phase 6.5 (0.6.50): Redact
-- [ ] Mark text or areas by hand, or by search
-- [ ] Two modes: Remove (default; text, image pixels and drawings under the box deleted through MuPDF's redaction,
-      then checked to confirm the text is gone) or Cover only (a box that can't be moved, text still underneath;
-      labelled clearly as not secure)
-- [ ] Box colour, optional "REDACTED" text on the box
-- [ ] Pattern search, kept small: PAN, Aadhaar, phone, email, IFSC, GSTIN, plus the existing regex search
-- [ ] Sanitize: remove metadata, hidden text, JavaScript, attached files, comments
-- [ ] Warning on digitally signed documents
+### Phase 6.5 (0.6.50): Redact (done)
+- [x] Redact panel (Tools › Redact, Organize, command palette). Marks are standard Redact annotations (red
+      outlines, saved with the file until applied): drag over text to mark it, drag a box on scans (or anywhere with
+      "Mark boxes even over text"), or find and mark every match of a word, phrase or pattern. Clear marks; each
+      step one undo step
+- [x] Remove (default): text, picture pixels and drawings under the marks deleted through MuPDF's redaction, then
+      checked (letters still readable under the boxes are counted and reported; 0 in the tests). Cover only: boxes
+      drawn over, the text stays, and the panel and message say so plainly (letters under them counted)
+- [x] Box colour and optional text on the boxes ("REDACTED", white on dark boxes, dark on light ones); page numbers
+      and watermarks survive
+- [x] Patterns: PAN (holder letter checked), Aadhaar (Verhoeff check digit, so "2026 2025 2024" in a table isn't
+      one), phone, email, IFSC, GSTIN, plus any word or regular expression. On a prospectus: 151 emails, 9 phone
+      numbers, the company's 2 PANs, 1 IFSC; no false Aadhaar numbers
+- [x] Sanitize the whole document: metadata (info, XMP, editing history), scripts (document, page, link and field
+      JavaScript), attached files, comments, hidden text (off by default: it also takes out recognized text)
+- [x] Warning on digitally signed documents
+- [x] Fix: MuPDF's pattern engine misreads a "-" at the end of a character class, and gives up on long pages with
+      patterns like [..]+@; the email pattern avoids both, and a pattern that gives up on some pages keeps what it
+      found elsewhere (the panel says so) (src-tauri/examples/redact_test.rs)
 
 ## Phase 7 (0.7.0): Conversions
 - [ ] Office quality test first: convert a mixed set of real Office files with MuPDF and with Microsoft Office,

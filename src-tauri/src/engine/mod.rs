@@ -947,6 +947,41 @@ impl Doc {
         inner.doc.redaction_pages()
     }
 
+    /// Takes every redaction mark off (one undo step). Returns how many.
+    pub fn redact_clear(&self) -> Result<usize, String> {
+        let pages = self.redaction_pages()?;
+        let mut n = 0;
+        if pages.is_empty() {
+            return Ok(0);
+        }
+        let mut inner = self.inner.lock();
+        inner.doc.begin_op("Clear redaction marks");
+        let res = (|| -> Result<(), String> {
+            for &(i, _) in &pages {
+                let b = self.bounds(i)?;
+                let page = self.page(&mut inner, i)?;
+                let list: Vec<serde_json::Value> = serde_json::from_str(&page.annots_json(&b)?).map_err(|e| e.to_string())?;
+                for a in list.iter().filter(|a| a["t"] == "Redact") {
+                    if let Some(num) = a["n"].as_i64() {
+                        page.annot_delete(num as i32)?;
+                        n += 1;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        match res {
+            Ok(()) => inner.doc.end_op(),
+            Err(e) => {
+                inner.doc.abandon_op();
+                return Err(e);
+            }
+        }
+        drop(inner);
+        self.edited();
+        Ok(n)
+    }
+
     /// Applies every redaction mark (one undo step): removes what's under them, or with `cover`
     /// only covers it; boxes in `rgb`, with `label` in them if not empty.
     pub fn redact_apply(&self, cover: bool, rgb: [f32; 3], label: &str) -> Result<Redacted, String> {

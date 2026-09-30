@@ -16,6 +16,7 @@ import { startLabels, startProperties } from "./MetaUI";
 import { startSecure } from "./SecureUI";
 import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
 import { addPicture, toggleTextEdit } from "../textedit";
+import { startRedact } from "../redact";
 import { addBookmarkHere } from "./Sidebar";
 import { removeStamps } from "../stamps";
 import { helpPanel } from "./HelpDialogs";
@@ -234,6 +235,8 @@ function commands(): Item[] {
     c("Remove password / unlock…", withTab((t) => startSecure(t, "protect")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Reduce file size (compress)…", withTab((t) => startSecure(t, "compress")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Repair a damaged PDF…", withTab((t) => startSecure(t, "repair")), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Redact: remove or cover text and areas…", withTab((t) => startRedact(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
+    c("Sanitize: remove metadata, scripts, hidden text…", withTab((t) => startRedact(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Edit text and pictures (change words on the page)", withTab((t) => toggleTextEdit(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Add a picture to the page…", withTab((t) => void addPicture(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Save all pictures (extract images)…", withTab((t) => (picturesDialog.value = t)), "", hasDoc),

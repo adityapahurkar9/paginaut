@@ -330,6 +330,18 @@ export const api = {
   /** Saves at `path`, or into folder `dir` under its own name; returns the path used. */
   attachmentSave: (doc: number, i: number, path: string | null, dir: string | null) => invoke<string>("attachment_save", { doc, i, path, dir }),
   attachmentOpen: (doc: number, i: number) => invoke<void>("attachment_open", { doc, i }),
+  /** Adds redaction marks (text quads or areas, relative to the page origin) as one undo step; returns how many. */
+  redactMark: (doc: number, marks: { page: number; quads?: number[]; rect?: [number, number, number, number] }[], author: string) =>
+    invoke<number>("redact_mark", { doc, marks, author }),
+  /** Pages with redaction marks: [page, marks]. */
+  redactionPages: (doc: number) => invoke<[number, number][]>("redaction_pages", { doc }),
+  redactClear: (doc: number) => invoke<number>("redact_clear", { doc }),
+  /** Applies every mark (one undo step): removes what's under them, or with `cover` only covers it.
+   *  left: letters still readable under the boxes (0 when removing worked). */
+  redactApply: (doc: number, cover: boolean, rgb: [number, number, number], label: string) =>
+    invoke<{ pages: number; marks: number; left: number }>("redact_apply", { doc, cover, rgb, label }),
+  /** Takes out metadata (1), scripts (2), attached files (4), comments (8), hidden text (16); one undo step. */
+  sanitize: (doc: number, what: number) => invoke<{ meta: number; scripts: number; files: number; comments: number; hidden: number }>("sanitize", { doc, what }),
   /** Attaches the file at `path` to the document (one undo step in the engine). */
   attachmentAdd: (doc: number, path: string) => invoke<void>("attachment_add", { doc, path }),
   /** Removes attachment `i`: off the document's list, or its pin off its page (one undo step). */

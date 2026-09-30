@@ -17,6 +17,8 @@ import { Ribbon, Toolbar, ViewControls } from "./Toolbar";
 import { ReflowHost } from "./Reflow";
 import { LayoutPanel } from "./LayoutPanel";
 import { PageSizePanel } from "./PageSizePanel";
+import { RedactPanel } from "./RedactPanel";
+import { markFromSelection, redactTab } from "../redact";
 import { FormBar } from "./FormBar";
 import { fieldHighlightClass, initForms } from "../forms";
 import { annotTool, attachAnnotLayer, markupFromSelection } from "../annots";
@@ -56,6 +58,7 @@ export function App() {
             {tab && findOpen.value && <FindBar tab={tab} />}
             {tab && <LayoutPanel tab={tab} />}
             {tab && <PageSizePanel tab={tab} />}
+            {tab && <RedactPanel tab={tab} />}
             {tab && tab.mode.value === "pages" && selectedAnnot.value?.tab !== tab && (
               <div class="topbars">
                 <SigBar tab={tab} />
@@ -204,7 +207,7 @@ function TabView({ tab, active }: { tab: Tab; active: boolean }) {
         tab.fit.value = fit;
       },
       onSelection: (has) => (tab.hasSelection.value = has),
-      onSelectionEnd: (src, quads, a, b) => void markupFromSelection(tab, src, quads, a, b),
+      onSelectionEnd: (src, quads, a, b) => void (redactTab.value === tab ? markFromSelection(tab, src, quads, a, b) : markupFromSelection(tab, src, quads, a, b)),
       onPageAction: (page, action) => {
         if (action === "delete") P.deletePages(tab, page);
         else P.rotatePages(tab, action === "rotate-left" ? -90 : 90, page);

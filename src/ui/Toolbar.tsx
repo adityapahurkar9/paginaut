@@ -10,7 +10,7 @@ import {
   Minus, Moon, MousePointer2, MoveHorizontal, PanelLeft, PanelRight, Plus, Redo2, RefreshCw, RotateCcw, RotateCw, Save, ScanText, ScrollText,
   Search, Signature, SquareSplitHorizontal, Sun, SunMoon, Trash2, FilePlus2, LayoutGrid, Type, Undo2, Wrench, Underline, Strikethrough, SquareDashed,
   PenLine, StickyNote, TypeOutline, Square, Circle, Slash, MoveUpRight, Stamp, MessagesSquare, Check, X, CalendarDays, UserRound,
-  FileLock2, ShieldCheck, TextCursorInput,
+  FileLock2, ShieldCheck, TextCursorInput, EyeOff,
 } from "lucide-preact";
 import * as A from "../actions";
 import * as P from "../pages";
@@ -30,6 +30,7 @@ import { startLabels, startProperties } from "./MetaUI";
 import { startSecure } from "./SecureUI";
 import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
 import { addPicture, textEdit, toggleTextEdit } from "../textedit";
+import { redactTab, startRedact, stopRedact } from "../redact";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -488,6 +489,7 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { label: "Picture…", run: () => tab && void addPicture(tab) },
       ], "left", 200)} />
       <TB icon={I(TextCursorInput, 17)} label="Edit" title="Change words, move, resize, replace or delete pictures on the page (Esc to stop)" on={!!tab && textEdit.value === tab} disabled={!tab?.info.value?.isPdf} onClick={() => tab && toggleTextEdit(tab)} />
+      <TB icon={I(EyeOff, 17)} label="Redact" title="Remove or cover text and areas; sanitize the document" on={!!tab && redactTab.value === tab} disabled={!tab?.info.value?.isPdf} onClick={() => tab && (redactTab.value === tab ? stopRedact() : startRedact(tab))} />
       <div class="sep" />
       <TB icon={I(FormInput, 17)} label="Forms" menu onClick={(e) => openMenu(e, formItems(tab), "left", 270)} />
       <TB icon={I(Highlighter, 17)} label="Comment" title="Highlight, draw, add notes and text (Comment tab)" onClick={() => updateSettings({ ribbon: "comment" })} />
@@ -523,7 +525,8 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { label: "Table on this page to Excel / CSV…", disabled: !tab, run: () => tab && void openPageTable(tab) },
         { sep: true },
         { label: "Edit text and pictures", check: !!tab && textEdit.value === tab, disabled: !tab?.info.value?.isPdf, run: () => tab && toggleTextEdit(tab) },
-        soon("Redact", 6.5), soon("Compare", 7.5),
+        { label: "Redact (remove or cover)…", check: !!tab && redactTab.value === tab, disabled: !tab?.info.value?.isPdf, run: () => tab && (redactTab.value === tab ? stopRedact() : startRedact(tab)) },
+        soon("Compare", 7.5),
       ], "left", 280)} />
       <TB icon={I(RefreshCw, 17)} label="Convert" menu onClick={(e) => openMenu(e, [
         { head: "From PDF" }, soon("Word", 7), soon("Excel", 7), soon("PowerPoint", 7), soon("Images (JPG, PNG, TIFF)", 7), soon("Text", 7),

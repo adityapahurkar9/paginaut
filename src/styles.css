@@ -918,3 +918,14 @@ body.text-edit .pg { cursor: default; }
 .te-bar { position: absolute; left: 0; top: calc(100% + 8px); display: flex; gap: 2px; padding: 3px; background: var(--panel); border: 1px solid var(--bd); border-radius: 7px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); cursor: default; white-space: nowrap; font: 12px/1 system-ui, sans-serif; }
 .te-bar button { border: 0; background: transparent; color: var(--tx); padding: 5px 8px; border-radius: 5px; font: inherit; cursor: pointer; }
 .te-bar button:hover { background: var(--hover); }
+
+/* Redact */
+.rd-panel { width: 290px; }
+.rd-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.rd-warn { font-size: 12px; line-height: 1.35; color: #c42b1c; font-weight: 600; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .rd-warn { color: #ff8a80; } }
+:root[data-theme="dark"] .rd-warn { color: #ff8a80; }
+.rd-opt span { display: flex; flex-direction: column; font-weight: 600; font-size: 12.5px; }
+.rd-opt small { font-weight: 400; color: var(--tx3); font-size: 11.5px; line-height: 1.3; }
+.rd-opt { align-items: flex-start; }
+.linkish { border: 0; background: none; color: var(--acc); padding: 0 0 0 6px; font: inherit; cursor: pointer; text-decoration: underline; }

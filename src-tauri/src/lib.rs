@@ -154,6 +154,7 @@ pub fn run() {
             app::redact_mark,
             app::redaction_pages,
             app::redact_apply,
+            app::redact_clear,
             app::sanitize,
             app::attachment_add,
             app::attachment_remove,
