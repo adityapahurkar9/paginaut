@@ -3732,10 +3732,11 @@ static int letter_style(fz_context *ctx, fz_stext_char *ch)
 
 /* A paragraph's text, lines joined. With `styles`, one byte per letter written: its letter_style (a joining space
  * takes the style of the letter before it). */
-static void paragraph_text(fz_context *ctx, fz_buffer *out, fz_buffer *styles, fz_stext_block *b)
+static void paragraph_text(fz_context *ctx, fz_buffer *out, fz_buffer *styles, fz_stext_line **lines, int nlines)
 {
-	for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
+	for (int li = 0; li < nlines; li++)
 	{
+		fz_stext_line *line = lines[li];
 		fz_stext_char *ch, *last = NULL;
 		if (!line->first_char)
 			continue;
@@ -3809,18 +3810,18 @@ static void style_runs_json(fz_context *ctx, fz_buffer *buf, const char *text, c
 }
 
 /* How a paragraph's lines line up: l(eft), r(ight), c(entre) or j(ustified). */
-static char paragraph_align(fz_stext_block *b)
+static char paragraph_align(fz_stext_line **lines, int nlines)
 {
 	float l0 = 1e9f, l1 = -1e9f, r0 = 1e9f, r1 = -1e9f, c0 = 1e9f, c1 = -1e9f, rj0 = 1e9f, rj1 = -1e9f;
 	int n = 0;
-	for (fz_stext_line *line = b->u.t.first_line; line; line = line->next, n++)
+	for (; n < nlines; n++)
 	{
-		fz_rect r = line->bbox;
+		fz_rect r = lines[n]->bbox;
 		float c = (r.x0 + r.x1) / 2;
 		l0 = fz_min(l0, r.x0), l1 = fz_max(l1, r.x0);
 		r0 = fz_min(r0, r.x1), r1 = fz_max(r1, r.x1);
 		c0 = fz_min(c0, c), c1 = fz_max(c1, c);
-		if (line->next)
+		if (n + 1 < nlines)
 			rj0 = fz_min(rj0, r.x1), rj1 = fz_max(rj1, r.x1);
 	}
 	if (n < 2)
@@ -3836,13 +3837,121 @@ static char paragraph_align(fz_stext_block *b)
 	return 'l';
 }
 
+/* A figure on its own ("1,234.50", "(12)", "8.06%"): set against the right, as table columns of figures are. */
+static int figure_text(const char *t)
+{
+	int digits = 0;
+	for (; *t; t++)
+	{
+		if (*t >= '0' && *t <= '9')
+			digits++;
+		else if (!strchr(" ,.%()+-", *t))
+			return 0;
+	}
+	return digits > 0;
+}
+
+/* Which of a block's lines edit together. A block of prose is one paragraph; one whose lines sit side by side on
+ * a baseline (a table row the text finder took for one block) is split into cells, lines stacked over each other
+ * (overlapping across, close down) staying together. Writes each line's cell (0 up) and returns how many. */
+static int paragraph_cells(fz_stext_line **lines, int n, int *cell)
+{
+	int side = 0, count = 0;
+	for (int i = 0; i < n && !side; i++)
+		for (int j = i + 1; j < n && !side; j++)
+		{
+			fz_rect a = lines[i]->bbox, b = lines[j]->bbox;
+			float h = fz_min(a.y1 - a.y0, b.y1 - b.y0);
+			side = fabsf((a.y0 + a.y1) - (b.y0 + b.y1)) / 2 < 0.4f * h && (b.x0 >= a.x1 || a.x0 >= b.x1);
+		}
+	for (int i = 0; i < n; i++)
+		cell[i] = side ? i : 0;
+	if (!side)
+		return 1;
+	for (int i = 0; i < n; i++)
+		for (int j = i + 1; j < n; j++)
+		{
+			fz_rect a = lines[i]->bbox, b = lines[j]->bbox;
+			float over = fz_min(a.x1, b.x1) - fz_max(a.x0, b.x0);
+			float gap = fz_max(a.y0, b.y0) - fz_min(a.y1, b.y1);
+			if (cell[i] != cell[j] && over > 0.3f * fz_min(a.x1 - a.x0, b.x1 - b.x0) && gap < 0.8f * fz_max(a.y1 - a.y0, b.y1 - b.y0))
+			{
+				int from = cell[j], to = cell[i];
+				for (int k = 0; k < n; k++)
+					if (cell[k] == from)
+						cell[k] = to;
+			}
+		}
+	/* Numbered 0, 1, 2… in the order they first appear. */
+	for (int i = 0; i < n; i++)
+		if (cell[i] >= count)
+		{
+			int from = cell[i];
+			for (int k = i; k < n; k++)
+				if (cell[k] == from)
+					cell[k] = -1 - count;
+			count++;
+		}
+	for (int i = 0; i < n; i++)
+		cell[i] = -1 - cell[i];
+	return count;
+}
+
+/* One paragraph to edit: these lines (in order). `cellular`: a cell of a table row, so a lone figure is set right. */
+static void paragraph_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz_buffer *styles, fz_stext_line **lines, int nlines,
+	int cellular, const float o[4], int *n, int pics)
+{
+	fz_stext_char *first = NULL;
+	fz_rect box = fz_empty_rect;
+	float lead = 0, prev = 0;
+	char align;
+	for (int i = 0; i < nlines && !first; i++)
+		for (fz_stext_char *ch = lines[i]->first_char; ch && !first; ch = ch->next)
+			if (ch->c != ' ')
+				first = ch;
+	if (!first)
+		return;
+	fz_clear_buffer(ctx, text);
+	fz_clear_buffer(ctx, styles);
+	paragraph_text(ctx, text, styles, lines, nlines);
+	fz_terminate_buffer(ctx, text);
+	align = paragraph_align(lines, nlines);
+	if (cellular && nlines == 1 && figure_text(fz_string_from_buffer(ctx, text)))
+		align = 'r';
+	for (int i = 0; i < nlines; i++)
+		box = fz_union_rect(box, lines[i]->bbox);
+	if ((*n)++)
+		fz_append_byte(ctx, buf, ',');
+	fz_append_string(ctx, buf, "{\"r\":");
+	put_bbox(ctx, buf, box, o);
+	fz_append_string(ctx, buf, ",\"l\":[");
+	for (int i = 0; i < nlines; i++)
+	{
+		fz_stext_line *line = lines[i];
+		float base = line->first_char ? line->first_char->origin.y : line->bbox.y1;
+		if (i)
+			lead += base - prev;
+		prev = base;
+		fz_append_printf(ctx, buf, "%s[%.2f,%.2f,%.2f,%.2f,%.2f]", i ? "," : "",
+			line->bbox.x0 - o[0], line->bbox.y0 - o[1], line->bbox.x1 - o[0], line->bbox.y1 - o[1], base - o[1]);
+	}
+	fz_append_printf(ctx, buf, "],\"z\":%d,\"s\":%.2f,\"lead\":%.2f,\"c\":\"#%06x\",\"b\":%d,\"i\":%d,\"serif\":%d,\"mono\":%d,\"a\":\"%c\",\"font\":",
+		pics, first->size, nlines > 1 ? lead / (nlines - 1) : first->size * 1.2f, first->argb & 0xffffff,
+		fz_font_is_bold(ctx, first->font), fz_font_is_italic(ctx, first->font),
+		fz_font_is_serif(ctx, first->font), fz_font_is_monospaced(ctx, first->font), align);
+	json_str(ctx, buf, fz_font_name(ctx, first->font));
+	fz_append_string(ctx, buf, ",\"t\":");
+	json_str(ctx, buf, fz_string_from_buffer(ctx, text));
+	style_runs_json(ctx, buf, fz_string_from_buffer(ctx, text), styles);
+	fz_append_byte(ctx, buf, '}');
+}
+
 static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz_buffer *styles, fz_stext_block *b, const float o[4], int *n, int *pics)
 {
 	for (; b; b = b->next)
 	{
-		fz_stext_char *first = NULL;
-		float lead = 0;
-		int lines = 0;
+		fz_stext_line **lines = NULL, **cell = NULL;
+		int *which = NULL, count = 0, cells;
 		if (b->type == FZ_STEXT_BLOCK_STRUCT && b->u.s.down)
 		{
 			paragraphs_json(ctx, buf, text, styles, b->u.s.down->first_block, o, n, pics);
@@ -3852,42 +3961,37 @@ static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz
 			(*pics)++;
 		if (b->type != FZ_STEXT_BLOCK_TEXT || !b->u.t.first_line)
 			continue;
-		for (fz_stext_line *line = b->u.t.first_line; line && !first; line = line->next)
-			for (fz_stext_char *ch = line->first_char; ch && !first; ch = ch->next)
-				if (ch->c != ' ')
-					first = ch;
-		if (!first)
-			continue;
-		fz_clear_buffer(ctx, text);
-		fz_clear_buffer(ctx, styles);
-		paragraph_text(ctx, text, styles, b);
-		fz_terminate_buffer(ctx, text);
-		if ((*n)++)
-			fz_append_byte(ctx, buf, ',');
-		fz_append_string(ctx, buf, "{\"r\":");
-		put_bbox(ctx, buf, b->bbox, o);
-		fz_append_string(ctx, buf, ",\"l\":[");
+		for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
+			count++;
+		fz_var(lines);
+		fz_var(cell);
+		fz_var(which);
+		fz_try(ctx)
 		{
-			float prev = 0;
+			int k = 0;
+			lines = fz_malloc(ctx, count * sizeof(*lines));
+			cell = fz_malloc(ctx, count * sizeof(*cell));
+			which = fz_malloc(ctx, count * sizeof(*which));
 			for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
+				lines[k++] = line;
+			cells = paragraph_cells(lines, count, which);
+			for (int c = 0; c < cells; c++)
 			{
-				float base = line->first_char ? line->first_char->origin.y : line->bbox.y1;
-				if (lines)
-					lead += base - prev;
-				prev = base;
-				fz_append_printf(ctx, buf, "%s[%.2f,%.2f,%.2f,%.2f,%.2f]", lines++ ? "," : "",
-					line->bbox.x0 - o[0], line->bbox.y0 - o[1], line->bbox.x1 - o[0], line->bbox.y1 - o[1], base - o[1]);
+				int m = 0;
+				for (int i = 0; i < count; i++)
+					if (which[i] == c)
+						cell[m++] = lines[i];
+				paragraph_json(ctx, buf, text, styles, cell, m, cells > 1, o, n, *pics);
 			}
 		}
-		fz_append_printf(ctx, buf, "],\"z\":%d,\"s\":%.2f,\"lead\":%.2f,\"c\":\"#%06x\",\"b\":%d,\"i\":%d,\"serif\":%d,\"mono\":%d,\"a\":\"%c\",\"font\":",
-			*pics, first->size, lines > 1 ? lead / (lines - 1) : first->size * 1.2f, first->argb & 0xffffff,
-			fz_font_is_bold(ctx, first->font), fz_font_is_italic(ctx, first->font),
-			fz_font_is_serif(ctx, first->font), fz_font_is_monospaced(ctx, first->font), paragraph_align(b));
-		json_str(ctx, buf, fz_font_name(ctx, first->font));
-		fz_append_string(ctx, buf, ",\"t\":");
-		json_str(ctx, buf, fz_string_from_buffer(ctx, text));
-		style_runs_json(ctx, buf, fz_string_from_buffer(ctx, text), styles);
-		fz_append_byte(ctx, buf, '}');
+		fz_always(ctx)
+		{
+			fz_free(ctx, lines);
+			fz_free(ctx, cell);
+			fz_free(ctx, which);
+		}
+		fz_catch(ctx)
+			fz_rethrow(ctx);
 	}
 }
 

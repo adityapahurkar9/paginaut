@@ -167,6 +167,26 @@ fn main() {
     d.undo(false).unwrap();
     check("moves undo", d.pictures(1, true).unwrap().iter().any(|p| near(p.r, [100.0, 400.0, 250.0, 520.0])), String::new());
 
+    // A table row the text finder took for one block: each cell edits on its own, figures set right.
+    {
+        let rhp = format!("{tmp}/table-edit.pdf");
+        std::fs::copy(format!("{dir}/nse rhp.pdf"), &rhp).unwrap();
+        let t = engine.open(&rhp).unwrap();
+        let td = engine.doc(t.doc_id).unwrap();
+        td.forms_init().unwrap();
+        let paras = td.paragraphs(32).unwrap();
+        let cell = paras.iter().find(|p| p.t == "36,226.64").cloned();
+        check("table row split into cells", cell.as_ref().is_some_and(|c| c.a == "r" && c.l.len() == 1), format!("{:?}", cell.as_ref().map(|c| (&c.t, &c.a, c.l.len()))));
+        if let Some(cell) = cell {
+            let area = [cell.r[0] - 60.0, cell.r[1] - 2.0, 560.0, cell.r[3] + 2.0];
+            td.edit_text(32, &TextEdit { para: cell, text: "36,300.00".into(), runs: None }).unwrap();
+            let row = td.area_text(32, area).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
+            std::fs::write(format!("{tmp}/table-cell.png"), td.area_data(32, [50.0, 105.0, 330.0, 160.0], 0, "png", 200.0).unwrap()).unwrap();
+            check("one cell edited, the row kept", row.contains("36,300.00") && !row.contains("36,226.64") && row.contains("79.44%") && row.contains("121,296.37"), row);
+        }
+        engine.close(t.doc_id);
+    }
+
     // Saved and reopened.
     let n = info.page_count;
     let saved = engine.save(info.doc_id, (0..n).collect(), vec![0; n], None).unwrap();

@@ -387,7 +387,10 @@ Extract content (right-click the item on the page; Tools › Organize; command p
       Enter makes a line break, paste comes in plain. The new text is laid out in the paragraph's own regular, bold,
       italic and bold-italic faces where the page has them, and the matching built-in face where not (with one
       face only, the HTML engine set bold words regular). A plain edit sends plain text as before
-- [ ] Later: edit a single line inside a table cell
+- [x] Table cells edit one by one (0.8.5): a block whose lines sit side by side on a baseline (a table row the
+      text finder took for one block) is split into cells, lines stacked over each other staying together; a lone
+      figure is set right, as its column is. Before, editing one figure re-flowed the whole row as a paragraph
+      (edit_test: a prospectus row, one figure changed, the others kept)
 
 ### Phase 6.5 (0.6.50): Redact (done)
 - [x] Redact panel (Tools › Redact, Organize, command palette). Marks are standard Redact annotations (red
