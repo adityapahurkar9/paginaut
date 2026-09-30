@@ -496,6 +496,19 @@ mod tests {
         assert!(status(&TEST_UPGRADE, &exe).iter().all(|k| !k.offered));
     }
 
+    /// An install over a copy that's still registered keeps every kind it offered.
+    #[cfg(windows)]
+    #[test]
+    fn reinstall_keeps_the_choice() {
+        const N: Names = Names { app: "PaginautTestReinstall", exe_name: "paginaut-test-reinstall.exe" };
+        let exe = std::env::current_exe().unwrap();
+        register(&N, &exe, &["pdf", "xps", "ebook", "comic", "markdown"]).unwrap();
+        register_for_install(&N, &exe).unwrap();
+        let offered: Vec<&str> = status(&N, &exe).iter().filter(|k| k.offered).map(|k| k.id).collect();
+        unregister(&N, &exe);
+        assert_eq!(offered, ["pdf", "xps", "ebook", "comic", "markdown"]);
+    }
+
     /// Writes and removes test keys under HKEY_CURRENT_USER (never Paginaut's own names).
     #[cfg(windows)]
     #[test]
