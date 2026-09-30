@@ -343,7 +343,13 @@ Extract content (right-click the item on the page; Tools › Organize; command p
 - [x] Tables to Excel: percentages as numbers (0.8.2: "12.5%" is 0.125 shown as 12.50%; "(3%)" is -3%)
 - [x] Rows as adjustable as columns (0.8.4): orange row lines in the table dialog to drag, Shift+click to add,
       double-click to remove (joins the rows); once set, the table is read with exactly those rows
-- [ ] Tables, later: group headings spread over the columns they span; the same menu in Read/Book mode
+- [x] Group headings over their columns (0.8.4): a phrase that crosses column lines with only word spacing
+      ("Three months period ended June 30,") is one cell spanning them; the table finder's own bordered spans are
+      kept, and overlapping ones are joined (before, words of a heading were scattered over the columns, or lost
+      when two of the finder's cells overlapped). The finder's tables now place letters like tables you draw
+      lines for. "Join heading lines" keeps such rows above the joined column headings; the preview and Copy
+      show them spanning (colspan), Excel merges them
+- [ ] Tables, later: the same menu in Read/Book mode
 - [x] Any area, charts and drawings: "Select an area" (right-click menu, Organize), drag a box: copy its text,
       copy as picture, save as PDF (vector; the rest of the page is hidden, not removed), SVG (vector, text as
       outlines) or PNG at 150/300/600 dpi; turned as the page is shown

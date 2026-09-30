@@ -99,6 +99,22 @@ function tablesOf(tab: Tab, src: number): Promise<Table[]> {
 }
 
 /** The table's text in rows and columns; rows with nothing in them left out. */
+/** The table's rows as cells with how many columns each spans (cells covered by a spanning one left out). */
+export function spansOf(t: Table): { s: string; cs: number }[][] {
+  const h = t.ys.length - 1, w = t.xs.length - 1;
+  const rows = Array.from({ length: h }, () => Array<{ s: string; cs: number } | null>(w).fill(null));
+  const covered = Array.from({ length: h }, () => Array<boolean>(w).fill(false));
+  for (const [r, c, rs, cs, s] of t.cells) {
+    if (r >= h || c >= w) continue;
+    const cell = rows[r][c];
+    rows[r][c] = cell ? { s: `${cell.s} ${s}`, cs: Math.max(cell.cs, cs) } : { s, cs: Math.min(cs, w - c) };
+    for (let y = r; y < Math.min(h, r + rs); y++) for (let x = c; x < Math.min(w, c + cs); x++) if (y !== r || x !== c) covered[y][x] = true;
+  }
+  return rows
+    .map((row, r) => row.flatMap((cell, c) => (covered[r][c] ? [] : [cell ?? { s: "", cs: 1 }])))
+    .filter((row) => row.some((cell) => cell.s.trim()));
+}
+
 export function gridOf(t: Table): string[][] {
   const h = t.ys.length - 1, w = t.xs.length - 1;
   const g = Array.from({ length: h }, () => Array<string>(w).fill(""));
@@ -113,7 +129,8 @@ const joinText = (a: string, b: string) => (!a ? b : !b ? a : /\p{Ll}$/u.test(a)
 
 /**
  * Headings set over several lines come out as several rows. This joins the rows above the
- * first row of figures into one heading row, column by column.
+ * first row of figures into one heading row, column by column. Rows with a heading spread over
+ * several columns (a group heading like "Three months ended June 30") stay rows of their own above it.
  */
 export function joinHeading(t: Table): Table {
   const h = t.ys.length - 1, w = t.xs.length - 1;
@@ -125,19 +142,26 @@ export function joinHeading(t: Table): Table {
     return full.length >= 2 && full.filter((s) => figure.test(s) && !/^\s*(19|20)\d\d\s*$/.test(s)).length * 2 >= full.length;
   });
   if (d < 2) return t;
-  const head = Array.from({ length: w }, (_, c) => g.slice(0, d).reduce((a, row) => joinText(a, row[c].trim()), ""));
-  const cells: Table["cells"] = head.map((s, c) => [0, c, 1, 1, s] as [number, number, number, number, string]).filter((x) => x[4]);
-  for (const [r, c, rs, cs, s] of t.cells) if (r >= d) cells.push([r - d + 1, c, rs, cs, s]);
-  return { ...t, ys: [t.ys[0], ...t.ys.slice(d)], cells };
+  const group = [...new Set(t.cells.filter(([r, , , cs, s]) => r < d && cs > 1 && s.trim()).map(([r]) => r))].sort((a, b) => a - b);
+  const rest = Array.from({ length: d }, (_, r) => r).filter((r) => !group.includes(r));
+  const head = Array.from({ length: w }, (_, c) => rest.reduce((a, r) => joinText(a, g[r][c].trim()), ""));
+  const cells: Table["cells"] = [];
+  group.forEach((r, i) => {
+    for (const [cr, c, , cs, s] of t.cells) if (cr === r) cells.push([i, c, 1, cs, s]);
+  });
+  const G = group.length;
+  head.forEach((s, c) => s && cells.push([G, c, 1, 1, s]));
+  for (const [r, c, rs, cs, s] of t.cells) if (r >= d) cells.push([r - d + G + 1, c, rs, cs, s]);
+  return { ...t, ys: [t.ys[0], ...group.map((r) => t.ys[r + 1]), ...t.ys.slice(d)], cells };
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** Copies as a real table (cells in Excel, Word) and as tab-separated text. */
 export function copyTable(t: Table) {
-  const g = gridOf(t);
-  const html = `<table>${g.map((row) => `<tr>${row.map((s) => `<td>${esc(s)}</td>`).join("")}</tr>`).join("")}</table>`;
-  const tsv = g.map((row) => row.map((s) => s.replace(/[\t\n]/g, " ")).join("\t")).join("\r\n");
+  const g = spansOf(t);
+  const html = `<table>${g.map((row) => `<tr>${row.map((c) => `<td${c.cs > 1 ? ` colspan="${c.cs}"` : ""}>${esc(c.s)}</td>`).join("")}</tr>`).join("")}</table>`;
+  const tsv = g.map((row) => row.map((c) => c.s.replace(/[\t\n]/g, " ") + "\t".repeat(c.cs - 1)).join("\t")).join("\r\n");
   navigator.clipboard
     .write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([tsv], { type: "text/plain" }) })])
     .then(() => showToast(`Table copied · ${g.length} rows · paste it into Excel or Word`), (e) => showToast(`Couldn't copy: ${e}`, 5000));

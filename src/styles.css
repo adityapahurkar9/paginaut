@@ -1251,3 +1251,6 @@ body.text-edit .pg { cursor: default; }
 /* Recognize text: the "read again" choice wraps. */
 .ocr-dialog .chk { white-space: normal; align-items: flex-start; }
 .ocr-dialog .chk input { margin-top: 3px; }
+
+/* A table cell over several columns (a group heading). */
+.table-preview td.span { text-align: center; max-width: none; }

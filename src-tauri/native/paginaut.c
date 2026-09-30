@@ -5887,27 +5887,6 @@ int fo_pdf_area_pdf(fo_ctx *c, fo_page *p, const float area[4], int rot, unsigne
 
 /* ---------------------------------------------------------------- tables */
 
-/* A cell's text: its lines joined by spaces (a hyphen at a line's end joins the words). */
-static void cell_text(fz_context *ctx, fz_buffer *out, fz_stext_block *b)
-{
-	for (; b; b = b->next)
-	{
-		if (b->type == FZ_STEXT_BLOCK_STRUCT && b->u.s.down)
-			cell_text(ctx, out, b->u.s.down->first_block);
-		if (b->type != FZ_STEXT_BLOCK_TEXT)
-			continue;
-		for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
-		{
-			if (!line->first_char)
-				continue;
-			if (out->len && out->data[out->len - 1] != ' ' && out->data[out->len - 1] != '-')
-				fz_append_byte(ctx, out, ' ');
-			for (fz_stext_char *ch = line->first_char; ch; ch = ch->next)
-				fz_append_rune(ctx, out, ch->c);
-		}
-	}
-}
-
 /* The grid line nearest to v. */
 static int grid_at(fz_stext_grid_positions *g, float v)
 {
@@ -5918,66 +5897,72 @@ static int grid_at(fz_stext_grid_positions *g, float v)
 	return best;
 }
 
-/* {"r":[bbox],"xs":[column lines],"ys":[row lines],"cells":[[row,col,rows,cols,text]…]}, coordinates relative to o. */
+static int slot(const float *lines, int n, float v);
+static void grid_table_json(fz_context *ctx, fz_buffer *buf, fz_stext_block *root, const float *xs, int nx, const float *ys, int ny,
+	const int *given, int ngiven, const float o[4]);
+
+/* {"r":[bbox],"xs":[column lines],"ys":[row lines],"cells":[[row,col,rows,cols,text]…]}, coordinates relative to o.
+ * The table finder gives the lines and its bordered cells that span; the letters are placed as for lines you
+ * set (grid_table_json), which also spans group headings over their columns. */
 static void table_json(fz_context *ctx, fz_buffer *buf, fz_stext_struct *table, const float o[4])
 {
-	fz_stext_grid_positions *xs = NULL, *ys = NULL;
-	fz_buffer *text = NULL;
-	int first = 1;
+	fz_stext_grid_positions *gx = NULL, *gy = NULL;
+	float *xs = NULL, *ys = NULL;
+	int *given = NULL, ngiven = 0, cap = 0;
 	for (fz_stext_block *b = table->first_block; b; b = b->next)
 		if (b->type == FZ_STEXT_BLOCK_GRID)
 		{
-			xs = b->u.b.xs;
-			ys = b->u.b.ys;
+			gx = b->u.b.xs;
+			gy = b->u.b.ys;
 		}
-	if (!xs || !ys || xs->len < 2 || ys->len < 2)
+	if (!gx || !gy || gx->len < 2 || gy->len < 2)
 	{
 		fz_append_string(ctx, buf, "null");
 		return;
 	}
-	fz_append_string(ctx, buf, "{\"r\":");
-	put_bbox(ctx, buf, table->up->bbox, o);
-	fz_append_string(ctx, buf, ",\"xs\":[");
-	for (int i = 0; i < xs->len; i++)
-		json_printf(ctx, buf, i ? ",%g" : "%g", xs->list[i].pos - o[0]);
-	fz_append_string(ctx, buf, "],\"ys\":[");
-	for (int i = 0; i < ys->len; i++)
-		json_printf(ctx, buf, i ? ",%g" : "%g", ys->list[i].pos - o[1]);
-	fz_append_string(ctx, buf, "],\"cells\":[");
-	fz_var(text);
+	fz_var(xs);
+	fz_var(ys);
+	fz_var(given);
 	fz_try(ctx)
 	{
-		text = fz_new_buffer(ctx, 64);
+		xs = fz_malloc(ctx, gx->len * sizeof(float));
+		ys = fz_malloc(ctx, gy->len * sizeof(float));
+		for (int i = 0; i < gx->len; i++)
+			xs[i] = gx->list[i].pos;
+		for (int i = 0; i < gy->len; i++)
+			ys[i] = gy->list[i].pos;
 		for (fz_stext_block *tr = table->first_block; tr; tr = tr->next)
 		{
 			if (tr->type != FZ_STEXT_BLOCK_STRUCT || !tr->u.s.down || tr->u.s.down->standard != FZ_STRUCTURE_TR)
 				continue;
 			for (fz_stext_block *td = tr->u.s.down->first_block; td; td = td->next)
 			{
-				fz_rect r;
 				int x0, x1, y0, y1;
 				if (td->type != FZ_STEXT_BLOCK_STRUCT || !td->u.s.down || (td->u.s.down->standard != FZ_STRUCTURE_TD && td->u.s.down->standard != FZ_STRUCTURE_TH))
 					continue;
-				r = td->bbox;
-				x0 = grid_at(xs, r.x0), x1 = grid_at(xs, r.x1);
-				y0 = grid_at(ys, r.y0), y1 = grid_at(ys, r.y1);
-				fz_clear_buffer(ctx, text);
-				cell_text(ctx, text, td->u.s.down->first_block);
-				while (text->len && text->data[text->len - 1] == ' ')
-					text->len--;
-				fz_terminate_buffer(ctx, text);
-				fz_append_printf(ctx, buf, "%s[%d,%d,%d,%d,", first ? "" : ",", y0, x0, fz_maxi(1, y1 - y0), fz_maxi(1, x1 - x0));
-				json_str(ctx, buf, fz_string_from_buffer(ctx, text));
-				fz_append_byte(ctx, buf, ']');
-				first = 0;
+				x0 = grid_at(gx, td->bbox.x0), x1 = grid_at(gx, td->bbox.x1);
+				y0 = grid_at(gy, td->bbox.y0), y1 = grid_at(gy, td->bbox.y1);
+				if (x1 - x0 <= 1 && y1 - y0 <= 1)
+					continue;
+				if (ngiven == cap)
+					given = fz_realloc(ctx, given, (size_t)(cap = cap ? cap * 2 : 16) * 4 * sizeof(int));
+				given[4 * ngiven] = y0;
+				given[4 * ngiven + 1] = x0;
+				given[4 * ngiven + 2] = fz_maxi(1, y1 - y0);
+				given[4 * ngiven + 3] = fz_maxi(1, x1 - x0);
+				ngiven++;
 			}
 		}
+		grid_table_json(ctx, buf, table->first_block, xs, gx->len, ys, gy->len, given, ngiven, o);
 	}
 	fz_always(ctx)
-		fz_drop_buffer(ctx, text);
+	{
+		fz_free(ctx, xs);
+		fz_free(ctx, ys);
+		fz_free(ctx, given);
+	}
 	fz_catch(ctx)
 		fz_rethrow(ctx);
-	fz_append_string(ctx, buf, "]}");
 }
 
 static void find_tables(fz_context *ctx, fz_buffer *buf, fz_stext_block *b, const float o[4], int *n)
@@ -6083,19 +6068,21 @@ static float *rows_from_lines(fz_context *ctx, fz_stext_page *t, fz_rect area, i
 	return ys;
 }
 
-/* The table in `area` with exactly these column lines: every letter goes to the cell its
- * middle falls in (lines of a cell joined by spaces). Same JSON as table_json. */
-static void grid_table_json(fz_context *ctx, fz_buffer *buf, fz_stext_page *t, fz_rect area, const float *xs, int nx, const float *ys, int ny, const float o[4])
+static int is_letter(int c)
 {
-	int w = nx - 1, h = ny - 1, first = 1;
-	fz_buffer **cells = fz_calloc(ctx, (size_t)w * h, sizeof(fz_buffer *));
-	fz_stext_line **last = fz_calloc(ctx, (size_t)w * h, sizeof(fz_stext_line *));
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c >= 0xC0;
+}
+
+/* Text lines under `root` (depth-first, structure included), in reading order. */
+static fz_stext_line **table_lines(fz_context *ctx, fz_stext_block *root, int *count)
+{
+	fz_stext_line **lines = NULL;
+	int n = 0, cap = 0;
+	fz_stext_block *stack[32];
+	int depth = 0;
+	fz_stext_block *b = root;
 	fz_try(ctx)
 	{
-		/* Depth-first over text blocks, structure included. */
-		fz_stext_block *stack[32];
-		int depth = 0;
-		fz_stext_block *b = t->first_block;
 		while (b || depth)
 		{
 			if (!b)
@@ -6111,22 +6098,179 @@ static void grid_table_json(fz_context *ctx, fz_buffer *buf, fz_stext_page *t, f
 			}
 			if (b->type == FZ_STEXT_BLOCK_TEXT)
 				for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
-					for (fz_stext_char *ch = line->first_char; ch; ch = ch->next)
-					{
-						fz_rect q = fz_rect_from_quad(ch->quad);
-						int x = slot(xs, nx, (q.x0 + q.x1) / 2), y = slot(ys, ny, (q.y0 + q.y1) / 2), k;
-						if (x < 0 || y < 0)
-							continue;
-						k = x + y * w;
-						if (!cells[k])
-							cells[k] = fz_new_buffer(ctx, 32);
-						else if (last[k] != line && cells[k]->len && cells[k]->data[cells[k]->len - 1] != ' ')
-							fz_append_byte(ctx, cells[k], ' ');
-						last[k] = line;
-						fz_append_rune(ctx, cells[k], ch->c);
-					}
+				{
+					if (n == cap)
+						lines = fz_realloc(ctx, lines, (size_t)(cap = cap ? cap * 2 : 64) * sizeof(*lines));
+					lines[n++] = line;
+				}
 			b = b->next;
 		}
+	}
+	fz_catch(ctx)
+	{
+		fz_free(ctx, lines);
+		fz_rethrow(ctx);
+	}
+	*count = n;
+	return lines;
+}
+
+/* A letter in a table: its extent, baseline (doubled, rounded), size, cell, and whether it's a letter. */
+typedef struct
+{
+	float x0, x1, base, size;
+	int row, col, letter;
+} glyph_at;
+
+/* By row, then line (baseline), then left to right. */
+static int cmp_glyph_at(const void *a, const void *b)
+{
+	const glyph_at *p = a, *q = b;
+	if (p->row != q->row)
+		return p->row - q->row;
+	if (p->base != q->base)
+		return p->base < q->base ? -1 : 1;
+	return p->x0 < q->x0 ? -1 : p->x0 > q->x0;
+}
+
+/* Cells [r, r+rs) x [c, c+cs) become one, owned by its top-left cell. Spans it overlaps are taken in (the area
+ * grows to cover them), so no cell is ever owned by one that is itself taken over, and no text is lost. */
+static void span_cells(int *owner, int *spanh, int *spanw, int w, int h, int r, int c, int rs, int cs)
+{
+	int r1 = fz_mini(r + rs, h), c1 = fz_mini(c + cs, w), grew = 1, k;
+	if (r1 - r < 1 || c1 - c < 1 || (r1 - r == 1 && c1 - c == 1))
+		return;
+	while (grew)
+	{
+		grew = 0;
+		for (int y = r; y < r1; y++)
+			for (int x = c; x < c1; x++)
+			{
+				int o = owner[x + y * w] >= 0 ? owner[x + y * w] : x + y * w;
+				int oy = o / w, ox = o % w;
+				if (oy < r || ox < c || oy + spanh[o] > r1 || ox + spanw[o] > c1)
+				{
+					r = fz_mini(r, oy), c = fz_mini(c, ox);
+					r1 = fz_maxi(r1, oy + spanh[o]), c1 = fz_maxi(c1, ox + spanw[o]);
+					grew = 1;
+				}
+			}
+	}
+	k = c + r * w;
+	for (int y = r; y < r1; y++)
+		for (int x = c; x < c1; x++)
+		{
+			int i = x + y * w;
+			owner[i] = i == k ? -1 : k;
+			spanh[i] = spanw[i] = 1;
+		}
+	spanh[k] = r1 - r;
+	spanw[k] = c1 - c;
+}
+
+/* The table on these column and row lines: every letter goes to the cell its middle falls in (lines of a cell
+ * joined by spaces). Cells can span: the `given` ones ([row, col, rows, cols] each, e.g. bordered cells the
+ * table finder saw), and a phrase that crosses column lines with no more than word spacing (a group heading
+ * such as "Three months ended June 30," over its columns; figures in neighbouring columns never do). Text
+ * comes from the lines under `root`. Same JSON as table_json. */
+static void grid_table_json(fz_context *ctx, fz_buffer *buf, fz_stext_block *root, const float *xs, int nx, const float *ys, int ny,
+	const int *given, int ngiven, const float o[4])
+{
+	int w = nx - 1, h = ny - 1, first = 1, nlines = 0;
+	fz_buffer **cells = NULL;
+	fz_stext_line **last = NULL, **lines = NULL;
+	int *owner = NULL, *spanh = NULL, *spanw = NULL;
+	fz_var(cells);
+	fz_var(last);
+	fz_var(lines);
+	fz_var(owner);
+	fz_var(spanh);
+	fz_var(spanw);
+	fz_try(ctx)
+	{
+		cells = fz_calloc(ctx, (size_t)w * h, sizeof(fz_buffer *));
+		last = fz_calloc(ctx, (size_t)w * h, sizeof(fz_stext_line *));
+		owner = fz_malloc(ctx, (size_t)w * h * sizeof(int));
+		spanh = fz_malloc(ctx, (size_t)w * h * sizeof(int));
+		spanw = fz_malloc(ctx, (size_t)w * h * sizeof(int));
+		for (int i = 0; i < w * h; i++)
+			owner[i] = -1, spanh[i] = spanw[i] = 1;
+		for (int i = 0; i < ngiven; i++)
+			span_cells(owner, spanh, spanw, w, h, given[4 * i], given[4 * i + 1], given[4 * i + 2], given[4 * i + 3]);
+		lines = table_lines(ctx, root, &nlines);
+
+		/* Phrases across column lines: letters on one baseline, left to right, no more than word spacing
+		 * apart (the table finder may already have cut the text lines at its cells). */
+		{
+			int nglyph = 0, gcap = 0;
+			glyph_at *g = NULL;
+			fz_var(g);
+			fz_try(ctx)
+			{
+				for (int l = 0; l < nlines; l++)
+					for (fz_stext_char *ch = lines[l]->first_char; ch; ch = ch->next)
+					{
+						fz_rect q;
+						int x, y;
+						if (ch->c == ' ')
+							continue;
+						q = fz_rect_from_quad(ch->quad);
+						x = slot(xs, nx, (q.x0 + q.x1) / 2), y = slot(ys, ny, (q.y0 + q.y1) / 2);
+						if (x < 0 || y < 0)
+							continue;
+						if (nglyph == gcap)
+							g = fz_realloc(ctx, g, (size_t)(gcap = gcap ? gcap * 2 : 256) * sizeof(*g));
+						g[nglyph++] = (glyph_at){ q.x0, q.x1, roundf((q.y0 + q.y1)), ch->size, y, x, is_letter(ch->c) };
+					}
+				qsort(g, nglyph, sizeof(*g), cmp_glyph_at);
+				for (int i = 0; i < nglyph;)
+				{
+					int j = i + 1, cmin = g[i].col, cmax = g[i].col, letters = g[i].letter;
+					while (j < nglyph && g[j].row == g[i].row && fabsf(g[j].base - g[j - 1].base) <= 1 &&
+						   g[j].x0 - g[j - 1].x1 < 0.6f * g[j].size && g[j].x0 - g[j - 1].x1 > -0.5f * g[j].size)
+					{
+						cmin = fz_mini(cmin, g[j].col);
+						cmax = fz_maxi(cmax, g[j].col);
+						letters += g[j].letter;
+						j++;
+					}
+					if (cmax > cmin && letters)
+						span_cells(owner, spanh, spanw, w, h, g[i].row, cmin, 1, cmax - cmin + 1);
+					i = j;
+				}
+			}
+			fz_always(ctx)
+				fz_free(ctx, g);
+			fz_catch(ctx)
+				fz_rethrow(ctx);
+		}
+
+		/* Letters into their cells (a spanned cell's into the cell that owns it). */
+		for (int l = 0; l < nlines; l++)
+			for (fz_stext_char *ch = lines[l]->first_char; ch; ch = ch->next)
+			{
+				fz_rect q = fz_rect_from_quad(ch->quad);
+				int x = slot(xs, nx, (q.x0 + q.x1) / 2), y = slot(ys, ny, (q.y0 + q.y1) / 2), k;
+				if (x < 0 || y < 0)
+					continue;
+				k = x + y * w;
+				if (owner[k] >= 0)
+					k = owner[k];
+				if (!cells[k])
+					cells[k] = fz_new_buffer(ctx, 32);
+				else if (last[k] != lines[l] && cells[k]->len && cells[k]->data[cells[k]->len - 1] != ' ')
+				{
+					fz_buffer *c = cells[k];
+					/* "operat-" then "ions": one word. */
+					if (c->len >= 2 && c->data[c->len - 1] == '-' && is_letter(c->data[c->len - 2]) && ch->c >= 'a' && ch->c <= 'z')
+						c->len--;
+					else
+						fz_append_byte(ctx, c, ' ');
+				}
+				last[k] = lines[l];
+				fz_append_rune(ctx, cells[k], ch->c);
+			}
+
 		fz_append_string(ctx, buf, "{\"r\":");
 		put_bbox(ctx, buf, fz_make_rect(xs[0], ys[0], xs[nx - 1], ys[ny - 1]), o);
 		fz_append_string(ctx, buf, ",\"xs\":[");
@@ -6139,14 +6283,21 @@ static void grid_table_json(fz_context *ctx, fz_buffer *buf, fz_stext_page *t, f
 		for (int y = 0; y < h; y++)
 			for (int x = 0; x < w; x++)
 			{
-				fz_buffer *c = cells[x + y * w];
-				if (!c)
+				int k = x + y * w;
+				fz_buffer *c = cells[k];
+				/* Covered by another cell; or empty and not spanning (a spanning one keeps its merge). */
+				if (owner[k] >= 0 || (!c && spanh[k] == 1 && spanw[k] == 1))
 					continue;
-				while (c->len && c->data[c->len - 1] == ' ')
-					c->len--;
-				fz_terminate_buffer(ctx, c);
-				fz_append_printf(ctx, buf, "%s[%d,%d,1,1,", first ? "" : ",", y, x);
-				json_str(ctx, buf, fz_string_from_buffer(ctx, c));
+				fz_append_printf(ctx, buf, "%s[%d,%d,%d,%d,", first ? "" : ",", y, x, spanh[k], spanw[k]);
+				if (c)
+				{
+					while (c->len && c->data[c->len - 1] == ' ')
+						c->len--;
+					fz_terminate_buffer(ctx, c);
+					json_str(ctx, buf, fz_string_from_buffer(ctx, c));
+				}
+				else
+					fz_append_string(ctx, buf, "\"\"");
 				fz_append_byte(ctx, buf, ']');
 				first = 0;
 			}
@@ -6154,14 +6305,17 @@ static void grid_table_json(fz_context *ctx, fz_buffer *buf, fz_stext_page *t, f
 	}
 	fz_always(ctx)
 	{
-		for (int i = 0; i < w * h; i++)
+		for (int i = 0; cells && i < w * h; i++)
 			fz_drop_buffer(ctx, cells[i]);
 		fz_free(ctx, cells);
 		fz_free(ctx, last);
+		fz_free(ctx, lines);
+		fz_free(ctx, owner);
+		fz_free(ctx, spanh);
+		fz_free(ctx, spanw);
 	}
 	fz_catch(ctx)
 		fz_rethrow(ctx);
-	(void)area;
 }
 
 static fz_stext_page *table_text(fz_context *ctx, fz_display_list *l, int hunt)
@@ -6257,7 +6411,7 @@ char *fo_table_in_json(fo_ctx *c, fo_list *l, const float b[4], const float area
 			else
 				ys = rows_from_lines(CTX, t, r, &ny);
 			fz_try(CTX)
-				grid_table_json(CTX, buf, t, r, xs, ncols, ys, ny, b);
+				grid_table_json(CTX, buf, t->first_block, xs, ncols, ys, ny, NULL, 0, b);
 			fz_always(CTX)
 				fz_free(CTX, ys);
 			fz_catch(CTX)

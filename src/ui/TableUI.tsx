@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { X } from "lucide-preact";
 import { api, type Table } from "../api";
-import { copyTable, gridOf, joinHeading, saveTable, tableDialog } from "../extract";
+import { copyTable, joinHeading, saveTable, spansOf, tableDialog } from "../extract";
 import type { Tab } from "../store";
 
 type Area = [number, number, number, number];
@@ -117,7 +117,7 @@ function TableInner({ tab, view, area, initial }: { tab: Tab; view: number; area
   };
 
   const out = table && join ? joinHeading(table) : table;
-  const grid = out ? gridOf(out) : [];
+  const grid = out ? spansOf(out) : [];
   const h = (area[3] - area[1]) * scale;
   return (
     <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && close()}>
@@ -183,9 +183,9 @@ function TableInner({ tab, view, area, initial }: { tab: Tab; view: number; area
               <tbody>
                 {grid.slice(0, 60).map((row, r) => (
                   <tr key={r}>
-                    {row.map((s, c) => (
-                      <td key={c} title={s}>
-                        {s}
+                    {row.map((cell, c) => (
+                      <td key={c} title={cell.s} colSpan={cell.cs > 1 ? cell.cs : undefined} class={cell.cs > 1 ? "span" : undefined}>
+                        {cell.s}
                       </td>
                     ))}
                   </tr>

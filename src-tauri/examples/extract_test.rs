@@ -154,6 +154,13 @@ fn main() {
     if let Some((page, tb)) = &best {
         let grid = tb.grid();
         println!("  page {}: {} x {}; first rows: {:?}", page + 1, tb.rows(), tb.cols(), grid.iter().take(4).map(|r| r.iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>()).collect::<Vec<_>>());
+        if std::env::var("TABLE_CELLS").is_ok() {
+            println!("  xs {:?}
+  ys {:?}", tb.xs, &tb.ys[..4]);
+            for c in tb.cells.iter().filter(|c| c.0 < 3 || c.4.contains("ended") || c.4.contains("June")) {
+                println!("  cell {c:?}");
+            }
+        }
         std::fs::write(format!("{tmp}/table.csv"), tb.csv()).unwrap();
         std::fs::write(format!("{tmp}/table.xlsx"), tb.xlsx()).unwrap();
         // Reading the same area again, and with the column lines given.
