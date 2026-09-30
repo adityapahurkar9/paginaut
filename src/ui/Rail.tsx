@@ -1,6 +1,6 @@
-// The side bar at the right edge of the window: a button per pane (Organize, Sign, Convert, Markdown). Which
+// The side bar at the right edge of the window: a button per pane (Organize, Sign, Convert, Markdown, Reading). Which
 // buttons it shows, and in what order, is chosen in View › Side bar, by right-clicking it, or in Settings.
-import { Combine, RefreshCw, Signature, SlidersHorizontal, TextCursorInput } from "lucide-preact";
+import { BookOpenText, Combine, RefreshCw, Signature, SlidersHorizontal, TextCursorInput } from "lucide-preact";
 import { isMarkdown, openMdPane } from "../markdown";
 import { bookScreen } from "../modes";
 import { onRail, openPane, pane, PANE_IDS, railItems, railShown, setOnRail, setRailShown, togglePane, type PaneId } from "../panes";
@@ -40,6 +40,13 @@ export const PANES: Record<PaneId, { label: string; title: string; icon: typeof 
       const t = activeTab.value;
       if (t) void openMdPane(t);
     },
+  },
+  reading: {
+    label: "Reading",
+    title: "Reading: how Read and Book modes show the text (size, font, spacing, margins, paper)",
+    icon: BookOpenText,
+    available: () => !!activeTab.value,
+    open: () => openPane("reading"),
   },
 };
 

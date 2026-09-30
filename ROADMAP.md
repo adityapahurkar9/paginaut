@@ -512,6 +512,24 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       remove the standard and best models, get another language); Keyboard shortcuts and About → tabs of their own
       (F1 still opens the shortcuts). Choices in Settings stay on one line; "Default order" for the side bar
 
+## Phase 7.7 (0.7.70): Themes and the Reading pane (done)
+- [x] Reading pane (side bar, View › Text): Read and Book modes' text size, font, spacing, margins, alignment and paper,
+      next to the text (was in Settings); Book mode, full screen, keeps its Aa panel; "Fix the reading layout" there too
+- [x] Themes (Settings › Themes, View › Theme): 16 presets — Standard, Steampunk, Cyberpunk, Nord, Solarized, Forest,
+      Ocean, Paper, Library, Midnight, Terminal, Blueprint, Sakura, Rosé, Desert, High contrast — light, dark or both;
+      each sets the colours, a font for headings, tab names and buttons, and Read/Book's Auto paper (dark pages use
+      the theme's dark paper). High contrast: pure colours, strong outlines, larger text
+- [x] Six base colours per mode (title bar, toolbar, menus, behind the pages, text, accent); borders, secondary text,
+      hovers, selection and button text worked out from them
+- [x] Your own themes: start from any theme or from a picture (its main colour for the background, its liveliest for
+      the accent, light and dark versions made); edit colours and paper, previewed on the whole window; low contrast
+      marked ("may be hard to read"), never blocked
+- [x] Fonts: any font installed in Windows or a font file added (kept in Paginaut's data folder). Scaled to the usual
+      font's x-height, and smaller still when wide (font-size-adjust), so labels keep their room; labels are one line,
+      cut with "…"; a check lists labels that still don't fit and offers "headings only". All 16 presets fit
+- Backend: fonts.rs (installed families from the registry, user font files); commands fonts_installed, fonts_user,
+  font_add, font_bytes, font_remove
+
 ## Phase 8 (0.8.0): Packaging, updates and signing
 - [ ] GitHub repository (the user has an account) hosting source, releases and update files
 - [ ] "Check for updates" button that checks the repo's releases, plus optional automatic checks

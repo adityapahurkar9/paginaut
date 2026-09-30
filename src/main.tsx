@@ -7,6 +7,7 @@ import { api } from "./api";
 import { activeTab, closeTab, dialog, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs, openSettings, settingsOpen } from "./store";
 import * as P from "./pages";
 import * as C from "./compare";
+import "./themes";
 import { renderer } from "./render/RenderManager";
 import { App, dropping, tool } from "./ui/App";
 import { bookScreen, exitBook } from "./modes";

@@ -61,6 +61,9 @@ export interface Settings {
   officeEngine: "auto" | "msoffice" | "libreoffice" | "builtin";
   /** The side bar at the right edge: its panes' buttons in order, those taken off it, and whether it shows. */
   rail?: { order: string[]; hidden: string[]; visible: boolean };
+  /** The theme (a preset's id or one of the user's own). `theme` is its light or dark mode. */
+  look?: string;
+  customThemes?: import("./themes").Theme[];
   /** Compare's options, as last chosen. */
   compare?: Partial<import("./api").CompareOptions>;
 }
@@ -94,16 +97,8 @@ export function updateSettings(patch: Partial<Settings>) {
   save("paginaut.settings", settings.value);
 }
 
-const systemDark = matchMedia("(prefers-color-scheme: dark)");
+/** The interface is dark now (set by themes.ts, which applies the theme). */
 export const isDark = signal(false);
-function applyTheme() {
-  const t = settings.value.theme;
-  const dark = t === "dark" || (t === "system" && systemDark.matches);
-  isDark.value = dark;
-  document.documentElement.dataset.theme = dark ? "dark" : "light";
-}
-systemDark.addEventListener("change", applyTheme);
-settings.subscribe(applyTheme);
 
 export interface RecentFile {
   path: string;
@@ -232,7 +227,7 @@ export const activeTab = computed(() => tabs.value.find((t) => t.key === activeK
 
 export const paletteOpen = signal(false);
 /** The Settings dialog, at one of its tabs. */
-export type SettingsTab = "general" | "reading" | "sidebar" | "signing" | "ocr" | "office" | "compare" | "shortcuts" | "about";
+export type SettingsTab = "general" | "themes" | "sidebar" | "signing" | "ocr" | "office" | "compare" | "shortcuts" | "about";
 export const settingsOpen = signal<SettingsTab | null>(null);
 export function openSettings(tab: SettingsTab = "general") {
   settingsOpen.value = tab;

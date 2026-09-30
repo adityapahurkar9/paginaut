@@ -503,6 +503,13 @@ export const api = {
     return invoke<CompareOutcome>("compare_run", { a, b, options, onEvent: ch });
   },
   compareStop: () => invoke<void>("compare_stop"),
+  /** Font families installed in Windows. */
+  fontsInstalled: () => invoke<string[]>("fonts_installed"),
+  /** Font files the user added (kept in Paginaut's data folder). */
+  fontsUser: () => invoke<{ name: string; file: string }[]>("fonts_user"),
+  fontAdd: (path: string) => invoke<{ name: string; file: string }>("font_add", { path }),
+  fontBytes: (file: string) => invoke<ArrayBuffer>("font_bytes", { file }),
+  fontRemove: (file: string) => invoke<void>("font_remove", { file }),
   markdownRead: (path: string) => invoke<string>("markdown_read", { path }),
   /** The Markdown file at `path` shown from `text` (a new document; pictures from its folder). */
   markdownPreview: (path: string, text: string) => invoke<DocInfo>("markdown_preview", { path, text }),

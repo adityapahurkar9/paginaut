@@ -1311,6 +1311,41 @@ pub fn compare_stop(state: State<'_, AppState>) {
     state.engine.cancel(COMPARE_SID);
 }
 
+// ---------------------------------------------------------------- fonts (themes)
+
+fn fonts_dir(app: &tauri::AppHandle) -> Res<std::path::PathBuf> {
+    app.path().app_local_data_dir().map(|d| d.join("fonts")).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn fonts_installed() -> Res<Vec<String>> {
+    blocking(|| Ok(crate::fonts::installed())).await
+}
+
+#[tauri::command]
+pub async fn fonts_user(app: tauri::AppHandle) -> Res<Vec<crate::fonts::UserFont>> {
+    let dir = fonts_dir(&app)?;
+    blocking(move || Ok(crate::fonts::user(&dir))).await
+}
+
+#[tauri::command]
+pub async fn font_add(app: tauri::AppHandle, path: String) -> Res<crate::fonts::UserFont> {
+    let dir = fonts_dir(&app)?;
+    blocking(move || crate::fonts::add(&dir, &path)).await
+}
+
+#[tauri::command]
+pub async fn font_bytes(app: tauri::AppHandle, file: String) -> Res<tauri::ipc::Response> {
+    let dir = fonts_dir(&app)?;
+    blocking(move || std::fs::read(crate::fonts::file(&dir, &file)?).map(tauri::ipc::Response::new).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+pub async fn font_remove(app: tauri::AppHandle, file: String) -> Res<()> {
+    let dir = fonts_dir(&app)?;
+    blocking(move || std::fs::remove_file(crate::fonts::file(&dir, &file)?).map_err(|e| e.to_string())).await
+}
+
 /// Opens a file Paginaut just made in the program Windows uses for it.
 #[tauri::command]
 pub fn open_path(app: tauri::AppHandle, path: String) -> Res<()> {

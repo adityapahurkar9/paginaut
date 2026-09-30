@@ -4,16 +4,16 @@ import { Fragment, type ComponentChildren } from "preact";
 import { ArrowDown, ArrowUp, X } from "lucide-preact";
 import { compareOptions, setCompareOption } from "../compare";
 import { deleteModel, downloadModel, downloads, loadLangs, ocrLangs, rememberChoice, stopDownload, type OcrLang, type OcrQuality } from "../ocr";
-import { moveOnRail, onRail, railOrder, railShown, resetRail, setOnRail, setRailShown } from "../panes";
+import { moveOnRail, onRail, openPane, railOrder, railShown, resetRail, setOnRail, setRailShown } from "../panes";
 import { settings, settingsOpen, updateSettings, type Settings, type SettingsTab } from "../store";
 import { About, Shortcuts } from "./HelpDialogs";
 import { OfficeSettings } from "./OfficeUI";
 import { PANES } from "./Rail";
-import { TypeControls } from "./Reflow";
+import { ThemesTab } from "./ThemesTab";
 
 const TABS: [SettingsTab, string][] = [
   ["general", "General"],
-  ["reading", "Read and Book"],
+  ["themes", "Themes"],
   ["sidebar", "Side bar"],
   ["signing", "Signing"],
   ["ocr", "Text recognition"],
@@ -53,7 +53,7 @@ export function SettingsDialog() {
         </nav>
         <div class="set-body" onKeyDown={(e) => e.stopPropagation()}>
           {tab === "general" && <General />}
-          {tab === "reading" && <Reading />}
+          {tab === "themes" && <ThemesTab />}
           {tab === "sidebar" && <SideBar />}
           {tab === "signing" && <Signing />}
           {tab === "ocr" && <Ocr />}
@@ -108,29 +108,28 @@ function General() {
   return (
     <>
       <h3>General</h3>
-      <Field label="Theme">
-        <Seg value={s.theme} items={[["light", "Light"], ["dark", "Dark"], ["system", "Match Windows"]]} set={(theme) => put({ theme })} />
+      <Field label="Look">
+        <div>
+          <button class="btn sm" onClick={() => (settingsOpen.value = "themes")}>
+            Themes…
+          </button>
+        </div>
       </Field>
       <Field label="Pages">
         <Check on={s.night} label="Dark pages (night mode)" hint="Pages shown light on dark; photos keep their colours. Ctrl+Shift+N" set={(night) => put({ night })} />
         <Check on={s.coverSeparate} label="Cover page on its own in Double page view" set={(coverSeparate) => put({ coverSeparate })} />
         <Check on={s.highlightFields} label="Highlight fillable form fields" set={(highlightFields) => put({ highlightFields })} />
       </Field>
+      <Field label="Read and Book modes" hint="Text size, font, spacing, margins and paper are in the Reading pane, next to the text (View › Text).">
+        <div>
+          <button class="btn sm" onClick={() => { settingsOpen.value = null; openPane("reading"); }}>
+            Open the Reading pane
+          </button>
+        </div>
+      </Field>
       <Field label="Saving">
         <Check on={s.autoSaveRotations} label="Save rotations automatically" hint="PDFs only, when nothing else changed." set={(autoSaveRotations) => put({ autoSaveRotations })} />
       </Field>
-    </>
-  );
-}
-
-function Reading() {
-  return (
-    <>
-      <h3>Read and Book modes</h3>
-      <span class="hint">How the reflowed text looks (also under the Aa button while reading).</span>
-      <div class="set-type">
-        <TypeControls />
-      </div>
     </>
   );
 }

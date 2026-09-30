@@ -12,6 +12,7 @@ import { BookView } from "../reflow/BookView";
 import { ReadView, type ReflowView } from "../reflow/ReadView";
 import { createPictures, type Pictures } from "../reflow/render";
 import { isDark, settings, updateSettings, type ReflowSettings, type Tab } from "../store";
+import { mix, themePaper } from "../themes";
 import { sourceCount } from "../edits";
 import { ocrState, recognize } from "../ocr";
 
@@ -100,7 +101,20 @@ const MARGINS = { narrow: [30, 0.06], normal: [36, 0.09], wide: [44, 0.12] } as 
 
 function paperOf(r: ReflowSettings) {
   if (r.paper !== "auto") return r.paper;
+  const t = themePaper.value;
+  if (t) return t.dark || settings.value.night ? "theme-dark" : "theme";
   return isDark.value || settings.value.night ? "dark" : "white";
+}
+
+/** The theme's paper as the reading view's colours (Auto paper). */
+function paperVars(paper: string): Record<string, string> {
+  const t = themePaper.value;
+  if (!t || !paper.startsWith("theme")) return {};
+  const dark = paper === "theme-dark";
+  // Dark pages: the theme's dark paper.
+  const p = dark ? t.darkPaper : t.now;
+  const [bg, ink] = [p.paper, p.ink];
+  return { "--rf-paper": bg, "--rf-ink": ink, "--rf-ink-soft": mix(ink, bg, 0.55), "--rf-book-desk": mix(bg, "#000000", dark ? 0.55 : 0.25) };
 }
 
 function styleVars(r: ReflowSettings): Record<string, string> {
@@ -175,7 +189,7 @@ export function ReflowHost({ tab }: { tab: Tab }) {
   }, [flow, mode]);
 
   // Typography: CSS variables on the host; the view keeps its place.
-  const vars = styleVars(r);
+  const vars = { ...styleVars(r), ...paperVars(paper) };
   useEffect(() => tab.reflowView?.restyle(), [JSON.stringify(r)]);
 
   // Ctrl+wheel / pinch changes the text size.
@@ -214,7 +228,7 @@ export function ReflowHost({ tab }: { tab: Tab }) {
 
   const progress = state.loading?.progress.value ?? 0;
   return (
-    <div class={`rf-host paper-${paper} ${mode}`} style={vars}>
+    <div class={`rf-host ${paper === "theme-dark" ? "paper-dark paper-theme" : `paper-${paper}`} ${mode}`} style={vars}>
       <div class="rf-mount" ref={host} />
       {!flow && !state.error && (
         <div class="rf-loading">

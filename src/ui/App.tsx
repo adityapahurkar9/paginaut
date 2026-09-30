@@ -31,6 +31,7 @@ import { ConvertPane } from "./ConvertPane";
 import { MarkdownPane } from "./MarkdownPane";
 import { OrganizePane } from "./OrganizePane";
 import { Rail } from "./Rail";
+import { ReadingPane } from "./ReadingPane";
 import { SettingsDialog } from "./SettingsDialog";
 import { CompareDialog, CompareView } from "./CompareUI";
 import { closeCompare, compare, COMPARE } from "../compare";
@@ -83,6 +84,7 @@ export function App() {
         <SignPane />
         <ConvertPane />
         <MarkdownPane />
+        <ReadingPane />
         <Rail />
       </div>
       <StatusBar />

@@ -1121,3 +1121,44 @@ body.text-edit .pg { cursor: default; }
 .set-dl .rf-bar span { display: block; height: 100%; background: var(--acc); }
 .set-ocr-add { align-self: flex-start; margin-top: 6px; }
 .set-ocr .linkish { padding: 0; }
+
+/* ---------------------------------------------------------------- themes */
+/* A theme's font for headings, tab names and buttons, scaled to fit where Segoe UI does (font-size-adjust);
+   labels never spill: one line, cut with "…". */
+:root { --font-display: var(--font); --fd-adjust: none; }
+.rtab, .tb > span, .tab .name, .rail-btn span, .set-tab, .signpane-head strong, .dialog h2, .dialog h3, .set-body h3, .pane-sec h3, .cmp-list-head strong, .home h1, .home h2 {
+  font-family: var(--font-display); font-size-adjust: var(--fd-adjust);
+}
+:root.fd-headings .rtab, :root.fd-headings .tb > span, :root.fd-headings .tab .name, :root.fd-headings .rail-btn span, :root.fd-headings .set-tab {
+  font-family: var(--font); font-size-adjust: none;
+}
+.rtab, .set-tab, .signpane-head strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb > span { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+.rail-btn span { max-height: 120px; overflow: hidden; text-overflow: ellipsis; }
+/* High contrast: larger text, strong outlines. */
+:root.hc body { font-size: 14px; }
+:root.hc .tb.on, :root.hc .rail-btn.on, :root.hc .segb.on, :root.hc .set-tab.on, :root.hc .cmp-item.on { outline: 2px solid var(--acc); outline-offset: -2px; }
+:root.hc :focus-visible { outline: 3px solid var(--acc) !important; outline-offset: 1px; }
+:root.hc .btn, :root.hc .inp, :root.hc .seg { border: 1px solid var(--tx); }
+
+/* The Themes tab. */
+.theme-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.theme-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--bd2); border-radius: 10px; background: transparent; color: var(--tx); text-align: left; }
+.theme-card:hover { border-color: var(--tx3); }
+.theme-card.on { border-color: var(--acc); box-shadow: 0 0 0 2px var(--acc-soft); }
+.theme-card b { font-size: 12.5px; }
+.theme-card small { color: var(--tx3); font-size: 11px; line-height: 1.3; }
+.tprev { height: 64px; border-radius: 7px; overflow: hidden; display: grid; grid-template-rows: 12px 14px 1fr; border: 1px solid rgba(128, 128, 128, 0.25); }
+.tprev i { display: block; }
+.tprev .tp-body { display: flex; gap: 5px; padding: 5px; }
+.tprev .tp-page { flex: 1; border-radius: 2px; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 0 6px; font-size: 11px; font-weight: 600; overflow: hidden; white-space: nowrap; }
+.tprev .tp-page span { height: 3px; border-radius: 2px; opacity: 0.55; }
+.tprev .tp-btn { width: 20px; height: 12px; align-self: flex-end; border-radius: 4px; }
+.theme-modes { font-size: 11px; color: var(--tx3); }
+.theme-edit { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--bd2); border-radius: 12px; }
+.theme-colours { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+.theme-colour { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.theme-colour input[type="color"] { width: 34px; height: 26px; padding: 0; border: 1px solid var(--bd); border-radius: 6px; background: none; }
+.theme-warn { font-size: 12px; color: #d67a00; }
+:root[data-theme="dark"] .theme-warn { color: #ffb74d; }
+.theme-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

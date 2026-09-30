@@ -5,6 +5,7 @@ pub mod compare;
 pub mod convert;
 mod docx;
 mod flow;
+mod fonts;
 mod markdown;
 mod net;
 mod ocr;
@@ -226,6 +227,11 @@ pub fn run() {
             app::convert_stop,
             app::compare_run,
             app::compare_stop,
+            app::fonts_installed,
+            app::fonts_user,
+            app::font_add,
+            app::font_bytes,
+            app::font_remove,
             app::open_path,
             app::markdown_read,
             app::markdown_preview,

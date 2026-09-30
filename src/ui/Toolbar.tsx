@@ -30,6 +30,7 @@ import { redactTab, startRedact, stopRedact } from "../redact";
 import { openConvertPane } from "../office";
 import { closePane, pane, togglePane } from "../panes";
 import { railMenuItems } from "./Rail";
+import { currentTheme } from "../themes";
 import { isMarkdown, toggleMdPane } from "../markdown";
 import { pickAndConvert } from "./OfficeUI";
 import { openCompareSetup } from "../compare";
@@ -299,6 +300,9 @@ function ViewTools({ tab }: { tab: Tab | null }) {
       { label: "Light", check: s.theme === "light", run: () => updateSettings({ theme: "light" }) },
       { label: "Dark", check: s.theme === "dark", run: () => updateSettings({ theme: "dark" }) },
       { label: "Match Windows", check: s.theme === "system", run: () => updateSettings({ theme: "system" }) },
+      { sep: true },
+      { head: currentTheme().name },
+      { label: "Choose a theme…", run: () => openSettings("themes") },
     ]);
   return (
     <>
@@ -316,11 +320,15 @@ function ViewTools({ tab }: { tab: Tab | null }) {
           <TB icon={I(Expand, 17)} label="Fit page" title="Fit page (Ctrl+1)" on={tab?.fit.value === "page"} disabled={!tab} onClick={A.fitPage} />
         </>
       )}
+      <TB
+        icon={I(Type, 17)}
+        label="Text"
+        title="Read and Book modes' text: size, font, spacing, margins, paper (the Reading pane)"
+        on={vm === "book" ? typeOpen.value : pane.value === "reading"}
+        onClick={() => (vm === "book" ? (typeOpen.value = !typeOpen.value) : togglePane("reading"))}
+      />
       {(vm === "read" || vm === "book") && (
-        <>
-          <TB icon={I(Type, 17)} label="Text" title="Text size, font, spacing, margins, paper" on={typeOpen.value} onClick={() => (typeOpen.value = !typeOpen.value)} />
-          <TB icon={I(Wrench, 17)} label="Fix layout" title="See how the page is read, and correct columns, order, pictures and text" onClick={() => tab && void startLayoutEdit(tab)} />
-        </>
+        <TB icon={I(Wrench, 17)} label="Fix layout" title="See how the page is read, and correct columns, order, pictures and text" onClick={() => tab && void startLayoutEdit(tab)} />
       )}
       <div class="sep" />
       <TB icon={I(SunMoon, 17)} label="Dark pages" title="Night mode: dark pages, photos keep their colours (Ctrl+Shift+N)" on={s.night} onClick={A.toggleNight} />
