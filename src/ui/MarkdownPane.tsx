@@ -1,14 +1,35 @@
 // The Markdown pane (right side): a .md file's source, the pages following as you type; Ctrl+S saves the file.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { X } from "lucide-preact";
-import { mdInput, mdSource, saveMarkdown } from "../markdown";
+import { isMarkdown, loadMdSource, mdInput, mdLoaded, mdSource, saveMarkdown } from "../markdown";
 import { bookScreen } from "../modes";
-import { mdPane } from "../office";
+import { closePane, pane } from "../panes";
 import { activeTab, type Tab } from "../store";
 
 export function MarkdownPane() {
-  const tab = mdPane.value;
-  if (!tab || tab !== activeTab.value || bookScreen.value || !mdSource(tab)) return null;
+  const tab = activeTab.value;
+  const md = pane.value === "markdown" && !bookScreen.value && !!tab && isMarkdown(tab.path);
+  void mdLoaded.value;
+  // Another Markdown tab: its source is read when the pane first shows it.
+  useEffect(() => {
+    if (md && !mdSource(tab)) void loadMdSource(tab);
+  }, [md, tab]);
+  if (pane.value !== "markdown" || bookScreen.value) return null;
+  if (!md || !mdSource(tab)) {
+    return (
+      <aside class="signpane mdpane" aria-label="Markdown">
+        <div class="signpane-head">
+          <strong>Markdown</strong>
+          <button class="ib sm" aria-label="Close the Markdown pane" title="Close" onClick={() => closePane("markdown")}>
+            <X size={15} />
+          </button>
+        </div>
+        <div class="signpane-body">
+          <p class="muted small">{md ? "Reading…" : "Open a Markdown file (.md) to edit its text here; the pages follow as you type."}</p>
+        </div>
+      </aside>
+    );
+  }
   return <Editor key={tab.key} tab={tab} />;
 }
 
@@ -29,7 +50,7 @@ function Editor({ tab }: { tab: Tab }) {
     <aside class="signpane mdpane" aria-label="Markdown">
       <div class="signpane-head">
         <strong>Markdown</strong>
-        <button class="ib sm" aria-label="Close the Markdown pane" title="Close (your changes stay until you close the file)" onClick={() => (mdPane.value = null)}>
+        <button class="ib sm" aria-label="Close the Markdown pane" title="Close (your changes stay until you close the file)" onClick={() => closePane("markdown")}>
           <X size={15} />
         </button>
       </div>

@@ -30,6 +30,9 @@ import { OcrBar, OcrDialog } from "./OcrUI";
 import { OfficeBar, OfficeDialog, openingText } from "./OfficeUI";
 import { ConvertPane } from "./ConvertPane";
 import { MarkdownPane } from "./MarkdownPane";
+import { OrganizePane } from "./OrganizePane";
+import { Rail } from "./Rail";
+import { SettingsDialog } from "./SettingsDialog";
 import { CompareDialog, CompareView } from "./CompareUI";
 import { closeCompare, compare, COMPARE } from "../compare";
 import { officeKind } from "../office";
@@ -77,9 +80,11 @@ export function App() {
             {tab && tab.mode.value === "pages" && <AnnotBar tab={tab} />}
           </div>
         </div>
+        <OrganizePane />
         <SignPane />
         <ConvertPane />
         <MarkdownPane />
+        <Rail />
       </div>
       <StatusBar />
       <Palette />
@@ -88,6 +93,7 @@ export function App() {
       <OcrDialog />
       <OfficeDialog />
       <CompareDialog />
+      <SettingsDialog />
       <InsertDialog />
       <MergeDialog />
       <SplitDialog />

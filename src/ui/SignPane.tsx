@@ -7,10 +7,11 @@ import { annotTool, selectedAnnot, type AnnotTool } from "../annots";
 import { bookScreen } from "../modes";
 import * as P from "../pages";
 import { creating, deleteSig, loadSigs, paneFocus, pickSig, sigs, sigsOf, type SigEntry, type SigKind } from "../sign";
-import { activeTab, ask, settings, showToast, updateSettings, type Tab } from "../store";
+import { activeTab, ask, showToast, type Tab } from "../store";
 import { CertSection } from "./CertSection";
 import { Maker } from "./SignMaker";
 import { DocSigs } from "./SigPanel";
+import { closePane, pane } from "../panes";
 
 /** Inner width of the pane (its CSS width less padding), for the drawing pad. */
 const INNER = 292;
@@ -20,7 +21,7 @@ export function SignPane() {
   const ready = tab?.status.value === "ready" ? tab : null;
   const body = useRef<HTMLDivElement>(null);
   const focus = paneFocus.value;
-  const open = settings.value.signPane && !bookScreen.value;
+  const open = pane.value === "sign" && !bookScreen.value;
   useEffect(() => {
     if (!sigs.value) void loadSigs();
   }, []);
@@ -34,7 +35,7 @@ export function SignPane() {
     <aside class="signpane" aria-label="Sign">
       <div class="signpane-head">
         <strong>Sign</strong>
-        <button class="ib sm" aria-label="Close the Sign pane" title="Close" onClick={() => updateSettings({ signPane: false })}>
+        <button class="ib sm" aria-label="Close the Sign pane" title="Close" onClick={() => closePane("sign")}>
           <X size={15} />
         </button>
       </div>

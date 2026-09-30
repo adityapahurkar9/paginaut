@@ -1,4 +1,4 @@
-// Menu tabs (File · Home · View · Tools · Help) and the toolbar under them.
+// Menu tabs (File · Home · View · Comment · Tools · Sign · Help) and the toolbar under them.
 // The left part of the toolbar changes with the tab; find stays on the right.
 // Page, zoom and the view modes sit in the middle of the status bar (ViewControls).
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
@@ -10,7 +10,7 @@ import {
   Minus, Moon, MousePointer2, MoveHorizontal, PanelLeft, PanelRight, Plus, Redo2, RefreshCw, RotateCcw, RotateCw, Save, ScanText, ScrollText,
   Search, Signature, SquareSplitHorizontal, Sun, SunMoon, Trash2, FilePlus2, LayoutGrid, Type, Undo2, Wrench, Underline, Strikethrough, SquareDashed,
   PenLine, StickyNote, TypeOutline, Square, Circle, Slash, MoveUpRight, Stamp, MessagesSquare, Check, X, CalendarDays, UserRound,
-  FileLock2, ShieldCheck, TextCursorInput, EyeOff, FileDiff,
+  FileLock2, ShieldCheck, TextCursorInput, EyeOff, FileDiff, Settings2,
 } from "lucide-preact";
 import * as A from "../actions";
 import * as P from "../pages";
@@ -22,16 +22,15 @@ import { startLayoutEdit } from "./LayoutPanel";
 import { loadSigs, newSig, openSignPane, pickSig, sigs, sigsOf, type SigKind } from "../sign";
 import { startSigning } from "../dsc";
 import { recognize, removeRecognized } from "../ocr";
-import { extractPages, insertBlankPage, startInsert, startMerge, startSplit } from "./PagesUI";
+import { insertBlankPage, startInsert } from "./PagesUI";
 import { toggleGrid } from "./PageGrid";
-import { startPageSize } from "../pagesize";
-import { startHeaders, startWatermark } from "./StampUI";
-import { startLabels, startProperties } from "./MetaUI";
-import { startSecure } from "./SecureUI";
-import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
+import { startProperties } from "./MetaUI";
 import { addPicture, textEdit, toggleTextEdit } from "../textedit";
 import { redactTab, startRedact, stopRedact } from "../redact";
-import { convertPane, mdPane, officeDialog, openConvertPane } from "../office";
+import { openConvertPane } from "../office";
+import { closePane, pane, togglePane } from "../panes";
+import { railMenuItems } from "./Rail";
+import { openSettings } from "./SettingsDialog";
 import { isMarkdown, toggleMdPane } from "../markdown";
 import { pickAndConvert } from "./OfficeUI";
 import { openCompareSetup } from "../compare";
@@ -74,11 +73,9 @@ function fileItems(): MenuItem[] {
     { label: "Document properties…", hint: "Ctrl+D", disabled: !ready, run: () => ready && startProperties(ready) },
     { sep: true },
     { label: "Convert Office files to PDF…", run: () => void pickAndConvert() },
-    { label: "Office suite choices…", run: () => (officeDialog.value = true) },
-    { sep: true },
     { label: "Compare files…", run: () => openCompareSetup() },
     { sep: true },
-    { label: "Auto-save rotations", check: settings.value.autoSaveRotations, run: () => updateSettings({ autoSaveRotations: !settings.value.autoSaveRotations }) },
+    { label: "Settings…", hint: "Ctrl+,", run: () => openSettings() },
     ...(files.length ? [{ sep: true } as MenuItem, { head: "Recent" } as MenuItem] : []),
     // Same-named files are told apart by their folder.
     ...files.map((f) => ({
@@ -94,7 +91,8 @@ function fileItems(): MenuItem[] {
 
 // ---------------------------------------------------------------- menu tabs
 
-const TABS: [Settings["ribbon"], string][] = [["home", "Home"], ["comment", "Comment"], ["sign", "Sign"], ["view", "View"], ["tools", "Tools"], ["help", "Help"]];
+// In the order work goes: read (Home, View), review (Comment), change (Tools), finish (Sign).
+const TABS: [Settings["ribbon"], string][] = [["home", "Home"], ["view", "View"], ["comment", "Comment"], ["tools", "Tools"], ["sign", "Sign"], ["help", "Help"]];
 
 export function Ribbon() {
   const cur = settings.value.ribbon;
@@ -330,6 +328,8 @@ function ViewTools({ tab }: { tab: Tab | null }) {
       <TB icon={I(SunMoon, 17)} label="Dark pages" title="Night mode: dark pages, photos keep their colours (Ctrl+Shift+N)" on={s.night} onClick={A.toggleNight} />
       <TB icon={isDark.value ? I(Moon, 17) : I(Sun, 17)} label="Theme" menu onClick={themeMenu} />
       <TB icon={I(Expand, 17)} label="Full screen" title="Full screen (F11)" onClick={A.toggleFullscreen} />
+      <div class="sep" />
+      <TB icon={I(PanelRight, 17)} label="Side bar" title="Choose the panes on the side bar at the right edge" menu onClick={(e) => openMenu(e, railMenuItems(), "left", 230)} />
     </>
   );
 }
@@ -372,17 +372,7 @@ function CommentTools({ tab }: { tab: Tab | null }) {
     selectedAnnot.value = null;
   };
   const stampMenu = (e: MouseEvent) =>
-    openMenu(e, [
-      { head: "Fill & Sign" },
-      { label: "✓  Tick", run: () => pick("stamp:check") },
-      { label: "✗  Cross", run: () => pick("stamp:cross") },
-      { label: "●  Dot", run: () => pick("stamp:dot") },
-      { label: "—  Strike line", run: () => pick("fs-strike") },
-      { label: "Today's date", run: () => pick("stamp:date") },
-      { label: "My name", run: () => pick("stamp:name") },
-      { head: "Stamps" },
-      ...STAMPS.map(([name, label]) => ({ label, run: () => pick(`stamp:${name}` as AnnotTool) })),
-    ], "left", 220);
+    openMenu(e, STAMPS.map(([name, label]) => ({ label, run: () => pick(`stamp:${name}` as AnnotTool) })), "left", 200);
   const colorMenu = (e: MouseEvent) =>
     openMenu(e, PALETTE.map((c) => ({ label: c, icon: <span class="sw-dot" style={{ background: c }} />, check: c === st.color, run: () => setStyle(kind, { color: c }) })), "left", 170);
   return (
@@ -449,10 +439,10 @@ function SignTools({ tab }: { tab: Tab | null }) {
     <>
       <TB
         icon={I(PanelRight, 17)}
-        label="Sign panel"
+        label="Sign pane"
         title="Signatures, Fill & Sign and certificates, on the right"
-        on={settings.value.signPane}
-        onClick={() => updateSettings({ signPane: !settings.value.signPane })}
+        on={pane.value === "sign"}
+        onClick={() => (pane.value === "sign" ? closePane("sign") : openSignPane())}
       />
       <IB icon={I(MousePointer2)} label="Select" title="Select and read (Esc)" on={!tool} onClick={() => (annotTool.value = null)} />
       <div class="sep" />
@@ -484,68 +474,31 @@ function SignTools({ tab }: { tab: Tab | null }) {
 
 
 function ToolsTools({ tab }: { tab: Tab | null }) {
+  const pdf = !!tab?.info.value?.isPdf;
+  const open = pane.value;
   return (
     <>
-      <TB icon={I(RotateCcw, 17)} label="Rotate" title="Rotate page left (Shift+R) — or hover a page" disabled={!tab} onClick={() => tab && P.rotatePages(tab, -90)} />
-      <IB icon={I(RotateCw)} label="Rotate right" title="Rotate page right (R)" disabled={!tab} onClick={() => tab && P.rotatePages(tab, 90)} />
-      <TB icon={I(Trash2, 17)} label="Delete" title="Delete page (Del)" disabled={!tab} onClick={() => tab && P.deletePages(tab)} />
-      <TB icon={I(FilePlus2, 17)} label="Insert" menu disabled={!tab?.info.value?.isPdf} onClick={(e) => openMenu(e, [
+      {tab && isMarkdown(tab.path) ? (
+        <TB icon={I(TextCursorInput, 17)} label="Edit" title="Edit the Markdown source: the pages follow as you type (Ctrl+S saves the .md file)" on={open === "markdown"} onClick={() => toggleMdPane(tab)} />
+      ) : (
+        <TB icon={I(TextCursorInput, 17)} label="Edit" title="Change words, move, resize, replace or delete pictures on the page (Esc to stop)" on={!!tab && textEdit.value === tab} disabled={!pdf} onClick={() => tab && toggleTextEdit(tab)} />
+      )}
+      <TB icon={I(FilePlus2, 17)} label="Insert" menu disabled={!pdf} onClick={(e) => openMenu(e, [
         { label: "Pages from a file…", run: () => tab && void startInsert(tab) },
         { label: "Blank page", run: () => tab && void insertBlankPage(tab) },
         { sep: true },
         { label: "Picture…", run: () => tab && void addPicture(tab) },
       ], "left", 200)} />
-      {tab && isMarkdown(tab.path) ? (
-        <TB icon={I(TextCursorInput, 17)} label="Edit" title="Edit the Markdown source: the pages follow as you type (Ctrl+S saves the .md file)" on={mdPane.value === tab} onClick={() => toggleMdPane(tab)} />
-      ) : (
-        <TB icon={I(TextCursorInput, 17)} label="Edit" title="Change words, move, resize, replace or delete pictures on the page (Esc to stop)" on={!!tab && textEdit.value === tab} disabled={!tab?.info.value?.isPdf} onClick={() => tab && toggleTextEdit(tab)} />
-      )}
-      <TB icon={I(EyeOff, 17)} label="Redact" title="Remove or cover text and areas; sanitize the document" on={!!tab && redactTab.value === tab} disabled={!tab?.info.value?.isPdf} onClick={() => tab && (redactTab.value === tab ? stopRedact() : startRedact(tab))} />
-      <div class="sep" />
+      <TB icon={I(EyeOff, 17)} label="Redact" title="Remove or cover text and areas; sanitize the document" on={!!tab && redactTab.value === tab} disabled={!pdf} onClick={() => tab && (redactTab.value === tab ? stopRedact() : startRedact(tab))} />
       <TB icon={I(FormInput, 17)} label="Forms" menu onClick={(e) => openMenu(e, formItems(tab), "left", 270)} />
-      <TB icon={I(Highlighter, 17)} label="Comment" title="Highlight, draw, add notes and text (Comment tab)" onClick={() => updateSettings({ ribbon: "comment" })} />
-      <TB icon={I(Signature, 17)} label="Sign" title="Signatures, initials and Fill & Sign (Sign tab)" onClick={() => updateSettings({ ribbon: "sign" })} />
       <TB icon={I(ScanText, 17)} label="OCR" menu disabled={!tab} onClick={(e) => openMenu(e, [
         { label: "Recognize text…", run: () => tab && void recognize(tab) },
-        { label: "Remove recognized text", disabled: !tab?.info.value?.isPdf, run: () => tab && void removeRecognized(tab) },
+        { label: "Remove recognized text", disabled: !pdf, run: () => tab && void removeRecognized(tab) },
       ], "left", 240)} />
-      <TB icon={I(Combine, 17)} label="Organize" menu onClick={(e) => openMenu(e, [
-        { label: "Page grid", hint: "Ctrl+Shift+G", check: !!tab?.grid.value, disabled: !tab, run: () => tab && toggleGrid(tab) },
-        { sep: true },
-        { label: "Merge files…", run: () => void startMerge(tab) },
-        { label: "Split into files…", disabled: !tab, run: () => tab && startSplit(tab) },
-        { label: "Save selected pages as a new PDF…", disabled: !tab, run: () => tab && void extractPages(tab) },
-        { sep: true },
-        { label: "Crop and resize pages…", disabled: !tab?.info.value?.isPdf, run: () => tab && startPageSize(tab) },
-        { sep: true },
-        { label: "Page numbers, headers and footers…", disabled: !tab?.info.value?.isPdf, run: () => tab && startHeaders(tab) },
-        { label: "Watermark…", disabled: !tab?.info.value?.isPdf, run: () => tab && startWatermark(tab) },
-        { label: "Page labels…", disabled: !tab?.info.value?.isPdf, run: () => tab && startLabels(tab) },
-        { label: "Document properties…", hint: "Ctrl+D", disabled: !tab, run: () => tab && startProperties(tab) },
-        { sep: true },
-
-        { label: "Protect with a password…", disabled: !tab?.info.value?.isPdf, run: () => tab && startSecure(tab, "protect") },
-        { label: "Reduce file size…", disabled: !tab?.info.value?.isPdf, run: () => tab && startSecure(tab, "compress") },
-        { label: "Repair…", disabled: !tab?.info.value?.isPdf, run: () => tab && startSecure(tab, "repair") },
-        { sep: true },
-        { head: "Get content out" },
-        { label: "Save all pictures…", disabled: !tab, run: () => tab && (picturesDialog.value = tab) },
-        { label: "Select an area to copy or save…", hint: "or right-click a page", disabled: !tab, run: () => tab && startArea(tab) },
-        { label: `Attached files${tab?.attachments.value?.length ? ` (${tab.attachments.value.length})` : ""}`, disabled: !tab?.attachments.value?.length, run: showAttachments },
-        { label: "Attach a file…", disabled: !tab?.info.value?.isPdf, run: () => tab && void attachFiles(tab) },
-        { label: "Table on this page to Excel / CSV…", disabled: !tab, run: () => tab && void openPageTable(tab) },
-        { sep: true },
-        { label: "Edit text and pictures", check: !!tab && textEdit.value === tab, disabled: !tab?.info.value?.isPdf, run: () => tab && toggleTextEdit(tab) },
-        { label: "Redact (remove or cover)…", check: !!tab && redactTab.value === tab, disabled: !tab?.info.value?.isPdf, run: () => tab && (redactTab.value === tab ? stopRedact() : startRedact(tab)) },
-      ], "left", 280)} />
+      <div class="sep" />
+      <TB icon={I(Combine, 17)} label="Organize" title="Pages (grid, insert, merge, split, crop), page numbers and watermarks, protection, pictures and tables out: in a pane on the right" on={open === "organize"} onClick={() => togglePane("organize")} />
       <TB icon={I(FileDiff, 17)} label="Compare" title="Compare two files: two versions of a PDF, or a PDF with its Word, PowerPoint, Excel or Markdown file" onClick={() => openCompareSetup()} />
-      <TB
-        icon={I(RefreshCw, 17)}
-        label="Convert"
-        title="Convert this document to Word, Excel, PowerPoint, pictures or text; files to PDF"
-        on={!!convertPane.value}
-        onClick={() => (convertPane.value ? (convertPane.value = null) : openConvertPane())}
-      />
+      <TB icon={I(RefreshCw, 17)} label="Convert" title="Convert this document to Word, Excel, PowerPoint, pictures or text; files to PDF: in a pane on the right" on={open === "convert"} onClick={() => (open === "convert" ? closePane("convert") : openConvertPane())} />
     </>
   );
 }
@@ -553,6 +506,8 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
 function HelpTools() {
   return (
     <>
+      <TB icon={I(Settings2, 17)} label="Settings" title="Settings: every option in one place (Ctrl+,)" onClick={() => openSettings()} />
+      <div class="sep" />
       <TB icon={I(Keyboard, 17)} label="Keyboard shortcuts" title="Keyboard shortcuts (F1)" onClick={() => (helpPanel.value = "shortcuts")} />
       <TB icon={I(Info, 17)} label="About Paginaut" onClick={() => (helpPanel.value = "about")} />
       <TB icon={I(RefreshCw, 17)} label="Check for updates" title="Coming in a later version (checks the GitHub releases)" disabled onClick={() => {}} />

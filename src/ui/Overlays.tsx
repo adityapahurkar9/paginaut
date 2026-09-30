@@ -22,6 +22,8 @@ import { startRedact } from "../redact";
 import { officeDialog } from "../office";
 import { pickAndConvert } from "./OfficeUI";
 import { openCompareSetup } from "../compare";
+import { railShown, setRailShown, togglePane } from "../panes";
+import { openSettings } from "./SettingsDialog";
 import { addBookmarkHere } from "./Sidebar";
 import { removeStamps } from "../stamps";
 import { helpPanel } from "./HelpDialogs";
@@ -225,6 +227,11 @@ function commands(): Item[] {
     c("Convert images to one PDF…", () => void startMergePictures(), ""),
     c("Office suite choices: programs that open Office files, get LibreOffice…", () => (officeDialog.value = true), ""),
     c("Compare files (PDF with PDF, Word, PowerPoint, Excel or Markdown)…", () => openCompareSetup(), ""),
+    c("Settings…", () => openSettings(), "Ctrl+,"),
+    c("Organize pane: pages, page numbers, watermark, protect, pictures out", () => togglePane("organize"), ""),
+    c("Sign pane: signatures, Fill & Sign, certificates", () => togglePane("sign"), ""),
+    c("Convert pane", () => togglePane("convert"), ""),
+    c("Side bar: show or hide", () => setRailShown(!railShown()), ""),
     c("Remove recognized text", withTab((t) => void removeRecognized(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Clear form", withTab((t) => void clearForm(t)), "", () => !!activeTab.value?.forms.value?.fields),
     c("Save a flattened copy of the form…", withTab((t) => void P.saveFlattened(t)), "", () => !!activeTab.value?.forms.value?.fields),

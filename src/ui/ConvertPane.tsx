@@ -7,7 +7,8 @@ import { X } from "lucide-preact";
 import { api, type ExportDone, type ExportFormat, type OfficeEngine } from "../api";
 import { bookScreen } from "../modes";
 import { parsePages } from "../ocr";
-import { convertPane, officeDialog, openConvertPane, type ExportTarget } from "../office";
+import { convertTarget, officeDialog, openConvertPane, type ExportTarget } from "../office";
+import { closePane, pane } from "../panes";
 import { activeTab, baseName, type Tab } from "../store";
 import { FilesToPdf } from "./OfficeUI";
 import { testHook } from "./PagesUI";
@@ -38,15 +39,14 @@ const ENGINE_NOTE: Record<string, Record<string, [string, string]>> = {
 };
 
 export function ConvertPane() {
-  const st = convertPane.value;
   const tab = activeTab.value;
   const ready = tab?.status.value === "ready" ? tab : null;
-  if (!st || bookScreen.value) return null;
+  if (pane.value !== "convert" || bookScreen.value) return null;
   return (
     <aside class="signpane convertpane" aria-label="Convert">
       <div class="signpane-head">
         <strong>Convert</strong>
-        <button class="ib sm" aria-label="Close the Convert pane" title="Close" onClick={() => (convertPane.value = null)}>
+        <button class="ib sm" aria-label="Close the Convert pane" title="Close" onClick={() => closePane("convert")}>
           <X size={15} />
         </button>
       </div>
@@ -70,8 +70,8 @@ export function ConvertPane() {
 }
 
 function ThisDocument({ tab }: { tab: Tab }) {
-  const target = convertPane.value?.target ?? "docx";
-  const setTarget = (t: ExportTarget) => (convertPane.value = { target: t });
+  const target = convertTarget.value;
+  const setTarget = (t: ExportTarget) => (convertTarget.value = t);
   const [opts, setOpts] = useState<{ docx: OfficeEngine[]; pptx: OfficeEngine[] } | null>(null);
   const [engine, setEngine] = useState<Record<string, OfficeEngine>>({});
   const [pages, setPages] = useState<"all" | "selected" | "range">("all");

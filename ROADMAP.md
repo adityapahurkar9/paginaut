@@ -492,13 +492,21 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
   and its PDF, a changed Markdown file, a box drawn on a copy, two scanned agreements, a long document and a scan
   against themselves); unit tests (number formats, word keys, list numbers, XML)
 
-## Phase 7.6 (0.7.60): Easier to use
-- [ ] Rework the menus, toolbar tabs and bars into fewer, clearer places: every command findable in one obvious spot,
-      related tools together, rarely used ones out of the way, bars over the document that don't pile up
-- [ ] Settings: one dialog (Help › Settings, and the command palette) with a tab per area, so every setting has one
-      central place instead of being spread over menus and panels: appearance (theme, night mode), opening and saving
-      (auto-save rotations…), Read and Book modes, comments and signing, text recognition (languages, downloads), Office
-      files (suite choices, LibreOffice download), memory and performance
+## Phase 7.6 (0.7.60): Easier to use (done)
+- [x] Toolbar tabs in the order work goes: File · Home · View · Comment · Tools · Sign · Help (read, review, change,
+      finish); each shows its own buttons below. Read and Book stay where they were (View tab, status bar)
+- [x] Menus vs panes: a tool with a short list keeps its menu (Insert, Forms, OCR, Stamp, Certificate, Theme); a long
+      one becomes a pane on the right: Organize (pages, marks on every page, document, getting content out). Tools tab
+      without the buttons it repeated from other tabs (rotate, delete, Comment, Sign); Stamp lists the stamps (Fill &
+      Sign marks are on the Sign tab)
+- [x] Panes on the right share one place (one open at a time): Organize, Sign, Convert, Markdown (for .md files)
+- [x] Side bar at the right edge: thin, a button per pane (icon and its name turned on its side). View › Side bar
+      (or right-click it, or its ⚙ button) ticks which buttons it shows and hides it; Settings › Side bar also puts
+      them in order. Remembered
+- [x] Settings (Help › Settings, File › Settings…, Ctrl+,, the command palette): one dialog with tabs: General (theme,
+      dark pages, cover page, field highlights, saving rotations), Read and Book (text size, font, spacing, margins,
+      alignment, paper), Side bar, Signing (a digital signature's defaults), Text recognition (languages, quality),
+      Office files (which program opens them, suite choices), Compare (its options). File menu keeps files only
 
 ## Phase 8 (0.8.0): Packaging, updates and signing
 - [ ] GitHub repository (the user has an account) hosting source, releases and update files

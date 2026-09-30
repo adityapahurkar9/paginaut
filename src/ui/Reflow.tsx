@@ -285,7 +285,6 @@ function Lightbox({ pic, pics, onClose }: { pic: Extract<Block, { k: "img" }>; p
 // ---------------------------------------------------------------- Aa panel
 
 export function TypePanel({ book }: { book: boolean }) {
-  const r = settings.value.reflow;
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const down = (e: PointerEvent) => {
@@ -300,6 +299,16 @@ export function TypePanel({ book }: { book: boolean }) {
       window.removeEventListener("keydown", key, true);
     };
   }, []);
+  return (
+    <div class={`type-panel ${book ? "in-book" : ""}`} ref={ref} onPointerDown={(e) => e.stopPropagation()}>
+      <TypeControls />
+    </div>
+  );
+}
+
+/** Text size, font, spacing, margins, alignment and paper for Read and Book modes (also in Settings). */
+export function TypeControls() {
+  const r = settings.value.reflow;
   const seg = <K extends keyof ReflowSettings>(key: K, opts: [ReflowSettings[K], preact.ComponentChild, string?][]) => (
     <div class="seg">
       {opts.map(([v, label, title]) => (
@@ -310,7 +319,7 @@ export function TypePanel({ book }: { book: boolean }) {
     </div>
   );
   return (
-    <div class={`type-panel ${book ? "in-book" : ""}`} ref={ref} onPointerDown={(e) => e.stopPropagation()}>
+    <>
       <div class="tp-row">
         <button class="ib sm" aria-label="Smaller text" onClick={() => zoomText(-1)}>
           <Minus size={15} />
@@ -330,7 +339,7 @@ export function TypePanel({ book }: { book: boolean }) {
       {seg("justify", [[true, <AlignJustify size={15} />, "Justified"], [false, <AlignLeft size={15} />, "Left"]])}
       <label>Paper</label>
       {seg("paper", [["auto", "Auto", "Follows the theme and dark pages"], ["white", <span class="sw white" />, "White"], ["sepia", <span class="sw sepia" />, "Sepia"], ["dark", <span class="sw dark" />, "Dark"]])}
-    </div>
+    </>
   );
 }
 

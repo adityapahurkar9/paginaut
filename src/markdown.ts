@@ -1,9 +1,10 @@
 // Markdown files: editing the source in the Markdown pane (right side), the pages following as you type, and
 // saving back to the .md file. (MuPDF lays Markdown out; the pages are made again from the text.)
+import { signal } from "@preact/signals";
 import { api } from "./api";
-import { convertPane, mdPane } from "./office";
 import { adoptSaved, setSaveOverride } from "./pages";
-import { settings, showToast, tabs, updateSettings, type Tab } from "./store";
+import { openPane, pane, togglePane } from "./panes";
+import { showToast, tabs, type Tab } from "./store";
 
 export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
 
@@ -14,23 +15,28 @@ export function mdSource(tab: Tab) {
   return sources.get(tab.key) ?? null;
 }
 
-export async function openMdPane(tab: Tab) {
-  if (!isMarkdown(tab.path)) return;
-  if (!sources.has(tab.key)) {
-    try {
-      const text = await api.markdownRead(tab.path);
-      sources.set(tab.key, { text, saved: text, timer: 0, showing: 0 });
-    } catch (e) {
-      return showToast(String(e), 5000);
-    }
+/** Reads the tab's Markdown source (once); false if it couldn't be read. */
+export async function loadMdSource(tab: Tab): Promise<boolean> {
+  if (sources.has(tab.key)) return true;
+  try {
+    const text = await api.markdownRead(tab.path);
+    if (!sources.has(tab.key)) sources.set(tab.key, { text, saved: text, timer: 0, showing: 0 });
+    mdLoaded.value++;
+    return true;
+  } catch (e) {
+    showToast(String(e), 5000);
+    return false;
   }
-  convertPane.value = null;
-  if (settings.value.signPane) updateSettings({ signPane: false });
-  mdPane.value = tab;
+}
+/** Bumped when a source is read, for the pane to show it. */
+export const mdLoaded = signal(0);
+
+export async function openMdPane(tab: Tab) {
+  if (isMarkdown(tab.path) && (await loadMdSource(tab))) openPane("markdown");
 }
 
 export function toggleMdPane(tab: Tab) {
-  if (mdPane.value === tab) mdPane.value = null;
+  if (pane.value === "markdown") togglePane("markdown");
   else void openMdPane(tab);
 }
 
@@ -86,7 +92,6 @@ tabs.subscribe((list) => {
       sources.delete(key);
     }
   }
-  if (mdPane.peek() && !list.includes(mdPane.peek()!)) mdPane.value = null;
 });
 
 // Save (Ctrl+S, closing the tab) writes the .md file when its source was edited; Save as still makes a PDF.

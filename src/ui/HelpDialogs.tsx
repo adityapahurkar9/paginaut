@@ -9,7 +9,7 @@ export const helpPanel = signal<"shortcuts" | "about" | null>(null);
 const SHORTCUTS: [string, [string, string][]][] = [
   ["Files", [
     ["Open", "Ctrl+O"], ["Save", "Ctrl+S"], ["Save as", "Ctrl+Shift+S"], ["New tab (Home)", "Ctrl+T"], ["Close tab", "Ctrl+W"],
-    ["Next / previous tab", "Ctrl+Tab / Ctrl+Shift+Tab"], ["File menu", "Alt+F"],
+    ["Next / previous tab", "Ctrl+Tab / Ctrl+Shift+Tab"], ["File menu", "Alt+F"], ["Settings", "Ctrl+,"],
   ]],
   ["Viewing", [
     ["Zoom in / out", "Ctrl+= / Ctrl+−  ·  Ctrl+wheel  ·  pinch"], ["Actual size", "Ctrl+0"], ["Fit page / fit width", "Ctrl+1 / Ctrl+2"],

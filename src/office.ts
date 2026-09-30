@@ -4,6 +4,7 @@
 import { signal } from "@preact/signals";
 import { api, type InstallEvent, type OfficeEngine, type OfficeEngines } from "./api";
 import { adoptSaved } from "./pages";
+import { openPane } from "./panes";
 import { ask, baseName, settings, showToast, updateSettings, type Tab } from "./store";
 
 /** Office files Paginaut opens (through a PDF made from them). */
@@ -174,24 +175,14 @@ export interface ConvertItem {
 /** Files waiting to become PDFs (the Convert pane's "Files to PDF"). */
 export const convertDialog = signal<{ items: ConvertItem[]; folder: string | null; running: boolean } | null>(null);
 
-/** The Convert pane (right side) is open, showing this conversion of the document. Shares the side with the Sign pane. */
+/** The conversion of the document the Convert pane (right side) shows. */
 export type ExportTarget = "docx" | "xlsx" | "pptx" | "md" | "images" | "txt";
-export const convertPane = signal<{ target: ExportTarget } | null>(null);
-/** The Markdown pane (editing a .md file's source), for this tab. */
-export const mdPane = signal<Tab | null>(null);
+export const convertTarget = signal<ExportTarget>("docx");
 
 export function openConvertPane(target?: ExportTarget) {
-  convertPane.value = { target: target ?? convertPane.value?.target ?? "docx" };
-  mdPane.value = null;
-  if (settings.value.signPane) updateSettings({ signPane: false });
+  if (target) convertTarget.value = target;
+  openPane("convert");
 }
-// Opening the Sign pane closes the others: one pane on the right at a time.
-settings.subscribe((s) => {
-  if (s.signPane) {
-    if (convertPane.peek()) convertPane.value = null;
-    if (mdPane.peek()) mdPane.value = null;
-  }
-});
 
 /** Adds files to "Files to PDF" (those already there stay) and shows the pane. */
 export function startConvert(paths: string[] = []) {

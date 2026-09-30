@@ -41,8 +41,6 @@ export interface Settings {
   /** Page numbers / headers / footers and watermark dialogs' last choices. */
   headers?: Partial<HeaderSettings>;
   watermark?: Partial<WatermarkSettings>;
-  /** The Sign pane on the right (signatures, Fill & Sign, certificates). */
-  signPane: boolean;
   /** Save rotations automatically (PDFs only, when nothing else changed). */
   autoSaveRotations: boolean;
   /** Which toolbar is showing (File is a menu, not a tab). */
@@ -61,6 +59,8 @@ export interface Settings {
   ocr: { langs: string[]; quality: "fast" | "best" };
   /** Which converter opens Office files ("auto": Microsoft Office, else LibreOffice, else the text preview). */
   officeEngine: "auto" | "msoffice" | "libreoffice" | "builtin";
+  /** The side bar at the right edge: its panes' buttons in order, those taken off it, and whether it shows. */
+  rail?: { order: string[]; hidden: string[]; visible: boolean };
   /** Compare's options, as last chosen. */
   compare?: Partial<import("./api").CompareOptions>;
 }
@@ -86,8 +86,6 @@ export const settings = signal<Settings>(
     ocr: { langs: ["eng"], quality: "fast" },
     officeEngine: "auto",
     ...load("paginaut.settings", {} as Partial<Settings>),
-    // The Sign pane starts closed; it opens from the Sign toolbar or when signing.
-    signPane: false,
   },
 );
 

@@ -5,7 +5,8 @@
 import { effect, signal } from "@preact/signals";
 import { invoke } from "@tauri-apps/api/core";
 import { annotTool, editAnnot, registerPlacer, selectWhenShown } from "./annots";
-import { activeTab, settings, showToast, updateSettings, type Tab } from "./store";
+import { activeTab, settings, showToast, type Tab } from "./store";
+import { openPane } from "./panes";
 
 export type SigKind = "signature" | "initials";
 
@@ -33,7 +34,7 @@ export const paneFocus = signal<{ section: PaneSection; n: number } | null>(null
 
 /** Opens the Sign pane, optionally scrolled to a section. */
 export function openSignPane(section?: PaneSection) {
-  updateSettings({ signPane: true });
+  openPane("sign");
   if (section) paneFocus.value = { section, n: (paneFocus.value?.n ?? 0) + 1 };
 }
 

@@ -7,6 +7,7 @@ import { api } from "./api";
 import { activeTab, closeTab, dialog, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs } from "./store";
 import * as P from "./pages";
 import * as C from "./compare";
+import { openSettings, settingsOpen } from "./ui/SettingsDialog";
 import { renderer } from "./render/RenderManager";
 import { App, dropping, tool } from "./ui/App";
 import { bookScreen, exitBook } from "./modes";
@@ -92,7 +93,7 @@ window.addEventListener("keydown", (e) => {
     e.stopPropagation();
   };
 
-  if (dialog.value || helpPanel.value) return; // a dialog is open; it handles its own keys
+  if (dialog.value || helpPanel.value || settingsOpen.value) return; // a dialog is open; it handles its own keys
   const tab = activeTab.value;
   const ready = tab?.status.value === "ready" ? tab : null;
 
@@ -106,6 +107,7 @@ window.addEventListener("keydown", (e) => {
       case "t": handled(); return openHome();
       case "f": handled(); return A.openFind();
       case "k": case "p": handled(); paletteOpen.value = true; return;
+      case ",": handled(); return openSettings();
       case "g": handled(); return (document.getElementById("page-input") as HTMLInputElement | null)?.focus();
       case "=": case "+": handled(); return A.zoomIn();
       case "-": handled(); return A.zoomOut();
