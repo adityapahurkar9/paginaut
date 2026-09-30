@@ -4,17 +4,15 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import * as A from "./actions";
 import { api } from "./api";
-import { activeTab, closeTab, dialog, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs } from "./store";
+import { activeTab, closeTab, dialog, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs, openSettings, settingsOpen } from "./store";
 import * as P from "./pages";
 import * as C from "./compare";
-import { openSettings, settingsOpen } from "./ui/SettingsDialog";
 import { renderer } from "./render/RenderManager";
 import { App, dropping, tool } from "./ui/App";
 import { bookScreen, exitBook } from "./modes";
 import { layoutEdit } from "./reflow/LayoutEditor";
 import { annotTool, deleteSelected, selectedAnnot, setAuthor } from "./annots";
 import { endLayoutEdit } from "./ui/LayoutPanel";
-import { helpPanel } from "./ui/HelpDialogs";
 import { creating, droppedPicture } from "./sign";
 import { fileMenuOpen } from "./ui/Toolbar";
 import { toggleGrid } from "./ui/PageGrid";
@@ -93,7 +91,7 @@ window.addEventListener("keydown", (e) => {
     e.stopPropagation();
   };
 
-  if (dialog.value || helpPanel.value || settingsOpen.value) return; // a dialog is open; it handles its own keys
+  if (dialog.value || settingsOpen.value) return; // a dialog is open; it handles its own keys
   const tab = activeTab.value;
   const ready = tab?.status.value === "ready" ? tab : null;
 
@@ -133,7 +131,7 @@ window.addEventListener("keydown", (e) => {
     if (k === "g" && ready) { handled(); return toggleGrid(ready); }
   }
   if (e.altKey && !ctrl && k === "f") { handled(); fileMenuOpen.value = true; return; }
-  if (e.key === "F1") { handled(); helpPanel.value = "shortcuts"; return; }
+  if (e.key === "F1") { handled(); openSettings("shortcuts"); return; }
   if (e.key === "F5") { handled(); A.toggleMode("book"); return; }
   if (e.key === "F4") { handled(); return A.toggleSidebar(); }
   if (e.key === "F11") { handled(); return A.toggleFullscreen(); }

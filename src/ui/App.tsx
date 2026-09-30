@@ -12,7 +12,6 @@ import { bookScreen } from "../modes";
 import { activeKey, activeTab, closeHome, closeTab, findOpen, HOME, homeOpen, openHome, recent, settings, tabs, type Tab } from "../store";
 import { Sidebar } from "./Sidebar";
 import { AskDialog, FindBar, Palette, PasswordDialog, Toast } from "./Overlays";
-import { HelpDialogs } from "./HelpDialogs";
 import { Ribbon, Toolbar, ViewControls } from "./Toolbar";
 import { ReflowHost } from "./Reflow";
 import { LayoutPanel } from "./LayoutPanel";
@@ -27,7 +26,7 @@ import { Home } from "./Home";
 import { SignPane } from "./SignPane";
 import { SigBar } from "./SigPanel";
 import { OcrBar, OcrDialog } from "./OcrUI";
-import { OfficeBar, OfficeDialog, openingText } from "./OfficeUI";
+import { OfficeBar, openingText } from "./OfficeUI";
 import { ConvertPane } from "./ConvertPane";
 import { MarkdownPane } from "./MarkdownPane";
 import { OrganizePane } from "./OrganizePane";
@@ -89,9 +88,7 @@ export function App() {
       <StatusBar />
       <Palette />
       <AskDialog />
-      <HelpDialogs />
       <OcrDialog />
-      <OfficeDialog />
       <CompareDialog />
       <SettingsDialog />
       <InsertDialog />

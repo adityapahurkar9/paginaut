@@ -507,6 +507,10 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       dark pages, cover page, field highlights, saving rotations), Read and Book (text size, font, spacing, margins,
       alignment, paper), Side bar, Signing (a digital signature's defaults), Text recognition (languages, quality),
       Office files (which program opens them, suite choices), Compare (its options). File menu keeps files only
+- [x] 0.7.61: dialogs that were settings merged into Settings: Office suite choices (with getting and removing
+      LibreOffice) → Office files; OCR's downloaded languages → Text recognition (per language: built in, download or
+      remove the standard and best models, get another language); Keyboard shortcuts and About → tabs of their own
+      (F1 still opens the shortcuts). Choices in Settings stay on one line; "Default order" for the side bar
 
 ## Phase 8 (0.8.0): Packaging, updates and signing
 - [ ] GitHub repository (the user has an account) hosting source, releases and update files

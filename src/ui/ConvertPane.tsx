@@ -7,9 +7,9 @@ import { X } from "lucide-preact";
 import { api, type ExportDone, type ExportFormat, type OfficeEngine } from "../api";
 import { bookScreen } from "../modes";
 import { parsePages } from "../ocr";
-import { convertTarget, officeDialog, openConvertPane, type ExportTarget } from "../office";
+import { convertTarget, openConvertPane, type ExportTarget } from "../office";
 import { closePane, pane } from "../panes";
-import { activeTab, baseName, type Tab } from "../store";
+import { activeTab, baseName, openSettings, type Tab } from "../store";
 import { FilesToPdf } from "./OfficeUI";
 import { testHook } from "./PagesUI";
 
@@ -60,7 +60,7 @@ export function ConvertPane() {
           <FilesToPdf />
         </section>
         <section class="pane-sec">
-          <button class="linkish pane-link" onClick={() => (officeDialog.value = true)}>
+          <button class="linkish pane-link" onClick={() => openSettings("office")}>
             Office suite choices…
           </button>
         </section>
@@ -160,7 +160,7 @@ function ThisDocument({ tab }: { tab: Tab }) {
       {unavailable && (
         <span class="secure-warn">
           PowerPoint files need LibreOffice (free) or Microsoft PowerPoint.{" "}
-          <button class="linkish" onClick={() => (officeDialog.value = true)}>
+          <button class="linkish" onClick={() => openSettings("office")}>
             Get LibreOffice…
           </button>
         </span>

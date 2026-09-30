@@ -30,13 +30,11 @@ import { redactTab, startRedact, stopRedact } from "../redact";
 import { openConvertPane } from "../office";
 import { closePane, pane, togglePane } from "../panes";
 import { railMenuItems } from "./Rail";
-import { openSettings } from "./SettingsDialog";
 import { isMarkdown, toggleMdPane } from "../markdown";
 import { pickAndConvert } from "./OfficeUI";
 import { openCompareSetup } from "../compare";
-import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
+import { activeTab, isDark, openFiles, openSettings, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
-import { helpPanel } from "./HelpDialogs";
 import { Menu, type MenuItem } from "./Overlays";
 
 type MenuState = { x: number; y: number; bottom?: number; items: MenuItem[]; width?: number } | null;
@@ -508,8 +506,8 @@ function HelpTools() {
     <>
       <TB icon={I(Settings2, 17)} label="Settings" title="Settings: every option in one place (Ctrl+,)" onClick={() => openSettings()} />
       <div class="sep" />
-      <TB icon={I(Keyboard, 17)} label="Keyboard shortcuts" title="Keyboard shortcuts (F1)" onClick={() => (helpPanel.value = "shortcuts")} />
-      <TB icon={I(Info, 17)} label="About Paginaut" onClick={() => (helpPanel.value = "about")} />
+      <TB icon={I(Keyboard, 17)} label="Keyboard shortcuts" title="Keyboard shortcuts (F1)" onClick={() => openSettings("shortcuts")} />
+      <TB icon={I(Info, 17)} label="About Paginaut" onClick={() => openSettings("about")} />
       <TB icon={I(RefreshCw, 17)} label="Check for updates" title="Coming in a later version (checks the GitHub releases)" disabled onClick={() => {}} />
     </>
   );

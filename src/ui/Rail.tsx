@@ -5,9 +5,8 @@ import { isMarkdown, openMdPane } from "../markdown";
 import { bookScreen } from "../modes";
 import { onRail, openPane, pane, PANE_IDS, railItems, railShown, setOnRail, setRailShown, togglePane, type PaneId } from "../panes";
 import { openSignPane } from "../sign";
-import { activeTab } from "../store";
+import { activeTab, openSettings } from "../store";
 import type { MenuItem } from "./Overlays";
-import { openSettings } from "./SettingsDialog";
 import { openMenuAt } from "./Toolbar";
 
 export const PANES: Record<PaneId, { label: string; title: string; icon: typeof Combine; available: () => boolean; open: () => void }> = {

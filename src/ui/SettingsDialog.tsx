@@ -1,23 +1,15 @@
 // Settings (Help › Settings, Ctrl+,): every setting in one place, a tab per area.
 import { useEffect } from "preact/hooks";
-import { signal } from "@preact/signals";
-import type { ComponentChildren } from "preact";
+import { Fragment, type ComponentChildren } from "preact";
 import { ArrowDown, ArrowUp, X } from "lucide-preact";
 import { compareOptions, setCompareOption } from "../compare";
-import { hasModel, loadLangs, ocrLangs, rememberChoice, type OcrQuality } from "../ocr";
-import { engines, loadEngines, officeDialog, setPreference } from "../office";
+import { deleteModel, downloadModel, downloads, loadLangs, ocrLangs, rememberChoice, stopDownload, type OcrLang, type OcrQuality } from "../ocr";
 import { moveOnRail, onRail, railOrder, railShown, resetRail, setOnRail, setRailShown } from "../panes";
-import { settings, updateSettings, type Settings } from "../store";
+import { settings, settingsOpen, updateSettings, type Settings, type SettingsTab } from "../store";
+import { About, Shortcuts } from "./HelpDialogs";
+import { OfficeSettings } from "./OfficeUI";
 import { PANES } from "./Rail";
 import { TypeControls } from "./Reflow";
-
-export type SettingsTab = "general" | "reading" | "sidebar" | "signing" | "ocr" | "office" | "compare";
-
-export const settingsOpen = signal<SettingsTab | null>(null);
-
-export function openSettings(tab: SettingsTab = "general") {
-  settingsOpen.value = tab;
-}
 
 const TABS: [SettingsTab, string][] = [
   ["general", "General"],
@@ -27,6 +19,8 @@ const TABS: [SettingsTab, string][] = [
   ["ocr", "Text recognition"],
   ["office", "Office files"],
   ["compare", "Compare"],
+  ["shortcuts", "Keyboard shortcuts"],
+  ["about", "About"],
 ];
 
 export function SettingsDialog() {
@@ -63,8 +57,10 @@ export function SettingsDialog() {
           {tab === "sidebar" && <SideBar />}
           {tab === "signing" && <Signing />}
           {tab === "ocr" && <Ocr />}
-          {tab === "office" && <Office />}
+          {tab === "office" && <OfficeSettings />}
           {tab === "compare" && <Compare />}
+          {tab === "shortcuts" && <Shortcuts />}
+          {tab === "about" && <About />}
         </div>
       </div>
     </div>
@@ -170,7 +166,7 @@ function SideBar() {
       </div>
       <div>
         <button class="btn sm" onClick={resetRail}>
-          Back to the usual
+          Default order
         </button>
       </div>
     </>
@@ -200,68 +196,95 @@ function Signing() {
   );
 }
 
+const mb = (n: number) => `${Math.max(1, Math.round(n / 1048576))} MB`;
+
 function Ocr() {
   const o = settings.value.ocr;
   useEffect(() => {
-    if (!ocrLangs.value.length) void loadLangs();
+    void loadLangs();
   }, []);
-  const langs = ocrLangs.value.filter((l) => hasModel(l, o.quality) || o.langs.includes(l.code));
+  const all = ocrLangs.value;
+  const active = downloads.value;
+  // Languages here (built in, downloaded or chosen) first; the rest can be downloaded.
+  const mine = all.filter((l) => l.builtin || l.fast || l.best || o.langs.includes(l.code));
+  const others = all.filter((l) => !mine.includes(l));
   const toggle = (code: string, on: boolean) => {
     const next = on ? [...o.langs, code] : o.langs.filter((c) => c !== code);
     if (next.length) rememberChoice(next, o.quality);
   };
+  const model = (l: OcrLang, q: OcrQuality) => {
+    const key = `${l.code}/${q}`;
+    const size = q === "best" ? l.bestSize : l.fastSize;
+    if (key in active) {
+      return (
+        <span class="set-dl">
+          <span class="rf-bar">
+            <span style={{ width: `${Math.round(active[key] * 100)}%` }} />
+          </span>
+          <button class="linkish" onClick={() => stopDownload(l.code, q)}>
+            Stop
+          </button>
+        </span>
+      );
+    }
+    if (q === "fast" && l.builtin) return <span class="muted">Built in</span>;
+    const has = q === "best" ? l.best : l.fast;
+    return has ? (
+      <button class="linkish danger" title="Delete the downloaded model" onClick={() => void deleteModel(l.code, q)}>
+        Remove ({mb(size)})
+      </button>
+    ) : (
+      <button class="linkish" onClick={() => void downloadModel(l.code, q)}>
+        Download ({mb(size)})
+      </button>
+    );
+  };
   return (
     <>
       <h3>Text recognition (OCR)</h3>
-      <span class="hint">The languages and quality Tools › OCR › Recognize text starts with. More languages can be downloaded there.</span>
-      <Field label="Quality" hint="Best reads hard scans better, with larger downloads per language.">
-        <Seg value={o.quality} items={[["fast", "Fast"], ["best", "Best"]]} set={(q: OcrQuality) => rememberChoice(o.langs, q)} />
+      <span class="hint">The languages Tools › OCR › Recognize text starts with, and the models downloaded for them (from Tesseract's official models).</span>
+      <Field label="Accuracy" hint={o.quality === "fast" ? "Quick and good for clear scans." : "Best for faint or low-quality scans; about 3× slower, larger models."}>
+        <Seg value={o.quality} items={[["fast", "Standard"], ["best", "Best"]]} set={(q: OcrQuality) => rememberChoice(o.langs, q)} />
       </Field>
-      <Field label="Languages" hint={langs.length ? undefined : "Reading the list…"}>
-        <div class="set-langs">
-          {langs.map((l) => (
-            <label key={l.code} class="check-row">
-              <input type="checkbox" checked={o.langs.includes(l.code)} onChange={(e) => toggle(l.code, (e.target as HTMLInputElement).checked)} />
-              {l.name}
-              {!hasModel(l, o.quality) && <small class="muted"> (not downloaded)</small>}
-            </label>
-          ))}
-        </div>
-      </Field>
-    </>
-  );
-}
-
-function Office() {
-  const pref = settings.value.officeEngine;
-  const e = engines.value;
-  useEffect(() => {
-    void loadEngines();
-  }, []);
-  const lo = !!(e?.pack || e?.installed);
-  const choice = (v: typeof pref, label: string, note: string, disabled = false) => (
-    <label class={`check-row office-choice ${disabled ? "off" : ""}`}>
-      <input type="radio" name="set-office" checked={pref === v} disabled={disabled} onChange={() => setPreference(v)} />
-      <span>
-        {label}
-        <small>{note}</small>
-      </span>
-    </label>
-  );
-  return (
-    <>
-      <h3>Office files</h3>
-      <span class="hint">Word, Excel and PowerPoint files open as PDFs made from them. The program that makes them decides how close they look.</span>
-      <Field label="Open Office files with">
-        {choice("auto", "The best one here", "Microsoft Office, else LibreOffice, else the text preview")}
-        {choice("msoffice", "Microsoft Office", e && !e.msoffice ? "Not installed" : "Word, Excel or PowerPoint", !!e && !e.msoffice)}
-        {choice("libreoffice", "LibreOffice", e && !lo ? "Not here yet: get it under Office suite choices" : "Free", !!e && !lo)}
-        {choice("builtin", "Text preview", "Quickest, but only the words")}
-      </Field>
-      <div>
-        <button class="btn sm" onClick={() => (officeDialog.value = true)}>
-          Office suite choices…
-        </button>
+      <div class="tool-field">
+        <label>Languages</label>
+        {!all.length ? (
+          <span class="hint">Reading the list…</span>
+        ) : (
+          <div class="set-ocr">
+            <span class="set-ocr-h">Use</span>
+            <span class="set-ocr-h">Language</span>
+            <span class="set-ocr-h">Standard</span>
+            <span class="set-ocr-h">Best</span>
+            {mine.map((l) => (
+              <Fragment key={l.code}>
+                <input type="checkbox" checked={o.langs.includes(l.code)} aria-label={`Use ${l.name}`} onChange={(e) => toggle(l.code, (e.target as HTMLInputElement).checked)} />
+                <span>{l.name}</span>
+                <span>{model(l, "fast")}</span>
+                <span>{model(l, "best")}</span>
+              </Fragment>
+            ))}
+          </div>
+        )}
+        {others.length > 0 && (
+          <select
+            class="inp sm set-ocr-add"
+            value=""
+            aria-label="Get another language"
+            onChange={(e) => {
+              const code = (e.target as HTMLSelectElement).value;
+              if (code) void downloadModel(code, o.quality);
+            }}
+          >
+            <option value="">Get another language…</option>
+            {others.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.name} ({mb(o.quality === "best" ? l.bestSize : l.fastSize)})
+              </option>
+            ))}
+          </select>
+        )}
+        <span class="hint">Each extra language ticked makes recognition slower: tick only the ones your documents use.</span>
       </div>
     </>
   );

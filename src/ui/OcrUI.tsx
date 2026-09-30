@@ -5,10 +5,10 @@ import { ScanText, X } from "lucide-preact";
 import { docSigs } from "../dsc";
 import * as P from "../pages";
 import {
-  deleteModel, dismissOcrState, dismissOffer, downloadModel, downloads, hasModel, looksScanned, ocrDialog, ocrLangs, ocrState,
+  dismissOcrState, dismissOffer, downloadModel, downloads, hasModel, looksScanned, ocrDialog, ocrLangs, ocrState,
   offerDismissed, parsePages, recognize, rememberChoice, startOcr, stopDownload, stopOcr, type OcrLang, type OcrQuality,
 } from "../ocr";
-import { settings, type Tab } from "../store";
+import { openSettings, settings, type Tab } from "../store";
 
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0)} MB`;
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -139,7 +139,6 @@ function OcrDialogInner({ tab }: { tab: Tab }) {
   const add = (code: string) => code && !chosen.includes(code) && setLangs([...chosen, code]);
   const ready = all.filter((l) => hasModel(l, quality) && !chosen.includes(l.code));
   const others = all.filter((l) => !hasModel(l, quality) && !chosen.includes(l.code));
-  const downloaded = all.filter((l) => l.fast || l.best);
 
   return (
     <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && !preparing && close()}>
@@ -259,26 +258,19 @@ function OcrDialogInner({ tab }: { tab: Tab }) {
         )}
         {error && <span class="error-text">{error}</span>}
 
-        {downloaded.length > 0 && (
-          <details class="ocr-manage">
-            <summary>Downloaded languages</summary>
-            {downloaded.map((l) => (
-              <div key={l.code} class="ocr-dl">
-                <span>{l.name}</span>
-                {l.fast && (
-                  <button class="btn ghost sm" onClick={() => void deleteModel(l.code, "fast")} title="Remove the standard model">
-                    Remove standard ({mb(l.fastSize)})
-                  </button>
-                )}
-                {l.best && (
-                  <button class="btn ghost sm" onClick={() => void deleteModel(l.code, "best")} title="Remove the best model">
-                    Remove best ({mb(l.bestSize)})
-                  </button>
-                )}
-              </div>
-            ))}
-          </details>
-        )}
+        <span class="hint">
+          Downloaded languages are kept for next time; remove them or get others in{" "}
+          <button
+            class="linkish"
+            onClick={() => {
+              close();
+              openSettings("ocr");
+            }}
+          >
+            Settings › Text recognition
+          </button>
+          .
+        </span>
 
         <div class="row">
           <button class="btn" onClick={close}>

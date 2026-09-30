@@ -1,10 +1,6 @@
+// Help content shown in Settings: keyboard shortcuts and about.
 import { useEffect, useState } from "preact/hooks";
-import { signal } from "@preact/signals";
 import { getVersion } from "@tauri-apps/api/app";
-import { X } from "lucide-preact";
-
-/** Which help panel is open. */
-export const helpPanel = signal<"shortcuts" | "about" | null>(null);
 
 const SHORTCUTS: [string, [string, string][]][] = [
   ["Files", [
@@ -28,36 +24,11 @@ const SHORTCUTS: [string, [string, string][]][] = [
   ]],
 ];
 
-export function HelpDialogs() {
-  const p = helpPanel.value;
-  useEffect(() => {
-    if (!p) return;
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        helpPanel.value = null;
-      }
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, [p]);
-  if (!p) return null;
-  return (
-    <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && (helpPanel.value = null)}>
-      <div class={`dialog help ${p}`} role="dialog" aria-label={p === "about" ? "About Paginaut" : "Keyboard shortcuts"}>
-        <button class="ib sm close" aria-label="Close" onClick={() => (helpPanel.value = null)}>
-          <X size={16} />
-        </button>
-        {p === "shortcuts" ? <Shortcuts /> : <About />}
-      </div>
-    </div>
-  );
-}
-
-function Shortcuts() {
+/** Settings › Keyboard shortcuts. */
+export function Shortcuts() {
   return (
     <>
-      <h2>Keyboard shortcuts</h2>
+      <h3>Keyboard shortcuts</h3>
       <div class="keys">
         {SHORTCUTS.map(([group, rows]) => (
           <section key={group}>
@@ -75,14 +46,15 @@ function Shortcuts() {
   );
 }
 
-function About() {
+/** Settings › About. */
+export function About() {
   const [version, setVersion] = useState("");
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
   }, []);
   return (
     <>
-      <h2>Paginaut {version}</h2>
+      <h3>Paginaut {version}</h3>
       <span class="muted">A fast reader and editor for PDFs, e-books, comics and images.</span>
       <div class="about-rows">
         <div><span>Engine</span><span>MuPDF 1.28.5 (native, multi-threaded)</span></div>

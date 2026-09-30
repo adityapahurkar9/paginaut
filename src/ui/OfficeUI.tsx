@@ -7,11 +7,11 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FileText, X } from "lucide-preact";
 import type { OfficeEngine } from "../api";
 import {
-  available, convertDialog, convertible, engineName, engines, install, installError, installLibreOffice, isOffice, likelyEngine, loadEngines, officeDialog, OFFICE_EXT, WEB_EXT,
+  available, convertDialog, convertible, engineName, engines, install, installError, installLibreOffice, isOffice, likelyEngine, loadEngines, OFFICE_EXT, WEB_EXT,
   reconvert, reconverting, removeLibreOffice, runConvert, setPreference, startConvert, stopInstall, type ConvertItem,
 } from "../office";
 import * as P from "../pages";
-import { baseName, openFiles, settings, type Tab } from "../store";
+import { baseName, openFiles, openSettings, settings, type Tab } from "../store";
 import { startMergePictures, testHook } from "./PagesUI";
 
 const mb = (bytes: number) => `${Math.round(bytes / (1 << 20)).toLocaleString()} MB`;
@@ -86,7 +86,7 @@ export function OfficeBar({ tab }: { tab: Tab }) {
             Show with {engineName(better[0], from)}
           </button>
         ) : (
-          <button class="btn ghost" onClick={() => (officeDialog.value = true)}>
+          <button class="btn ghost" onClick={() => openSettings("office")}>
             Get LibreOffice (free)…
           </button>
         )}
@@ -133,23 +133,11 @@ const STAGES: Record<string, string> = {
   preparing: "Getting it ready…",
 };
 
-export function OfficeDialog() {
-  const open_ = officeDialog.value;
+/** Settings › Office files: the suites here (and getting LibreOffice), and which one opens Office files. */
+export function OfficeSettings() {
   useEffect(() => {
-    if (open_) void loadEngines(true);
-  }, [open_]);
-  useEffect(() => {
-    if (!open_) return;
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        officeDialog.value = false;
-      }
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, [open_]);
-  if (!open_) return null;
+    void loadEngines(true);
+  }, []);
   const e = engines.value;
   const inst = install.value;
   const pref = settings.value.officeEngine;
@@ -165,92 +153,80 @@ export function OfficeDialog() {
     </label>
   );
   return (
-    <div class="overlay" onPointerDown={(ev) => ev.target === ev.currentTarget && (officeDialog.value = false)}>
-      <div class="dialog tool-dialog office-dialog" role="dialog" aria-label="Office files">
-        <button class="ib sm close" aria-label="Close" onClick={() => (officeDialog.value = false)}>
-          <X size={16} />
-        </button>
-        <h2>Office files</h2>
-        <span class="hint">
-          Word, Excel and PowerPoint files (and OpenDocument ones) open as PDFs made from them, so you can read, mark up, sign and save them like
-          any PDF. How closely they match the original depends on the program that makes the PDF.
-        </span>
-
-        <div class="tool-field">
-          <label>Office suite choices</label>
-          {!e ? (
-            <span class="hint">Looking…</span>
-          ) : (
-            <div class="office-engines">
-              <div class="office-engine">
-                <Suite name="Microsoft Office" on={!!ms} />
-                {ms && <span>{`${ms.version} · ${apps}`}</span>}
-                <small>{ms ? "Documents look exactly as their authors saw them." : "When it's installed, Paginaut uses it."}</small>
+    <>
+      <h3>Office files</h3>
+      <span class="hint">
+        Word, Excel and PowerPoint files (and OpenDocument ones) open as PDFs made from them, so you can read, mark up, sign and save them like any PDF.
+        How closely they match the original depends on the program that makes the PDF.
+      </span>
+    <div class="tool-field">
+      <label>Office suite choices</label>
+      {!e ? (
+        <span class="hint">Looking…</span>
+      ) : (
+        <div class="office-engines">
+          <div class="office-engine">
+            <Suite name="Microsoft Office" on={!!ms} />
+            {ms && <span>{`${ms.version} · ${apps}`}</span>}
+            <small>{ms ? "Documents look exactly as their authors saw them." : "When it's installed, Paginaut uses it."}</small>
+          </div>
+          <div class="office-engine">
+            <Suite name="LibreOffice" on={!!(e.pack || e.installed)} />
+            {e.pack ? (
+              <span>
+                Paginaut's copy, version {e.pack.version} · {mb(e.pack.size)}{" "}
+                <button class="linkish" disabled={!!inst} onClick={() => void removeLibreOffice()}>
+                  Remove
+                </button>
+              </span>
+            ) : (
+              e.installed && <span>Installed{e.installed.version ? `, version ${e.installed.version}` : ""} · {e.installed.path}</span>
+            )}
+            <small>Free. Very close to Office in our tests; spreadsheets may break pages in other places.</small>
+            {!e.pack && !inst && (
+              <div class="ps-line">
+                <button class="btn sm" onClick={() => void installLibreOffice()}>
+                  {e.installed ? "Get Paginaut's own copy (~360 MB)" : "Download LibreOffice (~360 MB)"}
+                </button>
+                <span class="hint">From the Document Foundation; checked, then unpacked for Paginaut only (no installation, about 600 MB on disk).</span>
               </div>
-              <div class="office-engine">
-                <Suite name="LibreOffice" on={!!(e.pack || e.installed)} />
-                {e.pack ? (
-                  <span>
-                    Paginaut's copy, version {e.pack.version} · {mb(e.pack.size)}{" "}
-                    <button class="linkish" disabled={!!inst} onClick={() => void removeLibreOffice()}>
-                      Remove
-                    </button>
-                  </span>
-                ) : (
-                  e.installed && <span>Installed{e.installed.version ? `, version ${e.installed.version}` : ""} · {e.installed.path}</span>
-                )}
-                <small>Free. Very close to Office in our tests; spreadsheets may break pages in other places.</small>
-                {!e.pack && !inst && (
-                  <div class="ps-line">
-                    <button class="btn sm" onClick={() => void installLibreOffice()}>
-                      {e.installed ? "Get Paginaut's own copy (~360 MB)" : "Download LibreOffice (~360 MB)"}
-                    </button>
-                    <span class="hint">From the Document Foundation; checked, then unpacked for Paginaut only (no installation, about 600 MB on disk).</span>
-                  </div>
-                )}
-                {!inst && installError.value && <span class="error-text">Couldn't set up LibreOffice: {installError.value}</span>}
-                {inst && (
-                  <div class="ocr-dl office-dl">
-                    <span>
-                      {inst.stopping ? "Stopping…" : STAGES[inst.stage]}
-                      {inst.stage === "downloading" && inst.total ? ` · ${mb(inst.done)} of ${mb(inst.total)}` : ""}
-                    </span>
-                    <div class="rf-bar">
-                      <div style={{ width: inst.stage === "downloading" && inst.total ? `${Math.round((inst.done / inst.total) * 100)}%` : inst.stage === "finding" ? "0%" : "100%" }} />
-                    </div>
-                    {(inst.stage === "finding" || inst.stage === "downloading") && (
-                      <button class="btn ghost sm" disabled={inst.stopping} onClick={stopInstall}>
-                        Stop
-                      </button>
-                    )}
-                  </div>
+            )}
+            {!inst && installError.value && <span class="error-text">Couldn't set up LibreOffice: {installError.value}</span>}
+            {inst && (
+              <div class="ocr-dl office-dl">
+                <span>
+                  {inst.stopping ? "Stopping…" : STAGES[inst.stage]}
+                  {inst.stage === "downloading" && inst.total ? ` · ${mb(inst.done)} of ${mb(inst.total)}` : ""}
+                </span>
+                <div class="rf-bar">
+                  <div style={{ width: inst.stage === "downloading" && inst.total ? `${Math.round((inst.done / inst.total) * 100)}%` : inst.stage === "finding" ? "0%" : "100%" }} />
+                </div>
+                {(inst.stage === "finding" || inst.stage === "downloading") && (
+                  <button class="btn ghost sm" disabled={inst.stopping} onClick={stopInstall}>
+                    Stop
+                  </button>
                 )}
               </div>
-              <div class="office-engine">
-                <Suite name="Text preview" on label="Always available (built in)" />
-                <small>Shows the words of .docx, .xlsx and .pptx files, without their formatting.</small>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
+          <div class="office-engine">
+            <Suite name="Text preview" on label="Always available (built in)" />
+            <small>Shows the words of .docx, .xlsx and .pptx files, without their formatting.</small>
+          </div>
         </div>
-
-        <div class="tool-field">
-          <label>Open Office files with</label>
-          {choice("auto", "The best one here", "Microsoft Office, else LibreOffice, else the text preview")}
-          {choice("msoffice", "Microsoft Office", "Word, Excel or PowerPoint", !!e && !ms)}
-          {choice("libreoffice", "LibreOffice", "", !!e && !e.pack && !e.installed)}
-          {choice("builtin", "Text preview", "Quickest, but only the words")}
-          <span class="hint">Any file can be converted again with another program from the bar above it.</span>
-        </div>
-
-        <div class="row">
-          <span style={{ flex: 1 }} />
-          <button class="btn pri" onClick={() => (officeDialog.value = false)}>
-            Done
-          </button>
-        </div>
-      </div>
+      )}
     </div>
+
+    <div class="tool-field">
+      <label>Open Office files with</label>
+      {choice("auto", "The best one here", "Microsoft Office, else LibreOffice, else the text preview")}
+      {choice("msoffice", "Microsoft Office", "Word, Excel or PowerPoint", !!e && !ms)}
+      {choice("libreoffice", "LibreOffice", "", !!e && !e.pack && !e.installed)}
+      {choice("builtin", "Text preview", "Quickest, but only the words")}
+      <span class="hint">Any file can be converted again with another program from the bar above it.</span>
+    </div>
+
+    </>
   );
 }
 
@@ -267,7 +243,6 @@ async function pickFiles(web = false): Promise<string[]> {
 
 /** Files to PDF (in the Convert pane), starting with files picked (Office files first, or web pages). */
 export async function pickAndConvert(web = false) {
-  officeDialog.value = false;
   const files = await pickFiles(web);
   if (files.length) startConvert(files);
 }
@@ -345,7 +320,7 @@ export function FilesToPdf() {
       {engines.value && !engines.value.msoffice && !engines.value.pack && !engines.value.installed && d.items.some((i) => isOffice(i.path)) && (
         <span class="secure-warn">
           Office files need Microsoft Office or LibreOffice.{" "}
-          <button class="linkish" onClick={() => (officeDialog.value = true)}>
+          <button class="linkish" onClick={() => openSettings("office")}>
             Get LibreOffice (free)…
           </button>
         </span>

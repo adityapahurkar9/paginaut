@@ -366,16 +366,13 @@ kbd { font: 11px var(--font); padding: 2px 6px; border-radius: 5px; border: 1px 
 .readbar .rb-page { min-width: 84px; text-align: center; color: var(--tx2); font-variant-numeric: tabular-nums; }
 
 /* ---------------------------------------------------------------- help */
-.dialog.help { position: relative; width: 640px; max-width: calc(100% - 32px); margin-top: 70px; max-height: calc(100% - 110px); overflow: auto; }
-.dialog.help.about { width: 460px; }
-.dialog.help .close { position: absolute; top: 12px; right: 12px; }
 .keys { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 26px; }
 .keys h3 { margin: 10px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tx3); }
 .krow { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--bd2); font-size: 12.5px; }
 .krow kbd { font-family: inherit; color: var(--tx2); text-align: right; }
 .about-rows { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .about-rows div { display: flex; gap: 14px; }
-.about-rows div span:first-child { width: 70px; color: var(--tx3); flex-shrink: 0; }
+.about-rows div span:first-child { width: 110px; color: var(--tx3); flex-shrink: 0; }
 .dialog .muted { color: var(--tx2); }
 @media (max-width: 700px) { .keys { grid-template-columns: 1fr; } }
 .app.reading .pg-ctl { display: none; }
@@ -1110,3 +1107,17 @@ body.text-edit .pg { cursor: default; }
 .set-rail-row small { color: var(--tx3); }
 .set-rail-row.off svg, .set-rail-row.off span { opacity: 0.5; }
 .set-langs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; }
+/* Choices in Settings keep to one line. */
+.set-body .seg .segb { flex: 0 0 auto; white-space: nowrap; padding: 0 14px; }
+.set-type .seg .segb { flex: 1; padding: 0 8px; }
+.set-body .keys h3 { font-size: 12px; margin: 10px 0 6px; }
+.set-ocr { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px 18px; font-size: 13px; }
+.set-ocr-h { font-size: 11px; font-weight: 700; color: var(--tx3); text-transform: uppercase; letter-spacing: 0.04em; }
+.set-ocr .muted { color: var(--tx3); font-size: 12px; }
+.set-ocr .linkish { font-size: 12.5px; white-space: nowrap; }
+.linkish.danger { color: #d64541; }
+.set-dl { display: inline-flex; align-items: center; gap: 8px; }
+.set-dl .rf-bar { width: 70px; display: inline-block; }
+.set-dl .rf-bar span { display: block; height: 100%; background: var(--acc); }
+.set-ocr-add { align-self: flex-start; margin-top: 6px; }
+.set-ocr .linkish { padding: 0; }

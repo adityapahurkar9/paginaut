@@ -19,15 +19,12 @@ import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea 
 import { addPicture, toggleTextEdit } from "../textedit";
 import { isMarkdown, openMdPane } from "../markdown";
 import { startRedact } from "../redact";
-import { officeDialog } from "../office";
 import { pickAndConvert } from "./OfficeUI";
 import { openCompareSetup } from "../compare";
 import { railShown, setRailShown, togglePane } from "../panes";
-import { openSettings } from "./SettingsDialog";
 import { addBookmarkHere } from "./Sidebar";
 import { removeStamps } from "../stamps";
-import { helpPanel } from "./HelpDialogs";
-import { activeTab, baseName, dialog, findOpen, openFiles, paletteOpen, recent, settings, toast, unlockTab, updateSettings, type Tab } from "../store";
+import { activeTab, baseName, dialog, findOpen, openFiles, openSettings, paletteOpen, recent, settings, toast, unlockTab, updateSettings, type Tab } from "../store";
 
 // ---------------------------------------------------------------- menu
 
@@ -225,7 +222,7 @@ function commands(): Item[] {
     c("Convert to text…", withTab((t) => startExport(t, "txt")), "", hasDoc),
     c("Convert web pages (HTML) to PDF…", () => void pickAndConvert(true), ""),
     c("Convert images to one PDF…", () => void startMergePictures(), ""),
-    c("Office suite choices: programs that open Office files, get LibreOffice…", () => (officeDialog.value = true), ""),
+    c("Office suite choices: programs that open Office files, get LibreOffice…", () => openSettings("office"), ""),
     c("Compare files (PDF with PDF, Word, PowerPoint, Excel or Markdown)…", () => openCompareSetup(), ""),
     c("Settings…", () => openSettings(), "Ctrl+,"),
     c("Organize pane: pages, page numbers, watermark, protect, pictures out", () => togglePane("organize"), ""),
@@ -285,8 +282,8 @@ function commands(): Item[] {
       () => updateSettings({ autoSaveRotations: !settings.value.autoSaveRotations }), ""),
     c("Next tab", A.nextTab, "Ctrl+Tab"),
     c("Close tab", A.closeActive, "Ctrl+W", () => !!activeTab.value),
-    c("Keyboard shortcuts", () => (helpPanel.value = "shortcuts"), "F1"),
-    c("About Paginaut", () => (helpPanel.value = "about"), ""),
+    c("Keyboard shortcuts", () => openSettings("shortcuts"), "F1"),
+    c("About Paginaut", () => openSettings("about"), ""),
   ];
 }
 

@@ -231,6 +231,12 @@ export const activeTab = computed(() => tabs.value.find((t) => t.key === activeK
 // ---------------------------------------------------------------- transient UI
 
 export const paletteOpen = signal(false);
+/** The Settings dialog, at one of its tabs. */
+export type SettingsTab = "general" | "reading" | "sidebar" | "signing" | "ocr" | "office" | "compare" | "shortcuts" | "about";
+export const settingsOpen = signal<SettingsTab | null>(null);
+export function openSettings(tab: SettingsTab = "general") {
+  settingsOpen.value = tab;
+}
 export const findOpen = signal(false);
 export const toast = signal<{ text: string; id: number } | null>(null);
 

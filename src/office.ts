@@ -117,7 +117,6 @@ export async function reconvert(tab: Tab, engine: OfficeEngine) {
 
 // ---------------------------------------------------------------- Paginaut's LibreOffice
 
-export const officeDialog = signal(false);
 export const install = signal<{ stage: InstallEvent["stage"]; done: number; total: number; stopping?: boolean } | null>(null);
 
 /** Why the last setup failed (shown in the Office files dialog). */
