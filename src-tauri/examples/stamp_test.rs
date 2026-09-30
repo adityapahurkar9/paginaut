@@ -56,9 +56,13 @@ fn main() {
     check("replace, not pile up", t0.matches("Page 1 of 1000").count() == 1, format!("{} times", t0.matches("Page 1 of 1000").count()));
 
     // 3. A Marathi header (shaped by MuPDF's layout, fonts built in).
-    d.stamp_pages(&[StampPage { page: 1, parts: vec![text("पान क्रमांक २ — महाराष्ट्र", 11.0, w - 72.0, 0, [1.0, 0.0, 0.0, 1.0, 36.0, 20.0])] }], "Header", false, false).unwrap();
+    // Joined letters (क्र, ष्ट्र) and a vowel sign drawn before its letter (कि) copy as written (ActualText).
+    let marathi = "पान क्रमांक २ — महाराष्ट्र किंमत";
+    d.stamp_pages(&[StampPage { page: 1, parts: vec![text(marathi, 11.0, w - 72.0, 0, [1.0, 0.0, 0.0, 1.0, 36.0, 20.0])] }], "Header", false, false).unwrap();
     let t1 = d.text(1).unwrap().lock().all();
-    check("Marathi header", t1.contains("महाराष्ट्र") || t1.contains("पान"), t1.lines().find(|l| l.contains('प')).unwrap_or("").to_string());
+    check("Marathi header", t1.contains(marathi), t1.lines().find(|l| l.contains('प')).unwrap_or("").to_string());
+    let found = serde_json::from_str::<Vec<serde_json::Value>>(&d.text(1).unwrap().lock().find(&d.bounds(1).unwrap(), "क्रमांक", 0, false).unwrap()).unwrap().len();
+    check("Marathi search", found == 1, format!("{found} found"));
 
     // 4. Watermarks: text at 45° behind, a picture in front, faint.
     let (cx, cy) = (w / 2.0, h / 2.0);

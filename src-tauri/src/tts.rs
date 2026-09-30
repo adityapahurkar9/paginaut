@@ -7,7 +7,7 @@ use windows::core::{Interface, HSTRING};
 use windows::Media::Core::SpeechCue;
 use windows::Media::SpeechSynthesis::{SpeechSynthesizer, VoiceGender};
 use windows::Storage::Streams::DataReader;
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{CoIncrementMTAUsage, CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
 #[derive(Serialize)]
 pub struct Voice {
@@ -30,7 +30,13 @@ pub struct Word {
 /// Runs `f` with COM started on this thread (WinRT needs it), and ended again after: the blocking pool's threads
 /// are shared, and other work on them starts its own apartment. A thread already in one (either kind) is fine
 /// for the speech classes, which are agile. Everything WinRT is released inside `f`.
+///
+/// The multithreaded apartment itself is kept for the life of the process: ending it as the last thread in it
+/// leaves (crashes) while the speech engine's own threads still finish their work.
 fn with_com<R>(f: impl FnOnce() -> R) -> R {
+    static MTA: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    // SAFETY: the cookie is never given back, so the apartment lives as long as the process.
+    MTA.get_or_init(|| unsafe { CoIncrementMTAUsage() }.is_ok());
     // SAFETY: balanced below; CoUninitialize only after a successful CoInitializeEx (S_OK or S_FALSE).
     let started = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
     let r = f();

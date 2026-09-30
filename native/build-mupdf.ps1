@@ -47,6 +47,63 @@ $new = "	md_mimetypes,`n	md_recognize_doc_content,`n	1`n};"
 if ($src.Contains($old)) { Set-Content $md $src.Replace($old, $new) -NoNewline }
 elseif (-not $src.Contains($new)) { Write-Warning "md.c changed: check the Markdown handler still asks for its folder (wants_dir)" }
 
+# The PDF writer device drops marked text (ActualText, Alt): text shaped from several letters into one glyph
+# (Indic conjuncts, Arabic forms) that Paginaut stamps or edits in copied and searched as blanks, since a PDF
+# font's ToUnicode maps single glyphs. Written as a /Span now; paginaut.c wraps such text in ActualText.
+$dev = Join-Path $root "source\pdf\pdf-device.c"
+$src = Get-Content $dev -Raw
+if (-not $src.Contains("pdf_dev_begin_metatext")) {
+  $fns = @'
+/* Paginaut: marked text as a /Span, so glyphs shaped from several letters copy and search as the letters. */
+static void
+pdf_dev_begin_metatext(fz_context *ctx, fz_device *dev, fz_metatext meta, const char *text)
+{
+	pdf_device *pdev = (pdf_device*)dev;
+	gstate *gs;
+	const char *key = meta == FZ_METATEXT_ACTUALTEXT ? "ActualText" : meta == FZ_METATEXT_ABBREVIATION ? "E" : "Alt";
+	pdf_dev_end_text(ctx, pdev);
+	gs = CURRENT_GSTATE(pdev);
+	fz_append_printf(ctx, gs->buf, "/Span <</%s <FEFF", key);
+	while (text && *text)
+	{
+		int c;
+		text += fz_chartorune(&c, text);
+		if (c >= 0x10000)
+		{
+			c -= 0x10000;
+			fz_append_printf(ctx, gs->buf, "%04X%04X", 0xD800 + (c >> 10), 0xDC00 + (c & 0x3FF));
+		}
+		else
+			fz_append_printf(ctx, gs->buf, "%04X", c);
+	}
+	fz_append_string(ctx, gs->buf, ">>> BDC\n");
+}
+
+static void
+pdf_dev_end_metatext(fz_context *ctx, fz_device *dev)
+{
+	pdf_device *pdev = (pdf_device*)dev;
+	pdf_dev_end_text(ctx, pdev);
+	fz_append_string(ctx, CURRENT_GSTATE(pdev)->buf, "EMC\n");
+}
+
+'@
+  $at = "fz_device *pdf_new_pdf_device(fz_context *ctx"
+  $reg = "`tdev->super.end_tile = pdf_dev_end_tile;"
+  if (-not ($src.Contains($at) -and $src.Contains($reg))) { throw "pdf-device.c changed: the ActualText patch needs a new place" }
+  $src = $src.Replace($at, $fns + $at).Replace($reg, $reg + "`n`tdev->super.begin_metatext = pdf_dev_begin_metatext;`n`tdev->super.end_metatext = pdf_dev_end_metatext;")
+  Set-Content $dev $src -NoNewline
+}
+
+# Text extraction counts what's left of an ActualText in bytes where it means letters: with letters beyond
+# ASCII (Devanagari takes 3 bytes each) the end of the replacement came out twice ("क्रमांकमांक").
+$stext = Join-Path $root "source\fitz\stext-device.c"
+$src = Get-Content $stext -Raw
+$old = "flush_actualtext(ctx, dev, actualtext, i, i + (int)strlen(actualtext) - (span->len - end));"
+$new = "flush_actualtext(ctx, dev, actualtext, i, i + (int)fz_utflen(actualtext) - (span->len - end));"
+if ($src.Contains($old)) { Set-Content $stext $src.Replace($old, $new) -NoNewline }
+elseif (-not $src.Contains($new)) { Write-Warning "stext-device.c changed: check ActualText is still counted in letters" }
+
 $env:CL = "/MP /DTOFU_CJK"
 $target = if ($Clean) { "libmupdf:Rebuild" } else { "libmupdf" }
 & $msbuild (Join-Path $root "platform\win32\mupdf.sln") "/target:$target" `

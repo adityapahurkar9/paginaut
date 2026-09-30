@@ -294,8 +294,13 @@ Hindi are shaped properly. Placed on the page as shown (turned pages get them at
 - [x] Watermark: text (font, size, colour, bold) or a picture (width as % of the page), angle 0/45/-45/90, top, middle
       or bottom, in front or behind, opacity, which pages; in its own "Watermark" layer (optional content), marked
       as a watermark for Acrobat (src-tauri/examples/stamp_test.rs)
-- [ ] Copy and search of stamped Devanagari text: conjunct letters come out as unknown characters (the shaped
-      glyphs have no text mapping); they look right
+- [x] Copy and search of stamped Devanagari text (0.8.3): joined letters (क्र, ष्ट्र, ज्ञ), vowel signs drawn
+      before their letter (कि) and Arabic joining forms are drawn inside ActualText holding their letters (a
+      pass-through device around the HTML engine's text, for stamps, edited text and redaction labels); plain
+      letters and spaces stay as they are, so words stay searchable one by one. Two MuPDF patches in
+      native/build-mupdf.ps1: its PDF writer device now writes ActualText (it dropped it), and its text
+      extraction counted what's left of an ActualText in bytes, repeating the end of non-English replacements
+      (which also affected other people's PDFs). Check: examples/shaped_dump.rs, stamp_test's exact Marathi line
 
 Document details:
 - [x] Bookmarks editor in the Outline panel: + Bookmark (for the page you're on; selected text becomes the title),
@@ -622,3 +627,10 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       page-turn edges doesn't move the reading; turning a page doesn't stop it; a removed voice falls back to the
       script match; voice/speed changes while paused stay paused; the Recognize dialog counts recognized pages
       from the page objects (no page loads under the document lock); Excel keeps "12.0%"'s decimals
+
+### 0.8.3
+- [x] Copy and search of stamped and edited Devanagari text (see Phase 6.2)
+- [x] Fix: 0.8.2's review change ended COM's multithreaded apartment after each spoken paragraph; as the last
+      thread in it, that tore it down under the speech engine's own threads and crashed (the unit tests caught
+      it one run in three). The apartment is now kept for the life of the process (CoIncrementMTAUsage), and
+      each call still starts and ends COM on its thread. The 0.8.2 build was never published

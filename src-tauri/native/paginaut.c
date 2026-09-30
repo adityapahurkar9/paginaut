@@ -3329,6 +3329,152 @@ static fz_matrix to_matrix(const float m[6])
 	return fz_make_matrix(m[0], m[1], m[2], m[3], m[4], m[5]);
 }
 
+/* ---------------------------------------------------------------- shaped text
+
+ * Text the HTML engine shapes (Indic conjuncts and reordered vowel signs, Arabic joining forms) has glyphs that
+ * stand for several letters, or for none in particular. A PDF font's ToUnicode maps single glyphs, so such text
+ * copied and searched as blanks or in the wrong order. Runs of it are drawn inside ActualText holding their
+ * letters (in reading order: the HTML engine lists a cluster's letters after its first glyph); plain letters
+ * and spaces are left as they are, so words stay searchable one by one. MuPDF's PDF writer device is patched
+ * to write it (native/build-mupdf.ps1). */
+
+/* A letter from a script that is shaped: its glyph may be a joined or positional form. */
+static int shaped_letter(int ucs)
+{
+	return ucs >= 0x0590;
+}
+
+/* Where the cluster starting at item i ends: an item and those after it that are extra letters (no glyph) or
+ * extra glyphs (no letter). */
+static int cluster_end(const fz_text_span *span, int i)
+{
+	int j = i + 1;
+	while (j < span->len && (span->items[j].gid < 0 || span->items[j].ucs < 0))
+		j++;
+	return j;
+}
+
+static int cluster_shaped(const fz_text_span *span, int i, int end)
+{
+	return end - i > 1 || span->items[i].gid < 0 || shaped_letter(span->items[i].ucs);
+}
+
+/* Items [a, b) of a span as text of their own, inside ActualText when shaped. */
+static void shaped_run(fz_context *ctx, fz_device *target, const fz_text_span *span, int a, int b, int shaped,
+	fz_matrix ctm, fz_colorspace *cs, const float *color, float alpha, fz_color_params cp)
+{
+	fz_text *t = NULL;
+	char *letters = NULL;
+	int *order = NULL;
+	int began = 0, m = b - a;
+	fz_var(t);
+	fz_var(letters);
+	fz_var(order);
+	fz_var(began);
+	fz_try(ctx)
+	{
+		size_t n = 0;
+		t = fz_new_text(ctx);
+		order = fz_malloc(ctx, (size_t)m * sizeof(int));
+		for (int k = 0; k < m; k++)
+			order[k] = a + k;
+		if (shaped)
+		{
+			letters = fz_malloc(ctx, (size_t)m * FZ_UTFMAX + 1);
+			for (int i = a; i < b; i++)
+				if (span->items[i].ucs > 0)
+					n += fz_runetochar(letters + n, span->items[i].ucs);
+			letters[n] = 0;
+			/* The letters are listed in reading order, so a vowel sign drawn before its letter (the i of कि)
+			 * comes after it: drawn so, reading the text back jumps backwards and starts a new word.
+			 * Left-to-right text is drawn left to right (a stable sort); the ActualText keeps the reading order. */
+			if (!(span->bidi_level & 1))
+				for (int k = 1; k < m; k++)
+				{
+					int v = order[k], j = k;
+					for (; j > 0 && span->items[order[j - 1]].x > span->items[v].x; j--)
+						order[j] = order[j - 1];
+					order[j] = v;
+				}
+		}
+		for (int k = 0; k < m; k++)
+		{
+			const fz_text_item *it = &span->items[order[k]];
+			fz_matrix trm = span->trm;
+			trm.e = it->x;
+			trm.f = it->y;
+			fz_show_glyph_aux(ctx, t, span->font, trm, it->adv, it->gid, it->ucs, it->cid, span->wmode, span->bidi_level,
+				(fz_bidi_direction)span->markup_dir, (fz_text_language)span->language);
+		}
+		if (letters)
+		{
+			fz_begin_metatext(ctx, target, FZ_METATEXT_ACTUALTEXT, letters);
+			began = 1;
+		}
+		fz_fill_text(ctx, target, t, ctm, cs, color, alpha, cp);
+		if (began)
+		{
+			began = 0;
+			fz_end_metatext(ctx, target);
+		}
+	}
+	fz_always(ctx)
+	{
+		if (began)
+			fz_end_metatext(ctx, target);
+		fz_drop_text(ctx, t);
+		fz_free(ctx, letters);
+		fz_free(ctx, order);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+static void st_fill_text(fz_context *ctx, fz_device *dev, const fz_text *text, fz_matrix ctm, fz_colorspace *cs, const float *color, float alpha, fz_color_params cp)
+{
+	fz_device *target = dev->passthrough;
+	int any = 0;
+	for (const fz_text_span *span = text->head; span && !any; span = span->next)
+		for (int i = 0; i < span->len && !any; i = cluster_end(span, i))
+			any = cluster_shaped(span, i, cluster_end(span, i));
+	if (!any)
+	{
+		fz_fill_text(ctx, target, text, ctm, cs, color, alpha, cp);
+		return;
+	}
+	for (const fz_text_span *span = text->head; span; span = span->next)
+	{
+		int i = 0;
+		while (i < span->len)
+		{
+			int shaped = cluster_shaped(span, i, cluster_end(span, i)), k = cluster_end(span, i);
+			/* The run goes on while the clusters are of the same kind. */
+			while (k < span->len && cluster_shaped(span, k, cluster_end(span, k)) == shaped)
+				k = cluster_end(span, k);
+			shaped_run(ctx, target, span, i, k, shaped, ctm, cs, color, alpha, cp);
+			i = k;
+		}
+	}
+}
+
+/* Lays out a story onto dev with shaped text marked (see above). dev stays open. */
+static void draw_story_text(fz_context *ctx, fz_story *story, fz_device *dev, fz_matrix ctm)
+{
+	fz_device *sd = fz_new_passthrough_device_of_size(ctx, dev, sizeof(fz_device));
+	sd->fill_text = st_fill_text;
+	fz_try(ctx)
+	{
+		fz_draw_story(ctx, story, sd, ctm);
+		/* Closing a passthrough device closes its target too: not this one. */
+		sd->close_device = NULL;
+		fz_close_device(ctx, sd);
+	}
+	fz_always(ctx)
+		fz_drop_device(ctx, sd);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
 /* Text laid out by MuPDF's HTML engine (shaping, Indic scripts, fallback fonts)
  * in a box `width` wide. valign: the box's top (0), middle (1) or bottom (2)
  * sits at y = 0 of the box space; m takes box space to page coordinates. */
@@ -3350,7 +3496,7 @@ int fo_stamp_text(fo_ctx *c, fo_stamp *st, const char *html, const char *css, fl
 		ctm = fz_concat(fz_translate(0, -hgt * valign / 2.0f), to_matrix(m));
 		if (opacity < 0.999f)
 			fz_begin_group(CTX, st->dev, fz_make_rect(0, 0, st->w, st->h), NULL, 0, 0, FZ_BLEND_NORMAL, opacity);
-		fz_draw_story(CTX, story, st->dev, ctm);
+		draw_story_text(CTX, story, st->dev, ctm);
 		if (opacity < 0.999f)
 			fz_end_group(CTX, st->dev);
 	}
@@ -3989,7 +4135,7 @@ int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const fl
 		fz_place_story(CTX, story, fz_make_rect(0, 0, width, 100000), &filled);
 		list = fz_new_display_list(CTX, fz_make_rect(0, 0, width, filled.y1));
 		dev = fz_new_list_device(CTX, list);
-		fz_draw_story(CTX, story, dev, fz_identity);
+		draw_story_text(CTX, story, dev, fz_identity);
 		fz_close_device(CTX, dev);
 		fz_drop_device(CTX, dev);
 		dev = NULL;
@@ -4358,7 +4504,7 @@ int fo_pdf_redact_apply(fo_ctx *c, fo_page *p, int cover, const float rgb[3], co
 				fz_append_string(CTX, html, "</p>");
 				story = new_story(CTX, html, css, NULL);
 				fz_place_story(CTX, story, fz_make_rect(0, 0, w, 1000), &filled);
-				fz_draw_story(CTX, story, dev, fz_translate(r.x0 - b.x0, r.y0 - b.y0 + (h - (filled.y1 - filled.y0)) / 2));
+				draw_story_text(CTX, story, dev, fz_translate(r.x0 - b.x0, r.y0 - b.y0 + (h - (filled.y1 - filled.y0)) / 2));
 				fz_drop_story(CTX, story);
 				story = NULL;
 				fz_drop_buffer(CTX, html);
