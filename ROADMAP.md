@@ -377,8 +377,12 @@ Extract content (right-click the item on the page; Tools › Organize; command p
 - [x] Fix: stamped text sat 12 pt inside its box (MuPDF's style sheet gives the body a 1em margin)
 - [x] Fix (MuPDF): attaching a file left a journal operation open, so undo stopped working (patched in
       native/build-mupdf.ps1)
-- [ ] Later: edit a single line inside a table cell; bold/italic changes within a paragraph; keep a moved
-      picture's place in the drawing order (it goes on top now)
+- [x] A moved or replaced picture keeps its place in the drawing order (0.8.4): the content filter leaves a
+      one-off marker picture where it was drawn, whose resource then becomes a small form drawing the picture at
+      its new place, so what was drawn over it still is. Paginaut's own forms are marked (whole page, or unbounded)
+      so later moves aren't cut off; a picture inside someone else's form, or clipped where its new place would
+      be cut off, still goes on top, seen whole (edit_test: under red stamped text after a move and a replace)
+- [ ] Later: edit a single line inside a table cell; bold/italic changes within a paragraph
 
 ### Phase 6.5 (0.6.50): Redact (done)
 - [x] Redact panel (Tools › Redact, Organize, command palette). Marks are standard Redact annotations (red

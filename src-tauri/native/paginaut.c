@@ -3974,6 +3974,8 @@ static void add_page_drawing(fz_context *ctx, pdf_page *page, fz_display_list *l
 		fz_run_display_list(ctx, list, dev, m, fz_infinite_rect, NULL);
 		fz_close_device(ctx, dev);
 		xobj = pdf_new_xobject(ctx, doc, fz_make_rect(0, 0, w, h), fz_identity, res, contents);
+		/* It covers the whole page: a picture in it can move anywhere on the page (see fo_pdf_picture_edit). */
+		pdf_dict_puts_drop(ctx, xobj, "PaginautDrawing", PDF_TRUE);
 		pres = page_own_resources(ctx, doc, pobj);
 		xobjs = pdf_dict_get(ctx, pres, PDF_NAME(XObject));
 		if (!xobjs)
@@ -4187,6 +4189,10 @@ struct picture_pick
 	fz_rect target;
 	fz_image *taken;
 	fz_matrix ctm;
+	/* What the picture was clipped to where it's drawn (PDF space). */
+	fz_rect scissor;
+	/* Drawn in the picture's place when it's moved or replaced (see fo_pdf_picture_edit); none: taken out. */
+	fz_image *marker;
 };
 
 static fz_image *pick_picture(fz_context *ctx, void *opaque, fz_matrix ctm, const char *name, fz_image *image, fz_rect scissor)
@@ -4194,21 +4200,104 @@ static fz_image *pick_picture(fz_context *ctx, void *opaque, fz_matrix ctm, cons
 	struct picture_pick *st = opaque;
 	fz_rect r = fz_transform_rect(fz_unit_rect, ctm);
 	(void)name;
-	(void)scissor;
 	if (st->taken)
 		return image;
 	if (fabsf(r.x0 - st->target.x0) < 1.5f && fabsf(r.y0 - st->target.y0) < 1.5f && fabsf(r.x1 - st->target.x1) < 1.5f && fabsf(r.y1 - st->target.y1) < 1.5f)
 	{
 		st->taken = fz_keep_image(ctx, image);
 		st->ctm = ctm;
-		return NULL;
+		st->scissor = scissor;
+		return st->marker ? fz_keep_image(ctx, st->marker) : NULL;
 	}
 	return image;
 }
 
+/* A picture no page has: 5 x 3 grey pixels from a counter, so each edit's marker is its own object. */
+static fz_image *new_marker(fz_context *ctx)
+{
+	static int serial = 0;
+	fz_pixmap *pix = fz_new_pixmap(ctx, fz_device_gray(ctx), 5, 3, NULL, 0);
+	fz_image *img = NULL;
+	fz_try(ctx)
+	{
+		unsigned int v = (unsigned int)++serial * 2654435761u ^ (unsigned int)time(NULL);
+		for (int i = 0; i < 15; i++)
+			pix->samples[i] = (unsigned char)(v >> (i % 4 * 8)) ^ (unsigned char)(i * 37);
+		img = fz_new_image_from_pixmap(ctx, pix, NULL);
+	}
+	fz_always(ctx)
+		fz_drop_pixmap(ctx, pix);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return img;
+}
+
+/* A form Paginaut made that clips nothing on the page: a page drawing, or a picture's form. */
+static int open_form(fz_context *ctx, pdf_obj *x)
+{
+	return pdf_dict_gets(ctx, x, "PaginautPicture") != NULL || pdf_dict_gets(ctx, x, "PaginautDrawing") != NULL;
+}
+
+/* Where obj is named as an XObject: in these resources or those of the forms they draw (a picture added by
+ * Paginaut sits in one). Sets *dict to the XObject dictionary, and *open to whether every form on the way is
+ * one of Paginaut's that clips nothing (another form's box could hide the picture moved); the name, or NULL. */
+static const char *xobject_named(fz_context *ctx, pdf_obj *res, pdf_obj *obj, pdf_obj **dict, int *open, int depth)
+{
+	pdf_obj *xobjs = pdf_dict_get(ctx, res, PDF_NAME(XObject));
+	for (int i = 0; i < pdf_dict_len(ctx, xobjs); i++)
+		if (pdf_to_num(ctx, pdf_dict_get_val(ctx, xobjs, i)) == pdf_to_num(ctx, obj))
+		{
+			*dict = xobjs;
+			*open = 1;
+			return pdf_to_name(ctx, pdf_dict_get_key(ctx, xobjs, i));
+		}
+	for (int i = 0; depth < 8 && i < pdf_dict_len(ctx, xobjs); i++)
+	{
+		pdf_obj *x = pdf_dict_get_val(ctx, xobjs, i);
+		const char *name;
+		if (pdf_name_eq(ctx, pdf_dict_get(ctx, x, PDF_NAME(Subtype)), PDF_NAME(Form)) &&
+			(name = xobject_named(ctx, pdf_dict_get(ctx, x, PDF_NAME(Resources)), obj, dict, open, depth + 1)))
+		{
+			*open = *open && open_form(ctx, x);
+			return name;
+		}
+	}
+	return NULL;
+}
+
+/* A form drawing picture `img` (an image object) with `m` taking its unit square to where it goes, from where
+ * a picture was drawn at `at` (the form's matrix undoes that); an empty form when img is NULL. */
+static pdf_obj *picture_form(fz_context *ctx, pdf_document *doc, pdf_obj *img, fz_matrix m, fz_matrix at)
+{
+	pdf_obj *res = NULL, *form = NULL;
+	fz_buffer *buf = NULL;
+	fz_var(res);
+	fz_var(buf);
+	fz_try(ctx)
+	{
+		res = pdf_new_dict(ctx, doc, 1);
+		if (img)
+			pdf_dict_put(ctx, pdf_dict_put_dict(ctx, res, PDF_NAME(XObject), 1), PDF_NAME(I), img);
+		buf = fz_new_buffer_from_copied_data(ctx, (const unsigned char *)(img ? "/I Do" : ""), img ? 5 : 0);
+		/* Bounded far out, so a later move of the picture inside it isn't cut off. */
+		form = pdf_new_xobject(ctx, doc, fz_make_rect(-1e5f, -1e5f, 1e5f, 1e5f), fz_concat(m, fz_invert_matrix(at)), res, buf);
+		pdf_dict_puts_drop(ctx, form, "PaginautPicture", PDF_TRUE);
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_obj(ctx, res);
+		fz_drop_buffer(ctx, buf);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return form;
+}
+
 /* action 0 deletes the picture at `target`, 1 moves or resizes it to `dest` (turned and
  * flipped as it was), 2 replaces it with the picture in data at `dest`, 3 adds that picture
- * at `dest`. Rectangles in page coordinates relative to the origin; one undo step. */
+ * at `dest`. Rectangles in page coordinates relative to the origin; one undo step. A moved or replaced picture
+ * keeps its place among what the page draws (what was drawn over it still is), unless it was clipped so that its
+ * new place would be cut off: then it goes on top, where it's seen whole. */
 int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action, const float dest[4], const unsigned char *data, size_t len)
 {
 	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
@@ -4217,7 +4306,7 @@ int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action
 	fz_buffer *buf = NULL;
 	fz_display_list *list = NULL;
 	fz_device *dev = NULL;
-	pdf_obj *saved = NULL;
+	pdf_obj *saved = NULL, *marker_obj = NULL, *img_obj = NULL, *form = NULL;
 	int began = 0;
 	static const char *names[] = { "Delete picture", "Move picture", "Replace picture", "Add picture" };
 	if (!page || action < 0 || action > 3)
@@ -4232,6 +4321,10 @@ int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action
 	fz_var(saved);
 	fz_var(began);
 	fz_var(st.taken);
+	fz_var(st.marker);
+	fz_var(marker_obj);
+	fz_var(img_obj);
+	fz_var(form);
 	fz_try(CTX)
 	{
 		fz_rect d = fz_make_rect(dest[0], dest[1], dest[2], dest[3]);
@@ -4247,6 +4340,12 @@ int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action
 			pdf_filter_factory filters[2] = { { pdf_new_sanitize_filter, &sopts }, { NULL, NULL } };
 			pdf_filter_options fopts = { 0 };
 			st.target = fz_transform_rect(o, fz_invert_matrix(pagectm));
+			if (action >= 1)
+			{
+				/* Found again after filtering: adding an image the document has gives the same object. */
+				st.marker = new_marker(CTX);
+				marker_obj = pdf_add_image(CTX, page->doc, st.marker);
+			}
 			sopts.opaque = &st;
 			sopts.image_filter = pick_picture;
 			fopts.recurse = 0;
@@ -4274,11 +4373,35 @@ int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action
 				img = fz_new_image_from_buffer(CTX, buf);
 				m = fz_make_matrix(d.x1 - d.x0, 0, 0, d.y1 - d.y0, d.x0, d.y0);
 			}
-			list = fz_new_display_list(CTX, d);
-			dev = fz_new_list_device(CTX, list);
-			fz_fill_image(CTX, dev, img, m, 1, fz_default_color_params);
-			fz_close_device(CTX, dev);
-			add_page_drawing(CTX, page, list, fz_identity, "Pic");
+			{
+				/* In the picture's place: the marker's resource becomes a form drawing it where it goes. */
+				pdf_obj *xobjs = NULL;
+				int open = 0;
+				const char *name = xobject_named(CTX, pdf_dict_get(CTX, page->obj, PDF_NAME(Resources)), marker_obj, &xobjs, &open, 0);
+				fz_matrix pdfm = fz_concat(m, fz_invert_matrix(pagectm));
+				fz_rect goes = fz_transform_rect(fz_unit_rect, pdfm);
+				int fits = fz_is_infinite_rect(st.scissor) || fz_contains_rect(fz_expand_rect(st.scissor, 1), goes);
+				if (name && open && fits)
+				{
+					img_obj = pdf_add_image(CTX, page->doc, img);
+					form = picture_form(CTX, page->doc, img_obj, pdfm, st.ctm);
+					pdf_dict_puts(CTX, xobjs, name, form);
+				}
+				else
+				{
+					/* Cut off there (or not found): drawn nothing in its place, and on top instead. */
+					if (name)
+					{
+						form = picture_form(CTX, page->doc, NULL, fz_identity, fz_identity);
+						pdf_dict_puts(CTX, xobjs, name, form);
+					}
+					list = fz_new_display_list(CTX, d);
+					dev = fz_new_list_device(CTX, list);
+					fz_fill_image(CTX, dev, img, m, 1, fz_default_color_params);
+					fz_close_device(CTX, dev);
+					add_page_drawing(CTX, page, list, fz_identity, "Pic");
+				}
+			}
 		}
 		pdf_end_operation(CTX, page->doc);
 		began = 0;
@@ -4289,8 +4412,12 @@ int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action
 		fz_drop_display_list(CTX, list);
 		fz_drop_image(CTX, img);
 		fz_drop_image(CTX, st.taken);
+		fz_drop_image(CTX, st.marker);
 		fz_drop_buffer(CTX, buf);
 		pdf_drop_obj(CTX, saved);
+		pdf_drop_obj(CTX, marker_obj);
+		pdf_drop_obj(CTX, img_obj);
+		pdf_drop_obj(CTX, form);
 	}
 	fz_catch(CTX)
 	{

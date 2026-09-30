@@ -97,6 +97,13 @@ fn main() {
     d.picture_edit(2, pics[0].r, 2, [50.0, 50.0, 150.0, 125.0], &photo).unwrap();
     let pics = own(&d);
     check("picture replaced", pics.len() == 1 && near(pics[0].r, [50.0, 50.0, 150.0, 125.0]), format!("{:?}", pics.iter().map(|p| p.r).collect::<Vec<_>>()));
+    if pics.is_empty() {
+        let svg = String::from_utf8(d.area_data(2, [0.0, 0.0, w, h], 0, "svg", 72.0).unwrap()).unwrap();
+        println!("  all pictures: {:?}
+  svg images: {}", d.pictures(2, false).unwrap().iter().map(|p| p.r).collect::<Vec<_>>(), svg.matches("<image").count());
+        for (i, _) in svg.match_indices("<image") { println!("  {}", &svg[i..(i + 160).min(svg.len())]); }
+        std::process::exit(1);
+    }
     // A text edit on the same page too, then the stamp must still come off.
     let para = d.paragraphs(2).unwrap().into_iter().max_by_key(|p| p.l.len()).unwrap();
     d.edit_text(2, &TextEdit { para, text: "Page three, edited.".into() }).unwrap();
@@ -112,6 +119,40 @@ fn main() {
     check("stamp still removable", removed >= 1 && !t3.contains("Stamped footer 3") && t3.contains("Page three, edited."), format!("{removed} removed"));
     let bad = d.picture_edit(2, [1.0, 1.0, 2.0, 2.0], 0, none, &[]);
     check("no picture there: an error, page kept", bad.is_err() && d.area_text(2, [0.0, 0.0, w, h]).unwrap().contains("Page three"), format!("{:?}", bad.err()));
+
+    // A moved picture keeps its place in what the page draws: still under red text stamped over it.
+    d.picture_edit(1, none, 3, [100.0, 400.0, 250.0, 520.0], &photo).unwrap();
+    let cover = StampPart {
+        text: Some("COVER COVER".into()),
+        image: None,
+        font: Some("sans-serif".into()),
+        size: 30.0,
+        color: [1.0, 0.0, 0.0],
+        bold: false,
+        align: Some("left".into()),
+        width: 300.0,
+        height: 0.0,
+        valign: 0,
+        matrix: [1.0, 0.0, 0.0, 1.0, 90.0, 440.0],
+        opacity: 1.0,
+    };
+    d.stamp_pages(&[StampPage { page: 1, parts: vec![cover] }], "Watermark", false, false).unwrap();
+    let order = |d: &paginaut_lib::engine::Doc| {
+        let svg = String::from_utf8(d.area_data(1, [0.0, 0.0, w, h], 0, "svg", 72.0).unwrap()).unwrap();
+        (svg.find("<image"), svg.rfind("#ff0000"))
+    };
+    let pic = d.pictures(1, true).unwrap().into_iter().find(|p| near(p.r, [100.0, 400.0, 250.0, 520.0])).map(|p| p.r).unwrap_or(none);
+    d.picture_edit(1, pic, 1, [120.0, 420.0, 240.0, 510.0], &[]).unwrap();
+    let (img, red) = order(&d);
+    let moved = d.pictures(1, true).unwrap().iter().any(|p| near(p.r, [120.0, 420.0, 240.0, 510.0]));
+    check("moved picture stays under what covered it", moved && img.is_some() && red.is_some() && img < red, format!("picture at {img:?}, red text at {red:?}, moved {moved}"));
+    d.picture_edit(1, [120.0, 420.0, 240.0, 510.0], 2, [130.0, 430.0, 230.0, 505.0], &photo).unwrap();
+    let (img, red) = order(&d);
+    check("replaced picture too", img.is_some() && img < red, format!("picture at {img:?}, red text at {red:?}"));
+    std::fs::write(format!("{tmp}/picture-order.png"), d.area_data(1, [60.0, 380.0, 400.0, 540.0], 0, "png", 110.0).unwrap()).unwrap();
+    d.undo(false).unwrap();
+    d.undo(false).unwrap();
+    check("moves undo", d.pictures(1, true).unwrap().iter().any(|p| near(p.r, [100.0, 400.0, 250.0, 520.0])), String::new());
 
     // Saved and reopened.
     let n = info.page_count;
