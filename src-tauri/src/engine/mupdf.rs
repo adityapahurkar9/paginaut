@@ -673,6 +673,17 @@ impl Document {
         with_kind(self.1, |c| take_string(c, unsafe { fo_sigs_json(c, self.0) }).ok_or_else(|| last_error(c)))
     }
 
+    /// Pages with redaction marks: [(page, marks)].
+    pub fn redaction_pages(&self) -> Result<Vec<(usize, usize)>> {
+        let json = with_kind(self.1, |c| take_string(c, unsafe { fo_pdf_redaction_pages_json(c, self.0) }).ok_or_else(|| last_error(c)))?;
+        serde_json::from_str(&json).map_err(|e| e.to_string())
+    }
+
+    /// Takes metadata, scripts, attachments, comments or hidden text out (see fo_pdf_sanitize).
+    pub fn sanitize(&self, what: i32) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_pdf_sanitize(c, self.0, what) }).ok_or_else(|| last_error(c)))
+    }
+
     /// Embedded files as JSON (see fo_attachments_json).
     pub fn attachments_json(&self) -> Result<String> {
         with_kind(self.1, |c| take_string(c, unsafe { fo_attachments_json(c, self.0) }).ok_or_else(|| last_error(c)))
@@ -738,6 +749,18 @@ impl Page {
         with_kind(self.1, |c| {
             let rc = unsafe { fo_edit_text(c, self.0, flat.as_ptr(), lines.len() as c_int, probe.as_ptr(), h.as_ptr(), s.as_ptr(), x, baseline, width) };
             if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
+    /// Applies this page's redaction marks (see fo_pdf_redact_apply): (marks, letters left under them).
+    pub fn redact_apply(&self, cover: bool, rgb: [f32; 3], label: &str) -> Result<(usize, usize)> {
+        let l = CString::new(label).unwrap_or_default();
+        with_kind(self.1, |c| {
+            let mut left: c_int = 0;
+            match unsafe { fo_pdf_redact_apply(c, self.0, cover as c_int, rgb.as_ptr(), l.as_ptr(), &mut left) } {
+                n if n < 0 => Err(last_error(c)),
+                n => Ok((n as usize, left.max(0) as usize)),
+            }
         })
     }
 

@@ -192,6 +192,15 @@ int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action
  * off the document's list, or its pin(s) off its page. */
 int fo_pdf_attachment_add(fo_ctx *c, fo_doc *d, const char *name, const char *mime, const unsigned char *data, size_t len, long long modified);
 int fo_pdf_attachment_remove(fo_ctx *c, fo_doc *d, int idx);
+/* Pages with redaction marks: JSON [[page, marks]]. */
+char *fo_pdf_redaction_pages_json(fo_ctx *c, fo_doc *d);
+/* Applies a page's redaction marks (inside the caller's undo step): cover 0 removes what's
+ * under them, 1 only covers it; boxes drawn in rgb with `label` (or none). Returns the number
+ * of marks; *left gets the letters still readable under them after removing. */
+int fo_pdf_redact_apply(fo_ctx *c, fo_page *p, int cover, const float rgb[3], const char *label, int *left);
+/* Takes out (inside the caller's undo step): what & 1 metadata, 2 scripts, 4 attached files,
+ * 8 comments, 16 hidden text. JSON {"meta","scripts","files","comments","hidden"}: how many went. */
+char *fo_pdf_sanitize(fo_ctx *c, fo_doc *d, int what);
 /* A new, empty PDF in memory. */
 fo_doc *fo_pdf_new(fo_ctx *c);
 /* Adds a bookmark titled `title` at the end of d's outline, pointing at page

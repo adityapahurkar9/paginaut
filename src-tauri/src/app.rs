@@ -579,6 +579,33 @@ pub async fn attachment_remove(state: State<'_, AppState>, doc: DocId, i: usize)
     blocking(move || engine.doc(doc)?.attachment_remove(i)).await
 }
 
+/// Adds redaction marks (one undo step); returns how many.
+#[tauri::command]
+pub async fn redact_mark(state: State<'_, AppState>, doc: DocId, marks: Vec<crate::engine::RedactMark>, author: String) -> Res<usize> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.redact_mark(&marks, &author)).await
+}
+
+#[tauri::command]
+pub async fn redaction_pages(state: State<'_, AppState>, doc: DocId) -> Res<Vec<(usize, usize)>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.redaction_pages()).await
+}
+
+/// Applies every redaction mark (one undo step).
+#[tauri::command]
+pub async fn redact_apply(state: State<'_, AppState>, doc: DocId, cover: bool, rgb: [f32; 3], label: String) -> Res<crate::engine::Redacted> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.redact_apply(cover, rgb, &label)).await
+}
+
+/// Takes metadata (1), scripts (2), attached files (4), comments (8) or hidden text (16) out (one undo step).
+#[tauri::command]
+pub async fn sanitize(state: State<'_, AppState>, doc: DocId, what: i32) -> Res<crate::engine::Sanitized> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.sanitize(what)).await
+}
+
 /// Kinds of file that run code when opened: attachments like these are only saved, never opened.
 const RISKY: &[&str] = &[
     "exe", "com", "bat", "cmd", "scr", "pif", "cpl", "msi", "msp", "msc", "dll", "sys", "jar", "js", "jse", "vbs", "vbe", "wsf", "wsh",

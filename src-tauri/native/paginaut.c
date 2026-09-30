@@ -4051,6 +4051,417 @@ int fo_pdf_picture_edit(fo_ctx *c, fo_page *p, const float target[4], int action
 	return 0;
 }
 
+/* ---------------------------------------------------------------- redaction */
+
+char *fo_pdf_redaction_pages_json(fo_ctx *c, fo_doc *d)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	fz_buffer *b = NULL;
+	char *s = NULL;
+	fz_var(b);
+	fz_try(CTX)
+	{
+		int first = 1;
+		b = fz_new_buffer(CTX, 64);
+		fz_append_byte(CTX, b, '[');
+		for (int i = 0; pdf && i < pdf_count_pages(CTX, pdf); i++)
+		{
+			pdf_obj *annots = pdf_dict_get(CTX, pdf_lookup_page_obj(CTX, pdf, i), PDF_NAME(Annots));
+			int marks = 0;
+			for (int k = 0; k < pdf_array_len(CTX, annots); k++)
+				marks += pdf_name_eq(CTX, pdf_dict_get(CTX, pdf_array_get(CTX, annots, k), PDF_NAME(Subtype)), PDF_NAME(Redact));
+			if (marks)
+			{
+				fz_append_printf(CTX, b, first ? "[%d,%d]" : ",[%d,%d]", i, marks);
+				first = 0;
+			}
+		}
+		fz_append_byte(CTX, b, ']');
+		s = buffer_to_string(CTX, b);
+	}
+	fz_always(CTX)
+		fz_drop_buffer(CTX, b);
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
+/* Letters (not spaces) whose middle is inside any of the boxes. */
+static int letters_in(fz_context *ctx, fz_page *p, const fz_rect *boxes, int n)
+{
+	fz_stext_page *t = NULL;
+	int count = 0;
+	fz_var(t);
+	fz_try(ctx)
+	{
+		fz_stext_block *stack[32];
+		int depth = 0;
+		fz_stext_block *b;
+		t = fz_new_stext_page_from_page(ctx, p, NULL);
+		b = t->first_block;
+		while (b || depth)
+		{
+			if (!b)
+			{
+				b = stack[--depth]->next;
+				continue;
+			}
+			if (b->type == FZ_STEXT_BLOCK_STRUCT && b->u.s.down && depth < 32)
+			{
+				stack[depth++] = b;
+				b = b->u.s.down->first_block;
+				continue;
+			}
+			if (b->type == FZ_STEXT_BLOCK_TEXT)
+				for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
+					for (fz_stext_char *ch = line->first_char; ch; ch = ch->next)
+					{
+						fz_rect r = fz_rect_from_quad(ch->quad);
+						fz_point m = fz_make_point((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2);
+						if (ch->c == ' ')
+							continue;
+						for (int i = 0; i < n; i++)
+							if (fz_is_point_inside_rect(m, boxes[i]))
+							{
+								count++;
+								break;
+							}
+					}
+			b = b->next;
+		}
+	}
+	fz_always(ctx)
+		fz_drop_stext_page(ctx, t);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return count;
+}
+
+/* Applies the page's redaction marks: cover 0 removes what's under them (text, picture
+ * pixels, drawings), 1 only covers it. Either way the boxes are drawn in rgb, with `label`
+ * in each mark if given. Runs inside the caller's undo step. Returns the number of marks;
+ * *left gets the letters still under them (0 when removing worked; covering leaves them). */
+int fo_pdf_redact_apply(fo_ctx *c, fo_page *p, int cover, const float rgb[3], const char *label, int *left)
+{
+	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
+	fz_rect *boxes = NULL, *marks = NULL;
+	fz_display_list *list = NULL;
+	fz_device *dev = NULL;
+	fz_path *path = NULL;
+	fz_buffer *html = NULL;
+	fz_story *story = NULL;
+	pdf_obj *saved = NULL;
+	int nb = 0, nm = 0;
+	*left = 0;
+	if (!page)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF page");
+		return -1;
+	}
+	fz_var(boxes);
+	fz_var(marks);
+	fz_var(list);
+	fz_var(dev);
+	fz_var(path);
+	fz_var(html);
+	fz_var(story);
+	fz_var(saved);
+	fz_try(CTX)
+	{
+		fz_rect b = fz_bound_page(CTX, (fz_page *)p);
+		int cap = 16, mcap = 8;
+		pdf_annot *a, *next;
+		boxes = fz_malloc(CTX, cap * sizeof(fz_rect));
+		marks = fz_malloc(CTX, mcap * sizeof(fz_rect));
+		/* Where the marks are, before they're gone: each quad of a text mark, or its box. */
+		for (a = pdf_first_annot(CTX, page); a; a = pdf_next_annot(CTX, a))
+		{
+			fz_rect whole = fz_empty_rect;
+			int q;
+			if (pdf_annot_type(CTX, a) != PDF_ANNOT_REDACT)
+				continue;
+			q = pdf_annot_has_quad_points(CTX, a) ? pdf_annot_quad_point_count(CTX, a) : 0;
+			for (int i = 0; i < (q ? q : 1); i++)
+			{
+				fz_rect r = q ? fz_rect_from_quad(pdf_annot_quad_point(CTX, a, i)) : pdf_annot_rect(CTX, a);
+				if (nb == cap)
+					boxes = fz_realloc(CTX, boxes, (cap *= 2) * sizeof(fz_rect));
+				boxes[nb++] = r;
+				whole = fz_union_rect(whole, r);
+			}
+			if (nm == mcap)
+				marks = fz_realloc(CTX, marks, (mcap *= 2) * sizeof(fz_rect));
+			marks[nm++] = whole;
+		}
+		if (nm && cover)
+		{
+			for (a = pdf_first_annot(CTX, page); a; a = next)
+			{
+				next = pdf_next_annot(CTX, a);
+				if (pdf_annot_type(CTX, a) == PDF_ANNOT_REDACT)
+					pdf_delete_annot(CTX, page, a);
+			}
+			/* Counted too, to say plainly the text is still there. */
+			*left = letters_in(CTX, (fz_page *)p, boxes, nb);
+		}
+		else if (nm)
+		{
+			pdf_redact_options opts = { 0, PDF_REDACT_IMAGE_PIXELS, PDF_REDACT_LINE_ART_REMOVE_IF_COVERED, PDF_REDACT_TEXT_REMOVE };
+			saved = stamps_aside(CTX, page);
+			pdf_redact_page(CTX, page->doc, page, &opts);
+			stamps_back(CTX, page, saved);
+			/* Checked: nothing readable may be left under the boxes. */
+			*left = letters_in(CTX, (fz_page *)p, boxes, nb);
+		}
+
+		/* The boxes, as part of the page (relative to its origin, as add_page_drawing draws). */
+		if (nm)
+		{
+		list = fz_new_display_list(CTX, fz_make_rect(0, 0, b.x1 - b.x0, b.y1 - b.y0));
+		dev = fz_new_list_device(CTX, list);
+		path = fz_new_path(CTX);
+		for (int i = 0; i < nb; i++)
+			fz_rectto(CTX, path, boxes[i].x0 - b.x0, boxes[i].y0 - b.y0, boxes[i].x1 - b.x0, boxes[i].y1 - b.y0);
+		fz_fill_path(CTX, dev, path, 0, fz_identity, fz_device_rgb(CTX), rgb, 1, fz_default_color_params);
+		if (label && label[0])
+		{
+			/* Light text on a dark box, dark on a light one. */
+			float lum = 0.3f * rgb[0] + 0.59f * rgb[1] + 0.11f * rgb[2];
+			for (int i = 0; i < nm; i++)
+			{
+				fz_rect r = marks[i], filled;
+				float h = r.y1 - r.y0, w = r.x1 - r.x0, size = fz_min(12, h * 0.62f);
+				char css[160];
+				if (h < 5 || w < 12)
+					continue;
+				fz_snprintf(css, sizeof css, "p{margin:0;text-align:center;font-family:sans-serif;font-weight:bold;font-size:%gpt;line-height:1;color:%s}",
+					size, lum < 0.5f ? "#ffffff" : "#000000");
+				html = fz_new_buffer(CTX, 64);
+				fz_append_string(CTX, html, "<p>");
+				for (const char *s = label; *s; s++)
+				{
+					if (*s == '<')
+						fz_append_string(CTX, html, "&lt;");
+					else if (*s == '&')
+						fz_append_string(CTX, html, "&amp;");
+					else
+						fz_append_byte(CTX, html, *s);
+				}
+				fz_append_string(CTX, html, "</p>");
+				story = new_story(CTX, html, css, NULL);
+				fz_place_story(CTX, story, fz_make_rect(0, 0, w, 1000), &filled);
+				fz_draw_story(CTX, story, dev, fz_translate(r.x0 - b.x0, r.y0 - b.y0 + (h - (filled.y1 - filled.y0)) / 2));
+				fz_drop_story(CTX, story);
+				story = NULL;
+				fz_drop_buffer(CTX, html);
+				html = NULL;
+			}
+		}
+		fz_close_device(CTX, dev);
+		add_page_drawing(CTX, page, list, fz_identity, "Redact");
+		}
+	}
+	fz_always(CTX)
+	{
+		fz_drop_story(CTX, story);
+		fz_drop_buffer(CTX, html);
+		fz_drop_path(CTX, path);
+		fz_drop_device(CTX, dev);
+		fz_drop_display_list(CTX, list);
+		pdf_drop_obj(CTX, saved);
+		fz_free(CTX, boxes);
+		fz_free(CTX, marks);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return nm;
+}
+
+/* ---------------------------------------------------------------- sanitize */
+
+static int drop_invisible_text(fz_context *ctx, void *opaque, int *ucsbuf, int ucslen, fz_matrix trm, fz_matrix ctm, fz_rect bbox, int tr, float ca, float CA)
+{
+	int *count = opaque;
+	int invisible = tr == 3 || tr == 7 || (tr == 0 && ca == 0) || (tr == 1 && CA == 0) || (tr == 2 && ca == 0 && CA == 0);
+	(void)ucsbuf;
+	(void)trm;
+	(void)ctm;
+	(void)bbox;
+	if (invisible)
+		*count += ucslen;
+	return invisible;
+}
+
+/* Drops JavaScript actions from a dictionary's A (if it's JavaScript) and AA entries. */
+static int drop_scripts_in(fz_context *ctx, pdf_obj *dict)
+{
+	int n = 0;
+	pdf_obj *a = pdf_dict_get(ctx, dict, PDF_NAME(A));
+	if (a && pdf_name_eq(ctx, pdf_dict_get(ctx, a, PDF_NAME(S)), PDF_NAME(JavaScript)))
+	{
+		pdf_dict_del(ctx, dict, PDF_NAME(A));
+		n++;
+	}
+	if (pdf_dict_get(ctx, dict, PDF_NAME(AA)))
+	{
+		pdf_dict_del(ctx, dict, PDF_NAME(AA));
+		n++;
+	}
+	return n;
+}
+
+/* Takes out of the document, inside the caller's undo step: what & 1 its information and XMP
+ * metadata, 2 scripts (document, page, link and field JavaScript), 4 attached files, 8 comments
+ * (annotations other than links, form fields and redaction marks), 16 hidden (invisible) text.
+ * Returns JSON {"meta","scripts","files","comments","hidden"}: how many of each went. */
+char *fo_pdf_sanitize(fo_ctx *c, fo_doc *d, int what)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	fz_buffer *b = NULL;
+	char *s = NULL;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return NULL;
+	}
+	fz_var(b);
+	fz_try(CTX)
+	{
+		pdf_obj *root = pdf_dict_get(CTX, pdf_trailer(CTX, pdf), PDF_NAME(Root));
+		pdf_obj *names = pdf_dict_get(CTX, root, PDF_NAME(Names));
+		int meta = 0, scripts = 0, files = 0, comments = 0, hidden = 0;
+		int pages = pdf_count_pages(CTX, pdf);
+		if (what & 1)
+		{
+			pdf_obj *info = pdf_dict_get(CTX, pdf_trailer(CTX, pdf), PDF_NAME(Info));
+			meta += pdf_dict_len(CTX, info);
+			if (info)
+				pdf_dict_del(CTX, pdf_trailer(CTX, pdf), PDF_NAME(Info));
+			if (pdf_dict_get(CTX, root, PDF_NAME(Metadata)))
+			{
+				pdf_dict_del(CTX, root, PDF_NAME(Metadata));
+				meta++;
+			}
+			for (int i = 0; i < pages; i++)
+			{
+				pdf_obj *po = pdf_lookup_page_obj(CTX, pdf, i);
+				if (pdf_dict_get(CTX, po, PDF_NAME(Metadata)))
+				{
+					pdf_dict_del(CTX, po, PDF_NAME(Metadata));
+					meta++;
+				}
+				if (pdf_dict_get(CTX, po, PDF_NAME(PieceInfo)))
+					pdf_dict_del(CTX, po, PDF_NAME(PieceInfo));
+			}
+			if (pdf_dict_get(CTX, root, PDF_NAME(PieceInfo)))
+				pdf_dict_del(CTX, root, PDF_NAME(PieceInfo));
+		}
+		if (what & 2)
+		{
+			pdf_obj *open = pdf_dict_gets(CTX, root, "OpenAction");
+			if (pdf_dict_get(CTX, names, PDF_NAME(JavaScript)))
+			{
+				scripts++;
+				pdf_dict_del(CTX, names, PDF_NAME(JavaScript));
+			}
+			if (pdf_is_dict(CTX, open) && pdf_name_eq(CTX, pdf_dict_get(CTX, open, PDF_NAME(S)), PDF_NAME(JavaScript)))
+			{
+				pdf_dict_dels(CTX, root, "OpenAction");
+				scripts++;
+			}
+			if (pdf_dict_get(CTX, root, PDF_NAME(AA)))
+			{
+				pdf_dict_del(CTX, root, PDF_NAME(AA));
+				scripts++;
+			}
+			for (int i = 0; i < pages; i++)
+			{
+				pdf_obj *po = pdf_lookup_page_obj(CTX, pdf, i), *annots = pdf_dict_get(CTX, po, PDF_NAME(Annots));
+				scripts += drop_scripts_in(CTX, po);
+				for (int k = 0; k < pdf_array_len(CTX, annots); k++)
+					scripts += drop_scripts_in(CTX, pdf_array_get(CTX, annots, k));
+			}
+		}
+		if (what & 4)
+		{
+			pdf_obj *tree = pdf_load_name_tree(CTX, pdf, PDF_NAME(EmbeddedFiles));
+			files += pdf_dict_len(CTX, tree);
+			pdf_drop_obj(CTX, tree);
+			pdf_dict_del(CTX, names, PDF_NAME(EmbeddedFiles));
+			if (pdf_dict_get(CTX, root, PDF_NAME(AF)))
+				pdf_dict_del(CTX, root, PDF_NAME(AF));
+		}
+		for (int i = 0; i < pages && (what & (4 | 8 | 16)); i++)
+		{
+			pdf_page *page = pdf_load_page(CTX, pdf, i);
+			fz_try(CTX)
+			{
+				pdf_annot *a, *next;
+				for (a = pdf_first_annot(CTX, page); a; a = next)
+				{
+					enum pdf_annot_type t = pdf_annot_type(CTX, a);
+					next = pdf_next_annot(CTX, a);
+					if ((what & 4) && t == PDF_ANNOT_FILE_ATTACHMENT)
+					{
+						pdf_delete_annot(CTX, page, a);
+						files++;
+					}
+					else if ((what & 8) && t != PDF_ANNOT_LINK && t != PDF_ANNOT_WIDGET && t != PDF_ANNOT_REDACT && t != PDF_ANNOT_POPUP)
+					{
+						pdf_delete_annot(CTX, page, a);
+						comments++;
+					}
+				}
+				if (what & 16)
+				{
+					int count = 0;
+					pdf_sanitize_filter_options sopts = { 0 };
+					pdf_filter_factory filters[2] = { { pdf_new_sanitize_filter, &sopts }, { NULL, NULL } };
+					pdf_filter_options fopts = { 0 };
+					pdf_obj *saved;
+					sopts.opaque = &count;
+					sopts.text_filter = drop_invisible_text;
+					fopts.recurse = 0;
+					fopts.instance_forms = 1;
+					fopts.filters = filters;
+					saved = stamps_aside(CTX, page);
+					fz_try(CTX)
+					{
+						pdf_filter_page_contents(CTX, pdf, page, &fopts);
+						stamps_back(CTX, page, saved);
+					}
+					fz_always(CTX)
+						pdf_drop_obj(CTX, saved);
+					fz_catch(CTX)
+						fz_rethrow(CTX);
+					hidden += count;
+				}
+			}
+			fz_always(CTX)
+				fz_drop_page(CTX, &page->super);
+			fz_catch(CTX)
+				fz_rethrow(CTX);
+		}
+		b = fz_new_buffer(CTX, 96);
+		fz_append_printf(CTX, b, "{\"meta\":%d,\"scripts\":%d,\"files\":%d,\"comments\":%d,\"hidden\":%d}", meta, scripts, files, comments, hidden);
+		s = buffer_to_string(CTX, b);
+	}
+	fz_always(CTX)
+		fz_drop_buffer(CTX, b);
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
 /* Removes the stamps of one kind from a page. Returns how many were there. */
 int fo_stamp_remove(fo_ctx *c, fo_page *p, const char *kind)
 {

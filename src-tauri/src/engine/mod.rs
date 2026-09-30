@@ -287,6 +287,35 @@ pub struct TextEdit {
     pub text: String,
 }
 
+/// A redaction mark to add: text (quads, 8 numbers each) or an area, relative to the page origin.
+#[derive(Deserialize)]
+pub struct RedactMark {
+    pub page: usize,
+    #[serde(default)]
+    pub quads: Vec<f32>,
+    #[serde(default)]
+    pub rect: Option<[f32; 4]>,
+}
+
+/// What applying redactions did: marks applied on how many pages, and letters still readable
+/// under the boxes afterwards (0 when removing worked; covering leaves them all).
+#[derive(Serialize)]
+pub struct Redacted {
+    pub pages: usize,
+    pub marks: usize,
+    pub left: usize,
+}
+
+/// What Sanitize took out.
+#[derive(Serialize, Deserialize, Default)]
+pub struct Sanitized {
+    pub meta: usize,
+    pub scripts: usize,
+    pub files: usize,
+    pub comments: usize,
+    pub hidden: usize,
+}
+
 /// What "Save all pictures" did.
 #[derive(Serialize)]
 pub struct SavedPictures {
@@ -860,6 +889,104 @@ impl Doc {
         self.inner.lock().doc.attachment_remove(i)?;
         self.edited();
         Ok(())
+    }
+
+    // ------------------------------------------------------------ redaction
+
+    /// Adds redaction marks (red outlines until applied), all as one undo step. Returns how many.
+    pub fn redact_mark(&self, marks: &[RedactMark], author: &str) -> Result<usize, String> {
+        let mut inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Err("Only PDFs can be redacted. Save this file as a PDF first (Save as).".into());
+        }
+        inner.doc.begin_op("Mark for redaction");
+        let res = (|| -> Result<usize, String> {
+            let mut n = 0;
+            for m in marks {
+                let [ox, oy, _, _] = self.bounds(m.page)?;
+                let shift = |v: &[f32]| v.iter().enumerate().map(|(i, x)| x + if i % 2 == 0 { ox } else { oy }).collect::<Vec<f32>>();
+                let edit = mupdf::AnnotEdit {
+                    quads: (!m.quads.is_empty()).then(|| shift(&m.quads)),
+                    rect: m.rect.map(|r| {
+                        let s = shift(&r);
+                        [s[0], s[1], s[2], s[3]]
+                    }),
+                    color: Some(vec![0.86, 0.1, 0.1]),
+                    ..Default::default()
+                };
+                if edit.quads.is_none() && edit.rect.is_none() {
+                    continue;
+                }
+                let page = self.page(&mut inner, m.page)?;
+                let num = page.annot_create("Redact", author)?;
+                page.annot_apply(num, &edit)?;
+                n += 1;
+            }
+            Ok(n)
+        })();
+        match res {
+            Ok(n) => {
+                inner.doc.end_op();
+                drop(inner);
+                self.edited();
+                Ok(n)
+            }
+            Err(e) => {
+                inner.doc.abandon_op();
+                Err(e)
+            }
+        }
+    }
+
+    /// Pages with redaction marks, and how many on each.
+    pub fn redaction_pages(&self) -> Result<Vec<(usize, usize)>, String> {
+        let inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Ok(Vec::new());
+        }
+        inner.doc.redaction_pages()
+    }
+
+    /// Applies every redaction mark (one undo step): removes what's under them, or with `cover`
+    /// only covers it; boxes in `rgb`, with `label` in them if not empty.
+    pub fn redact_apply(&self, cover: bool, rgb: [f32; 3], label: &str) -> Result<Redacted, String> {
+        let pages = self.redaction_pages()?;
+        let mut out = Redacted { pages: 0, marks: 0, left: 0 };
+        if pages.is_empty() {
+            return Ok(out);
+        }
+        let mut inner = self.inner.lock();
+        inner.doc.begin_op(if cover { "Cover marked areas" } else { "Apply redactions" });
+        let res = (|| -> Result<(), String> {
+            for &(i, _) in &pages {
+                let page = self.page(&mut inner, i)?;
+                let (n, left) = page.redact_apply(cover, rgb, label)?;
+                out.pages += 1;
+                out.marks += n;
+                out.left += left;
+            }
+            Ok(())
+        })();
+        match res {
+            Ok(()) => inner.doc.end_op(),
+            Err(e) => {
+                inner.doc.abandon_op();
+                return Err(e);
+            }
+        }
+        drop(inner);
+        self.edited();
+        Ok(out)
+    }
+
+    /// Takes out (one undo step): what & 1 metadata, 2 scripts, 4 attached files, 8 comments, 16 hidden text.
+    pub fn sanitize(&self, what: i32) -> Result<Sanitized, String> {
+        let mut out = Sanitized::default();
+        self.doc_op("Sanitize", |doc| {
+            out = serde_json::from_str(&doc.sanitize(what)?).map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        Ok(out)
     }
 
     // ------------------------------------------------------------ bookmarks, labels, properties
