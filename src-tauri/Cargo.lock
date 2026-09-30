@@ -2388,7 +2388,7 @@ dependencies = [
 
 [[package]]
 name = "paginaut"
-version = "0.7.0"
+version = "0.7.10"
 dependencies = [
  "cc",
  "once_cell",

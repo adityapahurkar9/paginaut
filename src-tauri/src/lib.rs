@@ -1,11 +1,14 @@
 pub mod engine;
 mod app;
 mod base64;
+pub mod convert;
+mod docx;
 mod net;
 mod ocr;
 pub mod office;
 mod ocr_langs;
 mod sigstore;
+mod tiff;
 pub mod dsc;
 
 use app::AppState;
@@ -213,6 +216,10 @@ pub fn run() {
             app::office_install_stop,
             app::office_remove,
             app::office_convert,
+            app::convert_options,
+            app::convert_from_pdf,
+            app::convert_stop,
+            app::open_path,
             app::cancel,
             app::system_info,
             app::take_launch_files,

@@ -1953,6 +1953,12 @@ int fo_pdf_save(fo_ctx *c, fo_doc *d, const char *path, int incremental)
 
 int fo_convert_to_pdf(fo_ctx *c, fo_doc *d, const char *path, const int *order, int count, const int *rot)
 {
+	return fo_write_document(c, d, path, "pdf", "", order, count, rot);
+}
+
+/* Writes the pages (in `order`, turned by `rot`) with one of MuPDF's document writers: "pdf", "docx", "txt"... */
+int fo_write_document(fo_ctx *c, fo_doc *d, const char *path, const char *format, const char *options, const int *order, int count, const int *rot)
+{
 	fz_document_writer *w = NULL;
 	fz_page *page = NULL;
 	fz_var(w);
@@ -1962,7 +1968,7 @@ int fo_convert_to_pdf(fo_ctx *c, fo_doc *d, const char *path, const int *order, 
 	{
 		char *p = os_path(CTX, path);
 		fz_try(CTX)
-			w = fz_new_pdf_writer(CTX, p, "");
+			w = fz_new_document_writer(CTX, p, format, options);
 		fz_always(CTX)
 			fz_free(CTX, p);
 		fz_catch(CTX)
@@ -5475,7 +5481,8 @@ static int take_buffer(fz_context *ctx, fz_buffer *buf, unsigned char **data, si
 	return 0;
 }
 
-int fo_area_image(fo_ctx *c, fo_list *l, const float b[4], const float area[4], int rot, float dpi, int svg, unsigned char **data, size_t *len)
+/* kind: 0 PNG, 1 SVG, 2 JPEG, 3 PNM (plain RGB, for writers of other formats). */
+int fo_area_image(fo_ctx *c, fo_list *l, const float b[4], const float area[4], int rot, float dpi, int kind, unsigned char **data, size_t *len)
 {
 	fz_pixmap *pix = NULL;
 	fz_device *dev = NULL;
@@ -5494,7 +5501,7 @@ int fo_area_image(fo_ctx *c, fo_list *l, const float b[4], const float area[4], 
 		fz_matrix turn = fz_rotate((float)rot);
 		fz_rect t = fz_transform_rect(r, turn);
 		turn = fz_concat(turn, fz_translate(-t.x0, -t.y0));
-		if (svg)
+		if (kind == 1)
 		{
 			/* Vector: text as outlines, so it looks the same everywhere. */
 			buf = fz_new_buffer(CTX, 4096);
@@ -5517,7 +5524,12 @@ int fo_area_image(fo_ctx *c, fo_list *l, const float b[4], const float area[4], 
 			fz_run_display_list(CTX, (fz_display_list *)l, dev, ctm, fz_rect_from_irect(box), NULL);
 			fz_close_device(CTX, dev);
 			pix->xres = pix->yres = (int)dpi;
-			buf = fz_new_buffer_from_pixmap_as_png(CTX, pix, fz_default_color_params);
+			if (kind == 2)
+				buf = fz_new_buffer_from_pixmap_as_jpeg(CTX, pix, fz_default_color_params, 90, 0);
+			else if (kind == 3)
+				buf = fz_new_buffer_from_pixmap_as_pnm(CTX, pix, fz_default_color_params);
+			else
+				buf = fz_new_buffer_from_pixmap_as_png(CTX, pix, fz_default_color_params);
 		}
 		take_buffer(CTX, buf, data, len);
 	}

@@ -182,7 +182,29 @@ impl Obj {
 /// A password Office tries on protected files instead of asking; files without one ignore it.
 const NO_PASSWORD: &str = "\u{1}paginaut";
 
-fn convert_on_this_thread(app: App, input: &str, output: &str) -> Result<(), String> {
+/// What Office is asked to do.
+#[derive(Clone)]
+enum Job {
+    /// The file as a PDF.
+    ToPdf(App),
+    /// A PDF as an editable Word document (Word's own PDF reading).
+    PdfToWord,
+    /// A presentation with a slide per picture: (picture file, width, height in points).
+    Slides(Vec<(String, f32, f32)>),
+}
+
+impl Job {
+    fn app(&self) -> App {
+        match self {
+            Job::ToPdf(a) => *a,
+            Job::PdfToWord => App::Word,
+            Job::Slides(_) => App::PowerPoint,
+        }
+    }
+}
+
+fn convert_on_this_thread(job: &Job, input: &str, output: &str) -> Result<(), String> {
+    let app = job.app();
     let clsid = unsafe { CLSIDFromProgID(&HSTRING::from(app.prog_id())) }.map_err(|_| format!("{} isn't installed.", app.name()))?;
     let office = Obj(unsafe { CoCreateInstance(&clsid, None, CLSCTX_LOCAL_SERVER) }.map_err(|e| format!("Couldn't start {}: {}", app.name(), e.message()))?);
     // PowerPoint (one window for everything) may already be open for the user: leave it running then.
@@ -214,15 +236,19 @@ fn convert_on_this_thread(app: App, input: &str, output: &str) -> Result<(), Str
                     )
                     .map_err(protected)?
                     .object()?;
-                // OutputFileName, ExportFormat (PDF), OpenAfterExport, OptimizeFor (print), Range (all), From, To, Item (content),
-                // IncludeDocProps, KeepIRM, CreateBookmarks (from headings), DocStructureTags, BitmapMissingFonts
-                let r = doc.call(
-                    "ExportAsFixedFormat",
-                    &[
-                        Arg::Str(output), Arg::Int(17), Arg::Bool(false), Arg::Int(0), Arg::Int(0), Arg::Int(1), Arg::Int(1), Arg::Int(0),
-                        Arg::Bool(true), Arg::Bool(true), Arg::Int(1), Arg::Bool(true), Arg::Bool(true),
-                    ],
-                );
+                let r = if matches!(job, Job::PdfToWord) {
+                    doc.call("SaveAs2", &[Arg::Str(output), Arg::Int(16)]) // wdFormatXMLDocument (.docx)
+                } else {
+                    // OutputFileName, ExportFormat (PDF), OpenAfterExport, OptimizeFor (print), Range (all), From, To, Item
+                    // (content), IncludeDocProps, KeepIRM, CreateBookmarks (from headings), DocStructureTags, BitmapMissingFonts
+                    doc.call(
+                        "ExportAsFixedFormat",
+                        &[
+                            Arg::Str(output), Arg::Int(17), Arg::Bool(false), Arg::Int(0), Arg::Int(0), Arg::Int(1), Arg::Int(1), Arg::Int(0),
+                            Arg::Bool(true), Arg::Bool(true), Arg::Int(1), Arg::Bool(true), Arg::Bool(true),
+                        ],
+                    )
+                };
                 let _ = doc.call("Close", &[Arg::Int(0)]); // wdDoNotSaveChanges
                 r.map(drop)
             }
@@ -251,6 +277,9 @@ fn convert_on_this_thread(app: App, input: &str, output: &str) -> Result<(), Str
             App::PowerPoint => {
                 let _ = office.put("DisplayAlerts", Arg::Int(1)); // ppAlertsNone
                 let shows = office.get("Presentations")?.object()?;
+                if let Job::Slides(pictures) = job {
+                    return slides(&shows, pictures, output);
+                }
                 // "file::password" opens a protected presentation without asking; files without one ignore it.
                 // FileName, ReadOnly, Untitled, WithWindow (all msoTriState)
                 let named = format!("{input}::{NO_PASSWORD}");
@@ -270,6 +299,39 @@ fn convert_on_this_thread(app: App, input: &str, output: &str) -> Result<(), Str
     result
 }
 
+/// A presentation (no window) with a slide per picture, each filling its slide; the slides take the first
+/// picture's shape (PowerPoint allows 1 to 56 inches a side).
+fn slides(shows: &Obj, pictures: &[(String, f32, f32)], output: &str) -> Result<(), String> {
+    let show = shows.call("Add", &[Arg::Int(0)])?.object()?;
+    let r = (|| -> Result<(), String> {
+        let (w0, h0) = pictures.first().map_or((720.0, 540.0), |p| (p.1, p.2));
+        let fit = (4032.0 / w0.max(h0)).min(1.0);
+        let (sw, sh) = ((w0 * fit).max(72.0), (h0 * fit).max(72.0));
+        let setup = show.get("PageSetup")?.object()?;
+        setup.put("SlideWidth", Arg::Int(sw.round() as i32))?;
+        setup.put("SlideHeight", Arg::Int(sh.round() as i32))?;
+        let list = show.get("Slides")?.object()?;
+        for (i, (file, w, h)) in pictures.iter().enumerate() {
+            let slide = list.call("Add", &[Arg::Int(i as i32 + 1), Arg::Int(12)])?.object()?; // ppLayoutBlank
+            // A page of another shape fits inside, centred.
+            let z = (sw / w).min(sh / h);
+            let (pw, ph) = (w * z, h * z);
+            let shapes = slide.get("Shapes")?.object()?;
+            // FileName, LinkToFile, SaveWithDocument, Left, Top, Width, Height
+            shapes.call(
+                "AddPicture",
+                &[
+                    Arg::Str(file), Arg::Int(0), Arg::Int(-1), Arg::Int(((sw - pw) / 2.0) as i32), Arg::Int(((sh - ph) / 2.0) as i32), Arg::Int(pw.round() as i32),
+                    Arg::Int(ph.round() as i32),
+                ],
+            )?;
+        }
+        show.call("SaveAs", &[Arg::Str(output), Arg::Int(24)]).map(drop) // ppSaveAsOpenXMLPresentation
+    })();
+    let _ = show.call("Close", &[]);
+    r
+}
+
 /// Office's message for a wrong password, in words the user can act on.
 fn protected(e: String) -> String {
     let l = e.to_lowercase();
@@ -284,28 +346,43 @@ static RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Converts `input` to the PDF `output` with `app`, giving up after `timeout`.
 pub fn convert(app: App, input: &str, output: &str, timeout: Duration) -> Result<(), String> {
+    job(Job::ToPdf(app), input, output, "pdf", timeout)
+}
+
+/// A PDF as an editable Word document, made by Word itself.
+pub fn pdf_to_word(input: &str, output: &str, timeout: Duration) -> Result<(), String> {
+    job(Job::PdfToWord, input, output, "docx", timeout)
+}
+
+/// A PowerPoint presentation with a slide per picture (file, width and height in points).
+pub fn picture_slides(pictures: Vec<(String, f32, f32)>, output: &str, timeout: Duration) -> Result<(), String> {
+    job(Job::Slides(pictures), "", output, "pptx", timeout)
+}
+
+fn job(job: Job, input: &str, output: &str, ext: &str, timeout: Duration) -> Result<(), String> {
     // Office reads relative paths from its own folder.
-    let input = std::path::absolute(input).map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+    let input = if input.is_empty() { String::new() } else { std::path::absolute(input).map_err(|e| e.to_string())?.to_string_lossy().into_owned() };
     // Click-to-run Office doesn't see folders made in the local app data folder after it was set up ("The
     // directory name isn't valid"), which is where Paginaut keeps its PDFs; the temp folder it does see.
     let n = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temp = std::env::temp_dir().join(format!("paginaut-office-{}-{n}.pdf", std::process::id()));
+    let temp = std::env::temp_dir().join(format!("paginaut-office-{}-{n}.{ext}", std::process::id()));
     let _ = std::fs::remove_file(&temp);
-    let r = run(app, &input, &temp.to_string_lossy(), timeout).and_then(|()| {
-        std::fs::rename(&temp, output).or_else(|_| std::fs::copy(&temp, output).map(drop)).map_err(|e| format!("Couldn't keep the PDF: {e}"))
+    let r = run(job, &input, &temp.to_string_lossy(), timeout).and_then(|()| {
+        std::fs::rename(&temp, output).or_else(|_| std::fs::copy(&temp, output).map(drop)).map_err(|e| format!("Couldn't keep the file: {e}"))
     });
     let _ = std::fs::remove_file(&temp);
     r
 }
 
-fn run(app: App, input: &str, output: &str, timeout: Duration) -> Result<(), String> {
+fn run(job: Job, input: &str, output: &str, timeout: Duration) -> Result<(), String> {
+    let app = job.app();
     let (tx, rx) = std::sync::mpsc::channel();
     let (input, output) = (input.to_string(), output.to_string());
     std::thread::Builder::new()
         .name("office-com".into())
         .spawn(move || {
             let init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-            let r = if init.is_ok() { convert_on_this_thread(app, &input, &output) } else { Err(format!("COM: {}", init.message())) };
+            let r = if init.is_ok() { convert_on_this_thread(&job, &input, &output) } else { Err(format!("COM: {}", init.message())) };
             if init.is_ok() {
                 unsafe { CoUninitialize() };
             }

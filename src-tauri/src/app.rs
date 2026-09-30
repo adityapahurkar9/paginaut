@@ -1172,11 +1172,60 @@ pub async fn office_remove(office: State<'_, Arc<Office>>) -> Res<Engines> {
     .await
 }
 
-/// Converts an Office file into the PDF `out`. Returns the converter's name.
+/// Converts a file into the PDF `out`: an Office file with `engine` (or the preferred converter), anything else
+/// Paginaut opens (web pages, e-books, pictures, XPS) by itself. Returns who made it.
 #[tauri::command]
-pub async fn office_convert(office: State<'_, Arc<Office>>, path: String, out: String, engine: Option<String>) -> Res<String> {
+pub async fn office_convert(state: State<'_, AppState>, office: State<'_, Arc<Office>>, path: String, out: String, engine: Option<String>) -> Res<String> {
     let office = office.inner().clone();
-    blocking(move || office.convert_to(&path, &out, engine.as_deref())).await
+    let engine_ = state.engine.clone();
+    blocking(move || {
+        if crate::office::kind(&path).is_some() {
+            office.convert_to(&path, &out, engine.as_deref())
+        } else {
+            engine_.convert_file(&path, &out).map(|()| "Paginaut".into())
+        }
+    })
+    .await
+}
+
+// ---------------------------------------------------------------- converting from PDF
+
+#[tauri::command]
+pub async fn convert_options(office: State<'_, Arc<Office>>) -> Res<crate::convert::Options> {
+    let office = office.inner().clone();
+    blocking(move || Ok(crate::convert::options(&office))).await
+}
+
+static CONVERT_STOP: once_cell::sync::Lazy<Arc<std::sync::atomic::AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
+
+/// The document's pages as Word, Excel, PowerPoint, pictures or text (see convert.rs).
+#[tauri::command]
+pub async fn convert_from_pdf(state: State<'_, AppState>, office: State<'_, Arc<Office>>, req: crate::convert::Request, on_event: Channel<DownloadEvent>) -> Res<crate::convert::Done> {
+    let office = office.inner().clone();
+    let engine = state.engine.clone();
+    CONVERT_STOP.store(false, std::sync::atomic::Ordering::Release);
+    blocking(move || {
+        crate::convert::run(&engine, &office, &req, &CONVERT_STOP, &mut |done, total| {
+            let _ = on_event.send(DownloadEvent::Progress { done: done as u64, total: total as u64 });
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn convert_stop() {
+    CONVERT_STOP.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// Opens a file Paginaut just made in the program Windows uses for it.
+#[tauri::command]
+pub fn open_path(app: tauri::AppHandle, path: String) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let ext = std::path::Path::new(&path).extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !["docx", "xlsx", "pptx", "png", "jpg", "tiff", "txt", "pdf"].contains(&ext.as_str()) {
+        return Err("Paginaut only opens the files it made.".into());
+    }
+    app.opener().open_path(path, None::<&str>).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------- app

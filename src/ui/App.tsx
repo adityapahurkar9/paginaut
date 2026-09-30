@@ -27,7 +27,8 @@ import { Home } from "./Home";
 import { SignPane } from "./SignPane";
 import { SigBar } from "./SigPanel";
 import { OcrBar, OcrDialog } from "./OcrUI";
-import { ConvertDialog, OfficeBar, OfficeDialog, openingText } from "./OfficeUI";
+import { OfficeBar, OfficeDialog, openingText } from "./OfficeUI";
+import { ConvertPane } from "./ConvertPane";
 import { officeKind } from "../office";
 import { InsertDialog, MergeDialog, SplitDialog } from "./PagesUI";
 import { HeaderDialog, WatermarkDialog } from "./StampUI";
@@ -73,6 +74,7 @@ export function App() {
           </div>
         </div>
         <SignPane />
+        <ConvertPane />
       </div>
       <StatusBar />
       <Palette />
@@ -80,7 +82,6 @@ export function App() {
       <HelpDialogs />
       <OcrDialog />
       <OfficeDialog />
-      <ConvertDialog />
       <InsertDialog />
       <MergeDialog />
       <SplitDialog />

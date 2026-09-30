@@ -793,9 +793,17 @@ impl Doc {
                 let page = self.page(&mut inner, index)?;
                 page.area_pdf(&abs, rot)
             }
-            "svg" => self.list(index, 1)?.area_image(&b, &area, rot, 72.0, true),
-            _ => self.list(index, 1)?.area_image(&b, &area, rot, dpi.clamp(36.0, 1200.0), false),
+            "svg" => self.list(index, 1)?.area_image(&b, &area, rot, 72.0, 1),
+            "jpg" => self.list(index, 1)?.area_image(&b, &area, rot, dpi.clamp(36.0, 1200.0), 2),
+            "pnm" => self.list(index, 1)?.area_image(&b, &area, rot, dpi.clamp(36.0, 1200.0), 3),
+            _ => self.list(index, 1)?.area_image(&b, &area, rot, dpi.clamp(36.0, 1200.0), 0),
         }
+    }
+
+    /// The whole page `index` as a picture ("png", "jpg" or "pnm"), turned by `rot`, at `dpi`.
+    pub fn page_image(&self, index: usize, rot: i32, kind: &str, dpi: f32) -> Result<Vec<u8>, String> {
+        let b = self.bounds(index)?;
+        self.area_data(index, [0.0, 0.0, b[2] - b[0], b[3] - b[1]], rot, kind, dpi)
     }
 
     /// Paragraphs of text on page `index` (its own content, not comments or form fields).
@@ -1873,6 +1881,34 @@ impl Engine {
         }
         layout_reflowable(&d, &file)?;
         Ok(Peek { pages: d.page_count()?, is_pdf, locked: false })
+    }
+
+    /// Writes the pages in `order` (turned by `rot`) with one of MuPDF's writers ("docx", "txt"…).
+    pub fn write_document(&self, id: DocId, order: &[usize], rot: &[i32], path: &str, format: &str, options: &str) -> Result<(), String> {
+        let d = self.doc(id)?;
+        let inner = d.inner.lock();
+        inner.doc.write_document(path, format, options, order, rot)
+    }
+
+    /// Makes a PDF of a file that isn't one (a web page, e-book, picture, XPS; an Office file through its converter).
+    pub fn convert_file(&self, path: &str, out: &str) -> Result<(), String> {
+        let (file, converted) = self.source(path, None)?;
+        if converted.is_some() {
+            return std::fs::copy(&file, out).map(drop).map_err(|e| e.to_string());
+        }
+        let d = Document::open(&file).map_err(|e| format!("Couldn't open {}: {e}", file_name(path)))?;
+        if d.needs_password() {
+            return Err(format!("{} is protected with a password: open it first.", file_name(path)));
+        }
+        if d.is_pdf() {
+            return Err(format!("{} is already a PDF.", file_name(path)));
+        }
+        if d.is_reflowable() {
+            // Web pages and e-books become A4 pages.
+            d.layout(595.0, 842.0, 11.0)?;
+        }
+        let n = d.page_count()?;
+        d.convert_to_pdf(out, &(0..n).collect::<Vec<_>>(), &vec![0; n])
     }
 
     /// Opens every file pages will be taken from (Office files through PDFs made from them) and checks the

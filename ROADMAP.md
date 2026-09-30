@@ -420,6 +420,32 @@ Extract content (right-click the item on the page; Tools › Organize; command p
       Save as), office_convert.rs (MuPDF conversion + page dumps for compare.py), lo_setup.rs (pack from a downloaded
       installer)
 
+## Phase 7.1 (0.7.10): Convert pane (done)
+The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only covered Office files → PDF.
+- [x] Convert pane on the right (in place of the Sign pane; opening one closes the other), opened from Tools ›
+      Convert and the command palette: "This document to" and "Files to PDF" in one place, Office suite choices at
+      the bottom
+- [x] This document to Word (.docx): Microsoft Word when installed (Word reads the PDF itself: paragraphs, tables and
+      pictures editable, close to the layout; 1.5 s), else Paginaut's own writer (src-tauri/src/docx.rs): text as
+      paragraphs with size, bold, italic, colour, alignment and font, tables as Word tables, pictures, in reading order,
+      a page break per page, page numbers left out, symbol-font bullets as bullets. Tried and rejected: MuPDF's own
+      .docx writer (files Word and LibreOffice refuse: line breaks inside text runs, "24.000000" sizes, pictures
+      referenced but not packaged) and LibreOffice's PDF import (1,064 positioned text boxes; text on shaded table rows
+      lost)
+- [x] Excel (.xlsx): every table found on the pages, a sheet each ("Page 3", "Page 3 (2)"), numbers as numbers
+- [x] PowerPoint (.pptx): LibreOffice when available (editable slides: text boxes, shapes, pictures), else Microsoft
+      PowerPoint (a picture per slide, slide shaped like the pages); neither: offers LibreOffice
+- [x] Images: PNG or JPEG (a file per page, numbered after the name chosen) or one multi-page TIFF (own writer,
+      src-tauri/src/tiff.rs: baseline RGB, PackBits, resolution recorded), 72–600 dpi
+- [x] Text (.txt): MuPDF's text writer, reading order
+- [x] Pages: all, the selected ones, or a range; unsaved changes and rotations included. Open the result in its
+      program or show it in its folder; Stop for long jobs
+- [x] Files to PDF: Office files (Phase 7), web pages (HTML, laid out on A4), e-books, XPS, text; Images (one PDF):
+      the Merge dialog with pictures picked
+- [x] Office files dialog: "Office suite choices", each suite with Available / Not installed, LibreOffice's download
+- Tests: src-tauri/examples/convert_test.rs (every format and program, pictures numbered, tables found, web page to
+      A4, a PDF not converted again); unit tests for PackBits and font names
+
 ## Phase 7.5 (0.7.50): Compare
 - [ ] Two PDFs side by side, scrolling together: word-by-word text diff with a list of changes, plus a picture overlay
       for changes in drawings and scans
@@ -427,6 +453,14 @@ Extract content (right-click the item on the page; Tools › Organize; command p
       Word file?"). Text only, since no two programs draw a Word file quite the same way
 - [ ] Excel vs PDF: cell by cell against the tables found in the PDF (Read-mode table detection); only as good as the
       printout (hidden columns, number formats and page breaks change what's in the PDF)
+
+## Phase 7.6 (0.7.60): Easier to use
+- [ ] Rework the menus, toolbar tabs and bars into fewer, clearer places: every command findable in one obvious spot,
+      related tools together, rarely used ones out of the way, bars over the document that don't pile up
+- [ ] Settings: one dialog (Help › Settings, and the command palette) with a tab per area, so every setting has one
+      central place instead of being spread over menus and panels: appearance (theme, night mode), opening and saving
+      (auto-save rotations…), Read and Book modes, comments and signing, text recognition (languages, downloads), Office
+      files (suite choices, LibreOffice download), memory and performance
 
 ## Phase 8 (0.8.0): Packaging, updates and signing
 - [ ] GitHub repository (the user has an account) hosting source, releases and update files

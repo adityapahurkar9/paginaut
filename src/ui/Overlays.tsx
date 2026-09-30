@@ -8,7 +8,8 @@ import { setCoverSeparate, setViewMode } from "../modes";
 import { startLayoutEdit } from "./LayoutPanel";
 import { clearForm } from "../forms";
 import { recognize, removeRecognized } from "../ocr";
-import { extractPages, insertBlankPage, startInsert, startMerge, startSplit } from "./PagesUI";
+import { extractPages, insertBlankPage, startInsert, startMerge, startMergePictures, startSplit } from "./PagesUI";
+import { startExport } from "./ConvertPane";
 import { toggleGrid } from "./PageGrid";
 import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
@@ -213,7 +214,14 @@ function commands(): Item[] {
     c("Fix reading layout (columns, order, pictures)", withTab((t) => void startLayoutEdit(t)), "", hasDoc),
     c("Recognize text (OCR)…", withTab((t) => void recognize(t)), "", hasDoc),
     c("Convert Office files to PDF (Word, Excel, PowerPoint)…", () => void pickAndConvert(), ""),
-    c("Office files: programs that open them, get LibreOffice…", () => (officeDialog.value = true), ""),
+    c("Convert to Word…", withTab((t) => startExport(t, "docx")), "", hasDoc),
+    c("Convert tables to Excel…", withTab((t) => startExport(t, "xlsx")), "", hasDoc),
+    c("Convert to PowerPoint…", withTab((t) => startExport(t, "pptx")), "", hasDoc),
+    c("Convert pages to images (PNG, JPEG, TIFF)…", withTab((t) => startExport(t, "images")), "", hasDoc),
+    c("Convert to text…", withTab((t) => startExport(t, "txt")), "", hasDoc),
+    c("Convert web pages (HTML) to PDF…", () => void pickAndConvert(true), ""),
+    c("Convert images to one PDF…", () => void startMergePictures(), ""),
+    c("Office suite choices: programs that open Office files, get LibreOffice…", () => (officeDialog.value = true), ""),
     c("Remove recognized text", withTab((t) => void removeRecognized(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Clear form", withTab((t) => void clearForm(t)), "", () => !!activeTab.value?.forms.value?.fields),
     c("Save a flattened copy of the form…", withTab((t) => void P.saveFlattened(t)), "", () => !!activeTab.value?.forms.value?.fields),

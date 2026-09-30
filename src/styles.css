@@ -938,6 +938,10 @@ body.text-edit .pg { cursor: default; }
 .office-engines { display: flex; flex-direction: column; gap: 6px; }
 .office-engine { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 8px; background: var(--hover); font-size: 12.5px; }
 .office-engine > span { color: var(--tx); overflow-wrap: anywhere; }
+.office-suite { display: flex; align-items: center; gap: 8px; }
+.office-suite b { flex: 1; }
+.office-avail { font-size: 11.5px; padding: 1px 8px; border-radius: 10px; background: var(--active); color: var(--tx2); }
+.office-avail.on { background: var(--acc-soft); color: var(--acc); }
 .office-engine > small { color: var(--tx3); font-size: 11.5px; line-height: 1.35; }
 .office-engine .ps-line { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .office-engine .ps-line .hint { font-size: 11.5px; color: var(--tx3); line-height: 1.3; }
@@ -947,13 +951,19 @@ body.text-edit .pg { cursor: default; }
 .office-choice span { display: flex; flex-direction: column; font-size: 13px; }
 .office-choice small { color: var(--tx3); font-size: 11.5px; }
 .office-choice.off { opacity: 0.5; }
-.dialog.convert-dialog { width: 580px; display: flex; flex-direction: column; gap: 14px; }
-.convert-list { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
-.convert-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: var(--hover); font-size: 12.5px; }
-.convert-row .inp { width: 200px; flex-shrink: 0; }
-.convert-name { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-.convert-name, .convert-name small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.convert-name small { color: var(--tx3); font-size: 11.5px; }
-.convert-row.error .convert-name small { color: #c42b1c; white-space: normal; }
-.convert-state { width: 76px; flex-shrink: 0; text-align: right; color: var(--tx2); }
+.convert-list { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; }
+.convert-row { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: 8px; background: var(--hover); font-size: 12.5px; }
+.convert-top { display: flex; align-items: center; gap: 6px; }
+.convert-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.convert-note { color: var(--tx3); font-size: 11.5px; }
+.convert-note .linkish { padding: 0; }
+.convert-state { flex-shrink: 0; color: var(--tx2); font-size: 11.5px; }
 .convert-row.done .convert-state { color: var(--acc); }
+.convertpane .seg.wrap { flex-wrap: wrap; }
+.convertpane .seg.wrap .segb { flex: 1 0 auto; padding: 0 8px; }
+.convertpane .ps-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.convertpane .export-go { margin-left: auto; }
+.convertpane .tool-field .seg + .seg { margin-top: 2px; }
+.pane-link { padding: 0; align-self: flex-start; }
+.export-result { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--acc-soft); font-size: 12.5px; }
+.export-result small { color: var(--tx2); }

@@ -97,6 +97,7 @@ int fo_pdf_can_save_incrementally(fo_ctx *c, fo_doc *d);
 int fo_pdf_save(fo_ctx *c, fo_doc *d, const char *path, int incremental);
 /* Writes any document as a new PDF with the given page order and extra rotations. */
 int fo_convert_to_pdf(fo_ctx *c, fo_doc *d, const char *path, const int *order, int count, const int *rot);
+int fo_write_document(fo_ctx *c, fo_doc *d, const char *path, const char *format, const char *options, const int *order, int count, const int *rot);
 
 /* Appends pages[0..count) of src (any format) to the end of PDF d, as part of
  * the current undo operation (see fo_pdf_begin_op). PDF pages keep their
@@ -166,7 +167,7 @@ int fo_picture_data(fo_ctx *c, fo_list *l, int idx, int fmt, unsigned char **dat
 char *fo_attachments_json(fo_ctx *c, fo_doc *d);
 int fo_attachment_data(fo_ctx *c, fo_doc *d, int idx, unsigned char **data, size_t *len);
 /* An area of a page (coords relative to its origin), turned by rot: PNG at dpi, or SVG. */
-int fo_area_image(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4], int rot, float dpi, int svg, unsigned char **data, size_t *len);
+int fo_area_image(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4], int rot, float dpi, int kind, unsigned char **data, size_t *len);
 char *fo_area_text(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4]);
 /* The page as a one-page PDF showing only `area` (page coordinates, not relative). */
 int fo_pdf_area_pdf(fo_ctx *c, fo_page *p, const float area[4], int rot, unsigned char **data, size_t *len);

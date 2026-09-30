@@ -22,7 +22,8 @@ import { startLayoutEdit } from "./LayoutPanel";
 import { loadSigs, newSig, openSignPane, pickSig, sigs, sigsOf, type SigKind } from "../sign";
 import { startSigning } from "../dsc";
 import { recognize, removeRecognized } from "../ocr";
-import { extractPages, insertBlankPage, startInsert, startMerge, startSplit } from "./PagesUI";
+import { extractPages, insertBlankPage, startInsert, startMerge, startMergePictures, startSplit } from "./PagesUI";
+import { startExport } from "./ConvertPane";
 import { toggleGrid } from "./PageGrid";
 import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
@@ -72,7 +73,7 @@ function fileItems(): MenuItem[] {
     { label: "Document properties…", hint: "Ctrl+D", disabled: !ready, run: () => ready && startProperties(ready) },
     { sep: true },
     { label: "Convert Office files to PDF…", run: () => void pickAndConvert() },
-    { label: "Office files…", run: () => (officeDialog.value = true) },
+    { label: "Office suite choices…", run: () => (officeDialog.value = true) },
     { sep: true },
     { label: "Auto-save rotations", check: settings.value.autoSaveRotations, run: () => updateSettings({ autoSaveRotations: !settings.value.autoSaveRotations }) },
     ...(files.length ? [{ sep: true } as MenuItem, { head: "Recent" } as MenuItem] : []),
@@ -479,6 +480,8 @@ function SignTools({ tab }: { tab: Tab | null }) {
 }
 
 /** Tools that are planned but not built yet show as disabled items with their phase. */
+
+/** Not built yet: shown greyed with the phase it comes in. */
 const soon = (label: string, phase: number): MenuItem => ({ label, hint: `Phase ${phase}`, disabled: true, run: () => {} });
 
 function ToolsTools({ tab }: { tab: Tab | null }) {
@@ -534,8 +537,18 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         soon("Compare", 7.5),
       ], "left", 280)} />
       <TB icon={I(RefreshCw, 17)} label="Convert" menu onClick={(e) => openMenu(e, [
-        { head: "From PDF" }, soon("Word", 7), soon("Excel", 7), soon("PowerPoint", 7), soon("Images (JPG, PNG, TIFF)", 7), soon("Text", 7),
-        { head: "To PDF" }, soon("Word, Excel, PowerPoint", 7), soon("Images", 7), soon("Web page (HTML)", 7),
+        { head: "This document to" },
+        { label: "Word…", disabled: !tab, run: () => startExport(tab, "docx") },
+        { label: "Excel (its tables)…", disabled: !tab, run: () => startExport(tab, "xlsx") },
+        { label: "PowerPoint…", disabled: !tab, run: () => startExport(tab, "pptx") },
+        { label: "Images (PNG, JPEG, TIFF)…", disabled: !tab, run: () => startExport(tab, "images") },
+        { label: "Text…", disabled: !tab, run: () => startExport(tab, "txt") },
+        { head: "To PDF" },
+        { label: "Word, Excel, PowerPoint files…", run: () => void pickAndConvert() },
+        { label: "Images (one PDF)…", run: () => void startMergePictures() },
+        { label: "Web pages (HTML)…", run: () => void pickAndConvert(true) },
+        { sep: true },
+        { label: "Office suite choices…", run: () => (officeDialog.value = true) },
       ], "left", 250)} />
     </>
   );

@@ -496,6 +496,17 @@ impl Document {
         })
     }
 
+    /// Writes the pages in `order` (turned by `rot`) with one of MuPDF's writers ("docx", "txt"…).
+    pub fn write_document(&self, path: &str, format: &str, options: &str, order: &[usize], rot: &[i32]) -> Result<()> {
+        let p = CString::new(path).map_err(|e| e.to_string())?;
+        let (f, o) = (CString::new(format).map_err(|e| e.to_string())?, CString::new(options).map_err(|e| e.to_string())?);
+        let order: Vec<c_int> = order.iter().map(|&x| x as c_int).collect();
+        with_kind(self.1, |c| {
+            let rc = unsafe { fo_write_document(c, self.0, p.as_ptr(), f.as_ptr(), o.as_ptr(), order.as_ptr(), order.len() as c_int, rot.as_ptr()) };
+            if rc == 0 { Ok(()) } else { Err(last_error(c)) }
+        })
+    }
+
     /// Writes any document (EPUB, images, XPS…) as a PDF with the given order and rotations.
     pub fn convert_to_pdf(&self, path: &str, order: &[usize], rot: &[i32]) -> Result<()> {
         let p = CString::new(path).map_err(|e| e.to_string())?;
@@ -1141,10 +1152,11 @@ impl List {
     }
 
     /// An area (relative to the page origin), turned by `rot`: PNG at `dpi`, or SVG.
-    pub fn area_image(&self, bounds: &[f32; 4], area: &[f32; 4], rot: i32, dpi: f32, svg: bool) -> Result<Vec<u8>> {
+    /// `kind`: 0 PNG, 1 SVG, 2 JPEG, 3 PNM (plain RGB).
+    pub fn area_image(&self, bounds: &[f32; 4], area: &[f32; 4], rot: i32, dpi: f32, kind: i32) -> Result<Vec<u8>> {
         with_kind(self.1, |c| {
             let (mut d, mut len) = (std::ptr::null_mut(), 0usize);
-            if unsafe { fo_area_image(c, self.0, bounds.as_ptr(), area.as_ptr(), rot, dpi, svg as c_int, &mut d, &mut len) } != 0 {
+            if unsafe { fo_area_image(c, self.0, bounds.as_ptr(), area.as_ptr(), rot, dpi, kind, &mut d, &mut len) } != 0 {
                 return Err(last_error(c));
             }
             Ok(take_bytes(c, d, len))

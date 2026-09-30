@@ -38,6 +38,23 @@ export interface OfficeEngines {
   preference: "auto" | OfficeEngine;
 }
 
+/** Converting the document's pages to another format (the Convert menu). */
+export type ExportFormat = "docx" | "xlsx" | "pptx" | "png" | "jpg" | "tiff" | "txt";
+export interface ExportRequest {
+  doc: number;
+  order: number[];
+  rot: number[];
+  format: ExportFormat;
+  out: string;
+  engine: OfficeEngine | null;
+  dpi: number | null;
+}
+export interface ExportDone {
+  files: string[];
+  by: string;
+  note: string;
+}
+
 export type InstallStage = "finding" | "downloading" | "checking" | "unpacking" | "preparing";
 export type InstallEvent = { kind: "progress"; stage: InstallStage; done: number; total: number };
 
@@ -422,6 +439,16 @@ export const api = {
   officeRemove: () => invoke<OfficeEngines>("office_remove"),
   /** Converts an Office file into the PDF `out`; resolves with the converter's name. */
   officeConvert: (path: string, out: string, engine?: OfficeEngine) => invoke<string>("office_convert", { path, out, engine: engine ?? null }),
+  /** Which programs can make Word and PowerPoint files here, best first. */
+  convertOptions: () => invoke<{ docx: OfficeEngine[]; pptx: OfficeEngine[] }>("convert_options"),
+  convertFromPdf: (req: ExportRequest, onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
+    const ch = new Channel<{ kind: "progress"; done: number; total: number }>();
+    ch.onmessage = onEvent;
+    return invoke<ExportDone>("convert_from_pdf", { req, onEvent: ch });
+  },
+  convertStop: () => invoke<void>("convert_stop"),
+  /** Opens a file Paginaut made in its usual program. */
+  openPath: (path: string) => invoke<void>("open_path", { path }),
   ocrLanguages: () => invoke<import("./ocr").OcrLang[]>("ocr_languages"),
   ocrDownload: (code: string, quality: string, onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
     const ch = new Channel<{ kind: "progress"; done: number; total: number }>();

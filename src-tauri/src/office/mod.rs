@@ -144,7 +144,7 @@ impl Office {
         };
         if pick.is_none() && !builtin_reads(path) {
             return Err(format!(
-                "Opening {} files needs Microsoft Office or LibreOffice. Get LibreOffice (free) in Settings › Office files.",
+                "Opening {} files needs Microsoft Office or LibreOffice. Get LibreOffice (free) in Tools › Convert › Office suite choices.",
                 path.rsplit('.').next().unwrap_or("these").to_ascii_uppercase()
             ));
         }
@@ -195,6 +195,13 @@ impl Office {
         let c = self.convert(path, engine)?.ok_or_else(|| format!("{} needs Microsoft Office or LibreOffice to become a PDF.", file_name(path)))?;
         std::fs::copy(&c.pdf, out).map_err(|e| format!("Couldn't write {}: {e}", file_name(out)))?;
         Ok(c.engine_name)
+    }
+
+    /// A PDF as an editable presentation, by LibreOffice (a slide per page, text and shapes kept).
+    pub fn pdf_to_slides(&self, pdf: &str, out: &Path) -> Result<(), String> {
+        let lo = self.libreoffice().ok_or("LibreOffice isn't available.")?;
+        let profile = self.data.join(if lo.pack { "lo-profile" } else { "lo-profile-installed" });
+        libre::convert_as(&lo, &profile, pdf, out, Some("impress_pdf_import"), "pptx", TIMEOUT).map_err(|e| format!("LibreOffice couldn't make the slides: {e}"))
     }
 
     pub fn pack_dir(&self) -> &Path {

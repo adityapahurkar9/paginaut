@@ -394,6 +394,13 @@ function InsertDialogInner({ tab, initial }: { tab: Tab; initial: FileEntry[] })
 /** Merge: files (starting with this document, if one is open) into a new PDF. */
 export const mergeDialog = signal<{ from: Tab | null; files: FileEntry[] } | null>(null);
 
+/** Pictures into one PDF (Convert › To PDF › Images): the Merge dialog, starting with pictures picked. */
+export async function startMergePictures() {
+  const res = testHook()?.pick ?? (await open({ multiple: true, title: "Pictures to put in one PDF", filters: [{ name: "Pictures", extensions: [...PICTURES] }] }));
+  const files = await peekAll(Array.isArray(res) ? res : res ? [res] : []);
+  if (files.length) mergeDialog.value = { from: null, files };
+}
+
 export async function startMerge(from: Tab | null) {
   const files = from?.info.value ? await peekAll([from.path]) : await pickFiles("Merge files");
   if (files.length) mergeDialog.value = { from, files };

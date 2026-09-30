@@ -7,7 +7,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FileText, X } from "lucide-preact";
 import type { OfficeEngine } from "../api";
 import {
-  available, convertDialog, engineName, engines, install, installError, installLibreOffice, isOffice, likelyEngine, loadEngines, officeDialog, OFFICE_EXT,
+  available, convertDialog, convertible, engineName, engines, install, installError, installLibreOffice, isOffice, likelyEngine, loadEngines, officeDialog, OFFICE_EXT, WEB_EXT,
   reconvert, reconverting, removeLibreOffice, runConvert, setPreference, startConvert, stopInstall, type ConvertItem,
 } from "../office";
 import * as P from "../pages";
@@ -115,6 +115,16 @@ export function OfficeBar({ tab }: { tab: Tab }) {
 
 // ---------------------------------------------------------------- Office files dialog
 
+/** A suite's name and whether it's here. */
+function Suite({ name, on, label }: { name: string; on: boolean; label?: string }) {
+  return (
+    <div class="office-suite">
+      <b>{name}</b>
+      <span class={`office-avail ${on ? "on" : ""}`}>{label ?? (on ? "Available" : "Not installed")}</span>
+    </div>
+  );
+}
+
 const STAGES: Record<string, string> = {
   finding: "Finding the latest version…",
   downloading: "Downloading",
@@ -167,18 +177,18 @@ export function OfficeDialog() {
         </span>
 
         <div class="tool-field">
-          <label>Programs found</label>
+          <label>Office suite choices</label>
           {!e ? (
             <span class="hint">Looking…</span>
           ) : (
             <div class="office-engines">
               <div class="office-engine">
-                <b>Microsoft Office</b>
-                <span>{ms ? `${ms.version} · ${apps}` : "Not installed"}</span>
+                <Suite name="Microsoft Office" on={!!ms} />
+                {ms && <span>{`${ms.version} · ${apps}`}</span>}
                 <small>{ms ? "Documents look exactly as their authors saw them." : "When it's installed, Paginaut uses it."}</small>
               </div>
               <div class="office-engine">
-                <b>LibreOffice</b>
+                <Suite name="LibreOffice" on={!!(e.pack || e.installed)} />
                 {e.pack ? (
                   <span>
                     Paginaut's copy, version {e.pack.version} · {mb(e.pack.size)}{" "}
@@ -186,10 +196,8 @@ export function OfficeDialog() {
                       Remove
                     </button>
                   </span>
-                ) : e.installed ? (
-                  <span>Installed{e.installed.version ? `, version ${e.installed.version}` : ""} · {e.installed.path}</span>
                 ) : (
-                  <span>Not installed</span>
+                  e.installed && <span>Installed{e.installed.version ? `, version ${e.installed.version}` : ""} · {e.installed.path}</span>
                 )}
                 <small>Free. Very close to Office in our tests; spreadsheets may break pages in other places.</small>
                 {!e.pack && !inst && (
@@ -219,8 +227,7 @@ export function OfficeDialog() {
                 )}
               </div>
               <div class="office-engine">
-                <b>Text preview</b>
-                <span>Built in</span>
+                <Suite name="Text preview" on label="Always available (built in)" />
                 <small>Shows the words of .docx, .xlsx and .pptx files, without their formatting.</small>
               </div>
             </div>
@@ -237,9 +244,6 @@ export function OfficeDialog() {
         </div>
 
         <div class="row">
-          <button class="btn" onClick={() => void pickAndConvert()}>
-            Convert files to PDF…
-          </button>
           <span style={{ flex: 1 }} />
           <button class="btn pri" onClick={() => (officeDialog.value = false)}>
             Done
@@ -252,62 +256,65 @@ export function OfficeDialog() {
 
 // ---------------------------------------------------------------- Convert to PDF
 
-async function pickFiles(): Promise<string[]> {
-  const res = testHook()?.pick ?? (await open({ multiple: true, title: "Office files to convert", filters: [{ name: "Office documents", extensions: OFFICE_EXT }] }));
+async function pickFiles(web = false): Promise<string[]> {
+  const office = { name: "Office documents", extensions: OFFICE_EXT };
+  const pages = { name: "Web pages", extensions: WEB_EXT };
+  const res =
+    testHook()?.pick ??
+    (await open({ multiple: true, title: web ? "Web pages to convert" : "Files to convert", filters: web ? [pages, office] : [office, pages, { name: "E-books, XPS, text", extensions: ["epub", "mobi", "fb2", "xps", "oxps", "txt"] }] }));
   return Array.isArray(res) ? res : res ? [res] : [];
 }
 
-export async function pickAndConvert() {
+/** Files to PDF (in the Convert pane), starting with files picked (Office files first, or web pages). */
+export async function pickAndConvert(web = false) {
   officeDialog.value = false;
-  const files = await pickFiles();
+  const files = await pickFiles(web);
   if (files.length) startConvert(files);
 }
 
 const STATE: Record<ConvertItem["state"], string> = { waiting: "", converting: "Converting…", done: "Done", error: "Failed" };
 
-export function ConvertDialog() {
-  const d = convertDialog.value;
-  useEffect(() => {
-    if (!d) return;
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !convertDialog.value?.running) {
-        e.stopPropagation();
-        convertDialog.value = null;
-      }
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, [!!d]);
-  if (!d) return null;
-  const set = (patch: Partial<NonNullable<typeof d>>) => (convertDialog.value = { ...convertDialog.value!, ...patch });
+/** "Files to PDF" in the Convert pane: Office files, web pages, e-books, each with its own program. */
+export function FilesToPdf() {
+  const d = convertDialog.value ?? { items: [], folder: null, running: false };
+  const set = (patch: Partial<typeof d>) => (convertDialog.value = { ...d, ...convertDialog.value, ...patch });
   const waiting = d.items.filter((i) => i.state !== "done").length;
   const done = d.items.filter((i) => i.state === "done");
-  const close = () => !d.running && (convertDialog.value = null);
   const add = async () => {
-    const more = (await pickFiles()).filter((p) => isOffice(p) && !d.items.some((i) => i.path.toLowerCase() === p.toLowerCase()));
-    set({ items: [...convertDialog.value!.items, ...more.map((path) => ({ path, engine: "auto" as const, state: "waiting" as const }))] });
+    const files = await pickFiles();
+    if (files.length) startConvert(files);
   };
   return (
-    <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div class="dialog tool-dialog convert-dialog" role="dialog" aria-label="Convert to PDF">
-        <button class="ib sm close" aria-label="Close" disabled={d.running} onClick={close}>
-          <X size={16} />
-        </button>
-        <h2>Convert to PDF</h2>
+    <>
+      <span class="hint">Word, Excel and PowerPoint files, web pages and e-books.</span>
+      {d.items.length > 0 && (
         <div class="convert-list">
-          {d.items.length === 0 && <span class="hint">No Office files chosen yet.</span>}
           {d.items.map((it, i) => {
             const list = available(it.path);
             return (
               <div class={`convert-row ${it.state}`} key={it.path}>
-                <span class="convert-name" title={it.path}>
-                  {baseName(it.path)}
-                  {it.note && <small title={it.note}>{it.state === "done" ? `by ${it.note}` : it.note}</small>}
-                </span>
+                <div class="convert-top">
+                  <span class="convert-name" title={it.path}>
+                    {baseName(it.path)}
+                  </span>
+                  <span class="convert-state">{it.state === "converting" ? <span class="spin" /> : STATE[it.state]}</span>
+                  {!d.running && it.state !== "done" && (
+                    <button class="ib sm" aria-label={`Remove ${baseName(it.path)}`} onClick={() => set({ items: d.items.filter((_, j) => j !== i) })}>
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
                 {it.state === "done" ? (
-                  <button class="linkish" onClick={() => void openFiles([it.out!])}>
-                    Open
-                  </button>
+                  <span class="convert-note">
+                    {it.note && `by ${it.note} · `}
+                    <button class="linkish" onClick={() => void openFiles([it.out!])}>
+                      Open
+                    </button>
+                  </span>
+                ) : it.state === "error" ? (
+                  <span class="convert-note error-text">{it.note}</span>
+                ) : !isOffice(it.path) ? (
+                  <span class="convert-note">Made by Paginaut</span>
                 ) : (
                   <select
                     class="inp sm"
@@ -330,26 +337,21 @@ export function ConvertDialog() {
                       ))}
                   </select>
                 )}
-                <span class="convert-state">{it.state === "converting" ? <span class="spin" /> : STATE[it.state]}</span>
-                {!d.running && it.state !== "done" && (
-                  <button class="ib sm" aria-label={`Remove ${baseName(it.path)}`} onClick={() => set({ items: d.items.filter((_, j) => j !== i) })}>
-                    <X size={14} />
-                  </button>
-                )}
               </div>
             );
           })}
         </div>
-        {engines.value && !engines.value.msoffice && !engines.value.pack && !engines.value.installed && (
-          <span class="secure-warn">
-            Making PDFs of Office files needs Microsoft Office or LibreOffice.{" "}
-            <button class="linkish" onClick={() => (officeDialog.value = true)}>
-              Get LibreOffice (free)…
-            </button>
-          </span>
-        )}
-        <div class="tool-field">
-          <label>Save the PDFs</label>
+      )}
+      {engines.value && !engines.value.msoffice && !engines.value.pack && !engines.value.installed && d.items.some((i) => isOffice(i.path)) && (
+        <span class="secure-warn">
+          Office files need Microsoft Office or LibreOffice.{" "}
+          <button class="linkish" onClick={() => (officeDialog.value = true)}>
+            Get LibreOffice (free)…
+          </button>
+        </span>
+      )}
+      {d.items.length > 0 && (
+        <>
           <div class="seg nowrap">
             <button class={`segb ${!d.folder ? "on" : ""}`} disabled={d.running} onClick={() => set({ folder: null })}>
               Next to each file
@@ -357,6 +359,7 @@ export function ConvertDialog() {
             <button
               class={`segb ${d.folder ? "on" : ""}`}
               disabled={d.running}
+              title={d.folder ?? undefined}
               onClick={async () => {
                 const f = await open({ directory: true, title: "Folder for the PDFs" });
                 if (typeof f === "string") set({ folder: f });
@@ -366,32 +369,34 @@ export function ConvertDialog() {
             </button>
           </div>
           <span class="hint">Existing files are never replaced: a new PDF gets a number, like "report (2).pdf".</span>
-        </div>
-        <div class="row">
-          <button class="btn" disabled={d.running} onClick={() => void add()}>
-            Add files…
+        </>
+      )}
+      <div class="ps-line">
+        <button class="btn sm" disabled={d.running} onClick={() => void add()}>
+          {d.items.length ? "Add files…" : "Choose files…"}
+        </button>
+        {done.length > 0 && !d.running && (
+          <button class="btn ghost sm" onClick={() => void revealItemInDir(done[0].out!)}>
+            Show in folder
           </button>
-          {done.length > 0 && !d.running && (
-            <button class="btn ghost" onClick={() => void revealItemInDir(done[0].out!)}>
-              Show in folder
+        )}
+        <span style={{ flex: 1 }} />
+        {d.running ? (
+          <span class="secure-busy">
+            <span class="spin" /> Converting…
+          </span>
+        ) : waiting ? (
+          <button class="btn pri sm" onClick={() => void runConvert()}>
+            Convert {waiting}
+          </button>
+        ) : (
+          d.items.length > 0 && (
+            <button class="btn ghost sm" onClick={() => (convertDialog.value = null)}>
+              Clear
             </button>
-          )}
-          <span style={{ flex: 1 }} />
-          {d.running ? (
-            <span class="secure-busy">
-              <span class="spin" /> Converting…
-            </span>
-          ) : waiting ? (
-            <button class="btn pri" onClick={() => void runConvert()}>
-              Convert {waiting} {waiting === 1 ? "file" : "files"}
-            </button>
-          ) : (
-            <button class="btn pri" onClick={close}>
-              Done
-            </button>
-          )}
-        </div>
+          )
+        )}
       </div>
-    </div>
+    </>
   );
 }

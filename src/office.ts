@@ -17,6 +17,10 @@ const BUILTIN_EXT = ["docx", "xlsx", "pptx"];
 
 const ext = (path: string) => path.split(".").pop()?.toLowerCase() ?? "";
 export const isOffice = (path: string) => OFFICE_EXT.includes(ext(path));
+/** Other files Convert to PDF takes (Paginaut makes those PDFs itself). */
+export const WEB_EXT = ["html", "htm", "xhtml"];
+const OTHER_EXT = [...WEB_EXT, "epub", "mobi", "fb2", "xps", "oxps", "txt"];
+export const convertible = (path: string) => isOffice(path) || OTHER_EXT.includes(ext(path));
 export type OfficeKind = "word" | "excel" | "powerpoint";
 export function officeKind(path: string): OfficeKind | null {
   const e = ext(path);
@@ -167,11 +171,30 @@ export interface ConvertItem {
   note?: string;
 }
 
+/** Files waiting to become PDFs (the Convert pane's "Files to PDF"). */
 export const convertDialog = signal<{ items: ConvertItem[]; folder: string | null; running: boolean } | null>(null);
 
+/** The Convert pane (right side) is open, showing this conversion of the document. Shares the side with the Sign pane. */
+export type ExportTarget = "docx" | "xlsx" | "pptx" | "images" | "txt";
+export const convertPane = signal<{ target: ExportTarget } | null>(null);
+
+export function openConvertPane(target?: ExportTarget) {
+  convertPane.value = { target: target ?? convertPane.value?.target ?? "docx" };
+  if (settings.value.signPane) updateSettings({ signPane: false });
+}
+// Opening the Sign pane closes this one.
+settings.subscribe((s) => {
+  if (s.signPane && convertPane.peek()) convertPane.value = null;
+});
+
+/** Adds files to "Files to PDF" (those already there stay) and shows the pane. */
 export function startConvert(paths: string[] = []) {
   void loadEngines();
-  convertDialog.value = { items: paths.filter(isOffice).map((path) => ({ path, engine: "auto", state: "waiting" })), folder: null, running: false };
+  const cur = convertDialog.value;
+  const have = new Set(cur?.items.map((i) => i.path.toLowerCase()));
+  const added: ConvertItem[] = paths.filter((p) => convertible(p) && !have.has(p.toLowerCase())).map((path) => ({ path, engine: "auto", state: "waiting" }));
+  convertDialog.value = { items: [...(cur?.items ?? []), ...added], folder: cur?.folder ?? null, running: cur?.running ?? false };
+  openConvertPane();
 }
 
 const stem = (p: string) => baseName(p).replace(/\.[^.]+$/, "");

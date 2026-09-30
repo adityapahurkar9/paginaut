@@ -122,6 +122,12 @@ fn run(soffice: &Path, args: &[String], timeout: Duration) -> Result<String, Str
 
 /// Converts `input` to the PDF `output`. `profile` is LibreOffice's settings folder for us.
 pub fn convert(lo: &Lo, profile: &Path, input: &str, output: &Path, timeout: Duration) -> Result<(), String> {
+    convert_as(lo, profile, input, output, None, "pdf", timeout)
+}
+
+/// Converts `input` into `output` of type `to` ("pdf", "pptx"…), reading it with the import `filter` if given
+/// (e.g. "impress_pdf_import" to read a PDF as a presentation).
+pub fn convert_as(lo: &Lo, profile: &Path, input: &str, output: &Path, filter: Option<&str>, to: &str, timeout: Duration) -> Result<(), String> {
     let _one = BUSY.lock();
     if lo.pack {
         if let Some(dir) = lo.soffice.parent().and_then(|p| p.parent()) {
@@ -130,25 +136,30 @@ pub fn convert(lo: &Lo, profile: &Path, input: &str, output: &Path, timeout: Dur
     }
     let work = output.with_file_name(format!("lo-{}-{}", std::process::id(), RUN.fetch_add(1, Ordering::Relaxed)));
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-    let args = vec![
+    let mut args = vec![
         format!("-env:UserInstallation={}", file_url(profile)),
         "--headless".into(),
         "--norestore".into(),
         "--nologo".into(),
         "--nodefault".into(),
         "--nolockcheck".into(),
+    ];
+    if let Some(f) = filter {
+        args.push(format!("--infilter={f}"));
+    }
+    args.extend([
         "--convert-to".into(),
-        "pdf".into(),
+        to.into(),
         "--outdir".into(),
         work.to_string_lossy().into_owned(),
         std::path::absolute(input).map_or_else(|_| input.to_string(), |p| p.to_string_lossy().into_owned()),
-    ];
+    ]);
     let res = run(&lo.soffice, &args, timeout).and_then(|printed| {
-        let made = std::fs::read_dir(&work).ok().and_then(|mut d| d.find_map(|e| e.ok().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")))));
+        let made = std::fs::read_dir(&work).ok().and_then(|mut d| d.find_map(|e| e.ok().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case(to)))));
         match made {
-            Some(pdf) => {
+            Some(made) => {
                 let _ = std::fs::remove_file(output);
-                std::fs::rename(&pdf, output).map_err(|e| e.to_string())
+                std::fs::rename(&made, output).or_else(|_| std::fs::copy(&made, output).map(drop)).map_err(|e| e.to_string())
             }
             None if printed.contains("could not be loaded") || printed.to_lowercase().contains("password") => {
                 Err("LibreOffice couldn't open the file (damaged, or protected with a password).".into())

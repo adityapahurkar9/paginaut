@@ -54,6 +54,11 @@ impl Table {
 
     /// An Excel workbook with one sheet: numbers as numbers, spanned cells merged, columns as wide as on the page.
     pub fn xlsx(&self) -> Vec<u8> {
+        workbook(&[("Table".to_string(), self)])
+    }
+
+    /// The table as a worksheet.
+    fn sheet(&self) -> String {
         let (h, w) = (self.rows(), self.cols());
         // Row numbers after empty rows are left out.
         let full = self.grid();
@@ -110,16 +115,38 @@ impl Table {
             sheet.push_str(&format!(r#"<mergeCells count="{}">{}</mergeCells>"#, merges.len(), merges.concat()));
         }
         sheet.push_str("</worksheet>");
-
-        let files: [(&str, String); 5] = [
-            ("[Content_Types].xml", r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#.into()),
-            ("_rels/.rels", r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#.into()),
-            ("xl/workbook.xml", r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Table" sheetId="1" r:id="rId1"/></sheets></workbook>"#.into()),
-            ("xl/_rels/workbook.xml.rels", r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#.into()),
-            ("xl/worksheets/sheet1.xml", sheet),
-        ];
-        zip(&files)
+        sheet
     }
+}
+
+/// An Excel workbook with a sheet per table (names up to 31 characters, as Excel allows).
+pub fn workbook(tables: &[(String, &Table)]) -> Vec<u8> {
+    let n = tables.len().max(1);
+    let mut types = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>"#);
+    let mut sheets = String::new();
+    let mut rels = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+    let mut files: Vec<(String, String)> = Vec::new();
+    for i in 1..=n {
+        types.push_str(&format!(r#"<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#));
+        let name: String = tables.get(i - 1).map_or("Sheet1", |t| t.0.as_str()).chars().filter(|c| !"[]:*?/\\".contains(*c)).take(31).collect();
+        sheets.push_str(&format!(r#"<sheet name="{}" sheetId="{i}" r:id="rId{i}"/>"#, xml(&name)));
+        rels.push_str(&format!(r#"<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>"#));
+        let body = tables.get(i - 1).map_or_else(
+            || r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#.to_string(),
+            |t| t.1.sheet(),
+        );
+        files.push((format!("xl/worksheets/sheet{i}.xml"), body));
+    }
+    types.push_str("</Types>");
+    rels.push_str("</Relationships>");
+    let mut all: Vec<(String, String)> = vec![
+        ("[Content_Types].xml".into(), types),
+        ("_rels/.rels".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#.into()),
+        ("xl/workbook.xml".into(), format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{sheets}</sheets></workbook>"#)),
+        ("xl/_rels/workbook.xml.rels".into(), rels),
+    ];
+    all.extend(files);
+    zip(&all)
 }
 
 /// Excel's column name: 0 → A, 25 → Z, 26 → AA.
@@ -158,7 +185,7 @@ fn number(s: &str) -> Option<String> {
     Some(format!("{}", if neg { -v } else { v }))
 }
 
-fn xml(s: &str) -> String {
+pub(crate) fn xml(s: &str) -> String {
     s.chars()
         .filter(|&c| c == '\t' || c == '\n' || c >= ' ')
         .fold(String::with_capacity(s.len()), |mut o, c| {
@@ -185,12 +212,12 @@ fn crc32(data: &[u8]) -> u32 {
     !data.iter().fold(!0u32, |c, &b| table[((c ^ b as u32) & 0xff) as usize] ^ (c >> 8))
 }
 
-/// A zip archive with the files stored as they are (xlsx needs no compression to open).
-fn zip(files: &[(&str, String)]) -> Vec<u8> {
+/// A zip archive with the files stored as they are (Office files need no compression to open).
+pub(crate) fn zip<N: AsRef<str>, B: AsRef<[u8]>>(files: &[(N, B)]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central = Vec::new();
     for (name, body) in files {
-        let (name, body) = (name.as_bytes(), body.as_bytes());
+        let (name, body) = (name.as_ref().as_bytes(), body.as_ref());
         let (crc, len, at) = (crc32(body), body.len() as u32, out.len() as u32);
         let head = |sig: u32, central: bool| {
             let mut h = Vec::new();
