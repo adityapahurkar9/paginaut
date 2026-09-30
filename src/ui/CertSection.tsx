@@ -1,9 +1,12 @@
-// The Sign pane's "Digital signature" section: pick a certificate (DSC token or
-// other), reason, location, what the box shows, where the signed file goes.
+// The Sign pane's "Digital signature" section: pick a certificate (DSC token, another
+// in the Windows store, or a .pfx file), reason, location, what the box shows, a
+// trusted timestamp, where the signed file goes.
 import { useEffect, useState } from "preact/hooks";
-import { KeyRound, RefreshCw, Usb, X } from "lucide-preact";
-import { dscDefaults, listCerts, proceed, signField, type CertSummary, type SignSetup } from "../dsc";
+import { open } from "@tauri-apps/plugin-dialog";
+import { FileKey, KeyRound, RefreshCw, Usb, X } from "lucide-preact";
+import { dscDefaults, listCerts, openPfx, proceed, signField, type CertSummary, type PfxChoice, type SignSetup } from "../dsc";
 import { sigs } from "../sign";
+import { testHook } from "./PagesUI";
 import type { Tab } from "../store";
 
 const REASONS = [
@@ -17,6 +20,8 @@ const day = (t: number) => new Date(t * 1000).toLocaleDateString();
 
 // The list is read once per session (and on Refresh): plugging in a token needs a Refresh.
 let cached: CertSummary[] | null = null;
+// A certificate file opened this session (with its password, kept in memory only until Paginaut closes).
+let pfxCached: PfxChoice | null = null;
 
 export function CertSection({ tab }: { tab: Tab | null }) {
   const def = dscDefaults();
@@ -32,11 +37,45 @@ export function CertSection({ tab }: { tab: Tab | null }) {
   const [place, setPlace] = useState(def.place);
   const [newFile, setNewFile] = useState(def.newFile);
   const [showAll, setShowAll] = useState(false);
+  const [timestamp, setTimestamp] = useState(def.timestamp !== false);
+  // A certificate file for this session: asked for its password once; the password is never saved.
+  const [pfx, setPfx] = useState<PfxChoice | null>(pfxCached);
+  const [pfxAsk, setPfxAsk] = useState<string | null>(null);
+  const [pw, setPw] = useState("");
+  const [pfxErr, setPfxErr] = useState("");
 
   const pickDefault = (list: CertSummary[]) => {
-    // Keep the last one used if it's still here, else the first usable one.
+    // Keep the last one used if it's still here (or the certificate file), else the first usable one.
+    if (cert === "PFX" && pfx) return;
     const usable = list.filter((c) => c.current && c.likely);
     if (!usable.some((c) => c.thumb === cert)) setCert(usable[0]?.thumb ?? "");
+  };
+  const choosePfx = async () => {
+    const hook = testHook()?.pick;
+    const path = hook ? hook.shift() : await open({ multiple: false, title: "A certificate file", filters: [{ name: "Certificate files", extensions: ["pfx", "p12"] }] });
+    if (typeof path !== "string") return;
+    setPfxAsk(path);
+    setPw("");
+    setPfxErr("");
+  };
+  const openAsked = async () => {
+    if (!pfxAsk) return;
+    try {
+      const c = await openPfx(pfxAsk, pw);
+      const choice = { path: pfxAsk, password: pw, cert: c };
+      pfxCached = choice;
+      setPfx(choice);
+      setCert("PFX");
+      setPfxAsk(null);
+      setPw("");
+    } catch (e) {
+      setPfxErr(String(e));
+    }
+  };
+  const forgetPfx = () => {
+    pfxCached = null;
+    setPfx(null);
+    if (cert === "PFX") setCert("");
   };
   const refresh = () => {
     setCerts(null);
@@ -58,13 +97,16 @@ export function CertSection({ tab }: { tab: Tab | null }) {
   }, []);
 
   const shown = (certs ?? []).filter((c) => showAll || c.likely);
-  const chosen = shown.find((c) => c.thumb === cert && c.current) ?? null;
+  const chosen = cert === "PFX" ? (pfx?.cert.current ? pfx.cert : null) : (shown.find((c) => c.thumb === cert && c.current) ?? null);
   const field = signField.value?.tab === tab ? signField.value : null;
   const fields = tab?.forms.value?.fields ?? 0;
   const isPdf = !!tab?.info.value?.isPdf;
   const go = () => {
     if (!chosen || !tab) return;
-    const setup: SignSetup = { cert: chosen, reason: reason.trim(), location: location.trim(), image: image || null, showDate, lock, place, newFile };
+    const setup: SignSetup = {
+      cert: chosen, reason: reason.trim(), location: location.trim(), image: image || null, showDate, lock, place, newFile, timestamp,
+      pfx: cert === "PFX" && pfx ? pfx : undefined,
+    };
     void proceed(tab, setup);
   };
   const saved = (sigs.value ?? []).filter((s) => s.kind === "signature");
@@ -78,6 +120,30 @@ export function CertSection({ tab }: { tab: Tab | null }) {
         </button>
       </div>
       <div class="cert-list" role="radiogroup" aria-label="Certificate">
+        {pfx && (
+          <div class="cert-file-row">
+            <button
+              role="radio"
+              aria-checked={cert === "PFX"}
+              disabled={!pfx.cert.current}
+              class={`cert ${cert === "PFX" && pfx.cert.current ? "on" : ""}`}
+              onClick={() => setCert("PFX")}
+              title={pfx.path}
+            >
+              <span class="cert-ic"><FileKey size={16} /></span>
+              <span class="cert-txt">
+                <strong>{pfx.cert.name}</strong>
+                <span class="muted">{pfx.cert.issuer}</span>
+                <span class={pfx.cert.current ? "muted" : "bad"}>
+                  {pfx.cert.current ? `Until ${day(pfx.cert.notAfter)}` : `Not valid today (until ${day(pfx.cert.notAfter)})`} · file
+                </span>
+              </span>
+            </button>
+            <button class="ib sm" aria-label="Forget this certificate file" title="Forget this certificate file" onClick={forgetPfx}>
+              <X size={14} />
+            </button>
+          </div>
+        )}
         {certs === null ? (
           <div class="muted cert-empty">Looking for certificates…</div>
         ) : !shown.length ? (
@@ -114,6 +180,30 @@ export function CertSection({ tab }: { tab: Tab | null }) {
           {showAll ? "Hide other certificates" : `Show ${certs.filter((c) => !c.likely).length} other certificate(s)`}
         </button>
       )}
+      {pfxAsk ? (
+        <div class="cert-pfx" onKeyDown={(e) => e.stopPropagation()}>
+          <span class="muted">Password for {pfxAsk.split(/[\\/]/).pop()}</span>
+          <input
+            class="inp"
+            type="password"
+            value={pw}
+            autoFocus
+            aria-label="The certificate file's password"
+            onInput={(e) => setPw(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === "Enter" && void openAsked()}
+          />
+          {pfxErr && <span class="bad">{pfxErr}</span>}
+          <div class="theme-row">
+            <button class="btn sm" onClick={() => setPfxAsk(null)}>Cancel</button>
+            <button class="btn pri sm" onClick={() => void openAsked()}>Open</button>
+          </div>
+          <span class="muted">Used for this signature only: nothing is added to Windows, and the password isn't saved.</span>
+        </div>
+      ) : (
+        <button class="btn ghost sm cert-more" onClick={() => void choosePfx()} title="Sign with a .pfx or .p12 certificate file instead">
+          <FileKey size={13} /> Use a certificate file (.pfx)…
+        </button>
+      )}
 
       <label class="fld">
         <span>Reason</span>
@@ -145,6 +235,9 @@ export function CertSection({ tab }: { tab: Tab | null }) {
       </label>
       <label class="chk">
         <input type="checkbox" checked={showDate} onChange={(e) => setShowDate(e.currentTarget.checked)} /> Show the date
+      </label>
+      <label class="chk wrap" title="A timestamp service signs the time with your signature: it proves when you signed, and keeps the signature checkable after your certificate expires. Only a fingerprint of the signature is sent.">
+        <input type="checkbox" checked={timestamp} onChange={(e) => setTimestamp(e.currentTarget.checked)} /> Add a trusted timestamp (needs internet)
       </label>
       {field ? (
         <div class="cert-field">

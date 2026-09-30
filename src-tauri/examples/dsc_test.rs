@@ -95,4 +95,64 @@ fn main() {
     for (s, v) in check(&engine, &tampered) {
         println!("tampered: {} | intact {} trust {} {}", s["name"], v.intact, v.trust, v.detail);
     }
+
+    // Signing in place that fails (a cancelled PIN, no timestamp): the file is exactly as it was; then it works.
+    let inplace = dir.join("dsc-inplace.pdf").to_string_lossy().into_owned();
+    std::fs::copy(&src, &inplace).unwrap();
+    let before = std::fs::read(&inplace).unwrap();
+    let info = engine.open(&inplace).unwrap();
+    let r = engine.sign(info.doc_id, None, 0, req("Cancelled", [0.0; 4]), |_| Err("Signing was cancelled.".into()));
+    let after = std::fs::read(&inplace).unwrap();
+    println!("in place, failed: {:?} | file unchanged {} | no temporary left {}", r.err(), before == after, !std::path::Path::new(&format!("{inplace}.signing.tmp")).exists());
+    engine.sign(info.doc_id, None, 0, req("Paginaut Test Signer", [0.0; 4]), |data| cert.sign(data, 0)).unwrap();
+    engine.close(info.doc_id);
+    let sigs = check(&engine, &inplace);
+    println!("in place, then signed: {} signature(s), all intact {}", sigs.len(), sigs.iter().all(|(_, v)| v.intact));
+
+    // A certificate file (PAGINAUT_TEST_PFX, password in PAGINAUT_TEST_PFX_PW), and a trusted timestamp from the
+    // service in PAGINAUT_TEST_TSA (needs internet). Both optional.
+    let pfx = std::env::var("PAGINAUT_TEST_PFX").ok();
+    let tsa = std::env::var("PAGINAUT_TEST_TSA").ok();
+    if pfx.is_none() && tsa.is_none() {
+        return;
+    }
+    let file_cert = match &pfx {
+        Some(p) => {
+            let wrong = dsc::Cert::from_pfx(p, "not the password").err();
+            println!("pfx, wrong password: {wrong:?}");
+            dsc::Cert::from_pfx(p, &std::env::var("PAGINAUT_TEST_PFX_PW").unwrap_or_default()).unwrap()
+        }
+        None => dsc::test_cert("Timestamp Signer").unwrap(),
+    };
+    println!("signer: {:?}", file_cert.summary().name);
+    let stamped = dir.join("dsc-timestamped.pdf").to_string_lossy().into_owned();
+    let info = engine.open(src.to_str().unwrap()).unwrap();
+    engine.doc(info.doc_id).unwrap().forms_init().unwrap();
+    let mut r = req("File Signer", [0.0; 4]);
+    r.max = 40 * 1024;
+    let t = std::time::Instant::now();
+    engine
+        .sign(info.doc_id, Some(stamped.clone()), 0, r, |data| {
+            let cms = file_cert.sign(data, 0)?;
+            match &tsa {
+                Some(url) => dsc::add_timestamp(&cms, url).map(|(c, when)| {
+                    println!("timestamp from {url}: {when} ({} bytes of signature)", c.len());
+                    c
+                }),
+                None => Ok(cms),
+            }
+        })
+        .unwrap();
+    println!("signed in {:?}", t.elapsed());
+    engine.close(info.doc_id);
+    let mut signed_i = 0;
+    for (s, v) in check(&engine, &stamped) {
+        signed_i = s["i"].as_u64().unwrap() as usize;
+        println!("file/timestamp: {} | intact {} trust {} signer {:?} | timestamp {} by {:?} trusted {} | {}", s["name"], v.intact, v.trust, v.signer, v.timestamp, v.tsa, v.timestamp_trusted, v.detail);
+    }
+    let info = engine.open(&stamped).unwrap();
+    let (_, cms) = engine.sig_data(info.doc_id, signed_i).unwrap();
+    engine.close(info.doc_id);
+    let rv = dsc::revocation(&cms);
+    println!("revocation: {} ({})", rv.status, rv.detail);
 }

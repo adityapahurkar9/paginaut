@@ -1743,22 +1743,35 @@ impl Engine {
                 *v += if i % 2 == 0 { ox } else { oy };
             }
         }
-        if !in_place {
-            std::fs::copy(&cur, &out).map_err(|e| format!("Couldn't write {out}: {e}"))?;
-        }
+        // Signing writes into the file as it goes (the signature is made at the end of the save). Signing in place
+        // therefore goes into a copy beside it first, so a failure (a cancelled PIN, an unreachable timestamp
+        // service) never leaves the original with an empty signature in it.
+        let write_to = if in_place { format!("{cur}.signing.tmp") } else { out.clone() };
+        std::fs::copy(&cur, &write_to).map_err(|e| format!("Couldn't write {write_to}: {e}"))?;
         let mut signing = mupdf::Signing { sign: Box::new(sign), error: None };
         let mut inner = d.inner.lock();
-        let res = (|| -> Result<(), String> {
+        let mut res = (|| -> Result<(), String> {
             let page = d.page(&mut inner, index)?;
             page.sign(&req, &mut signing)?;
             drop(page);
             inner.pages.clear();
-            inner.doc.save_pdf(&out, true)
+            inner.doc.save_pdf(&write_to, true)
         })()
         .map_err(|e| signing.error.take().unwrap_or(e));
         inner.pages.clear();
         d.lists.lock().clear();
         d.texts.lock().clear();
+        if res.is_ok() && in_place {
+            // Let go of the original (the open document holds it), then put the signed copy in its place.
+            res = (|| -> Result<(), String> {
+                let bytes = std::fs::read(&write_to).map_err(|e| e.to_string())?;
+                inner.doc = Document::open_buffer("pdf", &bytes, "")?;
+                std::fs::rename(&write_to, &cur).map_err(|e| format!("Couldn't replace {cur} with the signed document: {e}"))
+            })();
+        }
+        if res.is_err() {
+            let _ = std::fs::remove_file(&write_to);
+        }
         // Reopen from disk: the signed file, or on failure the untouched original.
         let reopen = if res.is_ok() { out.clone() } else { cur.clone() };
         let fresh = Document::open(&reopen)?;
@@ -1770,9 +1783,6 @@ impl Engine {
         inner.doc = fresh;
         drop(inner);
         if let Err(e) = res {
-            if !in_place {
-                let _ = std::fs::remove_file(&out);
-            }
             d.prepare()?;
             return Err(e);
         }

@@ -33,6 +33,27 @@ export interface SigCheck {
   trust: "trusted" | "expired" | "untrusted" | "incomplete" | "revoked" | "invalid" | "unknown";
   detail: string;
   notAfter: number;
+  /** Trusted timestamp (seconds since 1970), 0 when there's none. */
+  timestamp: number;
+  /** Who issued the timestamp. */
+  tsa: string;
+  timestampTrusted: boolean;
+}
+
+/** An online check of whether a signer's certificate was revoked. */
+export interface Revocation {
+  status: "good" | "revoked" | "unknown";
+  detail: string;
+}
+
+/** The timestamp service used unless another is set (Settings › Signing). */
+export const DEFAULT_TSA = "http://timestamp.digicert.com";
+
+/** A certificate file chosen for this session (the password is never saved). */
+export interface PfxChoice {
+  path: string;
+  password: string;
+  cert: CertSummary;
 }
 
 export interface SigInfo {
@@ -66,6 +87,10 @@ export interface SignSetup {
   place: "box" | "invisible";
   /** Save as a new file (recommended) or sign this one in place. */
   newFile: boolean;
+  /** Add a trusted timestamp (needs internet). */
+  timestamp: boolean;
+  /** Signing with a certificate file instead of one from the store. */
+  pfx?: PfxChoice;
 }
 
 /** An empty signature field of a form you clicked: the next signature goes in it. */
@@ -116,8 +141,26 @@ export function describe(s: SigInfo): string {
     : c.trust === "expired" ? "Signature is valid: the document hasn't been altered since it was signed. " + c.detail
     : "The document hasn't been altered since it was signed, but the signer's identity couldn't be confirmed. " + c.detail,
   );
+  if (c.timestamp && c.timestampTrusted) parts.push(`A trusted timestamp proves it was signed on ${new Date(c.timestamp * 1000).toLocaleString()}.`);
+  else if (c.timestamp) parts.push("It has a timestamp, but Windows doesn't trust the service that issued it.");
   if (s.changed) parts.push("Changes were saved after this signature (for example more signatures, comments or form entries). Open the signed version to see exactly what was signed.");
   return parts.join(" ");
+}
+
+/** Asks the signer's certificate authority, online, whether the certificate was revoked. */
+export async function checkRevocation(tab: Tab, s: SigInfo): Promise<Revocation | null> {
+  const info = tab.info.value;
+  if (!info) return null;
+  try {
+    return await invoke<Revocation>("signature_revocation", { doc: info.docId, i: s.i });
+  } catch (e) {
+    return { status: "unknown", detail: String(e) };
+  }
+}
+
+/** A certificate file's certificate (checks the password too). */
+export async function openPfx(path: string, password: string): Promise<CertSummary> {
+  return invoke<CertSummary>("pfx_summary", { path, password });
 }
 
 /** Opens the document exactly as signature `s` signed it, in a new tab. */
@@ -205,14 +248,14 @@ async function finish(tab: Tab, setup: SignSetup, src: number, rect?: number[], 
     if (!target) return;
   }
   const flags = SHOW_LABELS | SHOW_TEXT_NAME | (setup.showDate ? SHOW_DATE : 0) | (setup.image ? 0 : SHOW_GRAPHIC_NAME);
-  tab.saving.value = true;
-  showToast(setup.cert.hardware ? "Signing… if your token asks for its PIN, type it in the token's window." : "Signing…", 60000);
-  try {
-    const saved = await invoke<DocInfo>("sign_document", {
+  const sign = (timestamp: boolean) =>
+    invoke<DocInfo>("sign_document", {
       doc: info.docId,
       target,
       opts: {
-        cert: setup.cert.thumb,
+        cert: setup.pfx ? "PFX" : setup.cert.thumb,
+        pfx: setup.pfx ? { path: setup.pfx.path, password: setup.pfx.password } : null,
+        timestamp: timestamp ? settings.value.dsc.tsa || DEFAULT_TSA : null,
         page: src,
         rect: rect ?? null,
         field: field ?? null,
@@ -223,6 +266,24 @@ async function finish(tab: Tab, setup: SignSetup, src: number, rect?: number[], 
         lock: setup.lock,
       },
     });
+  tab.saving.value = true;
+  showToast(setup.cert.hardware ? "Signing… if your token asks for its PIN, type it in the token's window." : "Signing…", 60000);
+  try {
+    let saved: DocInfo;
+    try {
+      saved = await sign(setup.timestamp);
+    } catch (e) {
+      // Only the timestamp failed (offline, or the service is down): nothing was saved; offer to sign without one.
+      const msg = String(e);
+      if (!msg.startsWith("TIMESTAMP|")) throw e;
+      const r = await ask("Sign without a timestamp?", `${msg.slice(10)} A timestamp proves when you signed and keeps the signature checkable after your certificate expires. You can sign without one.`, [
+        { label: "Cancel", value: "cancel" },
+        { label: "Sign without it", value: "sign", primary: true },
+      ]);
+      if (r !== "sign") return showToast("Not signed.");
+      if (setup.cert.hardware) showToast("Signing… if your token asks for its PIN again, type it in the token's window.", 60000);
+      saved = await sign(false);
+    }
     await adoptSaved(tab, saved);
     showToast(`Signed and saved ${baseName(saved.path)}`);
     await loadSignatures(tab);
@@ -235,6 +296,7 @@ async function finish(tab: Tab, setup: SignSetup, src: number, rect?: number[], 
 
 // Reason and location are remembered for next time.
 function rememberChoices(s: SignSetup) {
-  updateSettings({ dsc: { reason: s.reason, location: s.location, showDate: s.showDate, lock: s.lock, newFile: s.newFile, place: s.place, cert: s.cert.thumb } });
+  const d = settings.value.dsc;
+  updateSettings({ dsc: { ...d, reason: s.reason, location: s.location, showDate: s.showDate, lock: s.lock, newFile: s.newFile, place: s.place, cert: s.pfx ? d.cert : s.cert.thumb, timestamp: s.timestamp } });
 }
 export const dscDefaults = () => settings.value.dsc;

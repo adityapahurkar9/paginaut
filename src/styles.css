@@ -1224,3 +1224,8 @@ body.text-edit .pg { cursor: default; }
 .upd-notes { margin: 0; max-height: 140px; overflow: auto; white-space: pre-wrap; color: var(--tx2); font-size: 12.5px; }
 .upd-bar { width: 160px; height: 6px; display: inline-block; border-radius: 3px; background: var(--hover); overflow: hidden; }
 .upd-bar span { display: block; height: 100%; background: var(--acc); }
+
+/* Sign pane: a certificate file (.pfx) as a choice, and its password prompt. */
+.cert-file-row { display: flex; align-items: center; gap: 4px; }
+.cert-file-row .cert { flex: 1; min-width: 0; }
+.cert-pfx { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--bd2); border-radius: 10px; }

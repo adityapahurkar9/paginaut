@@ -3,6 +3,7 @@ import { useEffect } from "preact/hooks";
 import { Fragment, type ComponentChildren } from "preact";
 import { ArrowDown, ArrowUp, X } from "lucide-preact";
 import { compareOptions, setCompareOption } from "../compare";
+import { DEFAULT_TSA } from "../dsc";
 import { deleteModel, downloadModel, downloads, loadLangs, ocrLangs, rememberChoice, stopDownload, type OcrLang, type OcrQuality } from "../ocr";
 import { moveOnRail, onRail, openPane, railOrder, railShown, resetRail, setOnRail, setRailShown } from "../panes";
 import { settings, settingsOpen, updateSettings, type Settings, type SettingsTab } from "../store";
@@ -193,6 +194,10 @@ function Signing() {
         <Check on={d.showDate} label="Show the date in the box" set={(showDate) => set({ showDate })} />
         <Check on={d.lock} label="Lock the document after signing" hint="No further changes allowed (certifies it)." set={(lock) => set({ lock })} />
         <Check on={d.newFile} label="Save the signed document as a new file" hint="Otherwise the file itself is signed." set={(newFile) => set({ newFile })} />
+      </Field>
+      <Field label="Trusted timestamp" hint="A timestamp service signs the time with your signature, proving when you signed; the signature stays checkable after your certificate expires. Only a fingerprint of the signature is sent, never the document.">
+        <Check on={d.timestamp !== false} label="Add a trusted timestamp (needs internet)" set={(timestamp) => set({ timestamp })} />
+        <input class="inp" value={d.tsa ?? ""} placeholder={DEFAULT_TSA} aria-label="Timestamp service address" onInput={(e) => set({ tsa: (e.target as HTMLInputElement).value.trim() })} />
       </Field>
     </>
   );

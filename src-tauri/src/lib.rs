@@ -262,6 +262,8 @@ pub fn run() {
             app::default_apps_status,
             app::default_apps_set,
             app::default_apps_open,
+            app::pfx_summary,
+            app::signature_revocation,
             app::update_check,
             app::update_install,
             app::update_stop,

@@ -3,7 +3,7 @@
 import { useState } from "preact/hooks";
 import { ShieldAlert, ShieldCheck, ShieldX, X } from "lucide-preact";
 import * as A from "../actions";
-import { describe, docSigs, openSignedVersion, verdictOf, type SigInfo, type Verdict } from "../dsc";
+import { checkRevocation, describe, docSigs, openSignedVersion, verdictOf, type Revocation, type SigInfo, type Verdict } from "../dsc";
 import { openSignPane } from "../sign";
 import type { Tab } from "../store";
 
@@ -52,7 +52,21 @@ export function SigBar({ tab }: { tab: Tab }) {
 
 const when = (s: SigInfo) => (s.time ? new Date(s.time * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "");
 
+// Answers from "Check whether it was revoked", per signature (by tab), kept while Paginaut runs.
+const revoked = new WeakMap<Tab, Map<number, Revocation | "checking">>();
+
 export function DocSigs({ tab }: { tab: Tab }) {
+  const [, redraw] = useState(0);
+  const checks = revoked.get(tab) ?? new Map<number, Revocation | "checking">();
+  revoked.set(tab, checks);
+  const revocation = async (s: SigInfo) => {
+    checks.set(s.i, "checking");
+    redraw((n) => n + 1);
+    const r = await checkRevocation(tab, s);
+    if (r) checks.set(s.i, r);
+    else checks.delete(s.i);
+    redraw((n) => n + 1);
+  };
   const list = docSigs(tab).value;
   if (list === null) return <div class="muted">Checking signatures…</div>;
   const signed = list.filter((s) => s.signed);
@@ -78,8 +92,28 @@ export function DocSigs({ tab }: { tab: Tab }) {
               {s.location && (<><dt>Location</dt><dd>{s.location}</dd></>)}
               {s.check?.issuer && (<><dt>Issued by</dt><dd>{s.check.issuer}</dd></>)}
               {s.check?.email && (<><dt>Email</dt><dd>{s.check.email}</dd></>)}
+              {!!s.check?.timestamp && (
+                <>
+                  <dt>Timestamp</dt>
+                  <dd>
+                    {new Date(s.check.timestamp * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                    {s.check.tsa ? `, by ${s.check.tsa}` : ""}
+                    {s.check.timestampTrusted ? "" : " (not trusted)"}
+                  </dd>
+                </>
+              )}
               <dt>Field</dt>
               <dd>{s.name}{s.page >= 0 ? `, page ${s.page + 1}` : " (invisible)"}</dd>
+              {(() => {
+                const r = checks.get(s.i);
+                if (!r || r === "checking") return null;
+                return (
+                  <>
+                    <dt>Revoked?</dt>
+                    <dd class={r.status === "revoked" ? "bad" : ""}>{r.status === "good" ? "No. " : r.status === "revoked" ? "Yes. " : "Couldn't tell. "}{r.detail}</dd>
+                  </>
+                );
+              })()}
             </dl>
             <div class="sig-card-btns">
               {s.page >= 0 && (
@@ -90,6 +124,16 @@ export function DocSigs({ tab }: { tab: Tab }) {
               {s.changed && (
                 <button class="btn ghost sm" onClick={() => void openSignedVersion(tab, s)} title="The document exactly as this signature signed it, in a new tab">
                   Open signed version
+                </button>
+              )}
+              {s.check?.intact && (
+                <button
+                  class="btn ghost sm"
+                  disabled={checks.get(s.i) === "checking"}
+                  onClick={() => void revocation(s)}
+                  title="Asks the certificate's authority, online, whether it has cancelled the certificate"
+                >
+                  {checks.get(s.i) === "checking" ? "Checking…" : "Check whether it was revoked"}
                 </button>
               )}
             </div>

@@ -825,7 +825,37 @@ pub struct SignOptions {
     pub flags: i32,
     #[serde(default)]
     pub lock: bool,
+    /// A .pfx/.p12 file to sign with instead of a certificate from the store (`cert` is "PFX").
+    pub pfx: Option<PfxFile>,
+    /// A timestamp service (RFC 3161) to get a trusted timestamp from.
+    pub timestamp: Option<String>,
 }
+
+#[derive(Deserialize)]
+pub struct PfxFile {
+    pub path: String,
+    pub password: String,
+}
+
+/// A certificate file's certificate, to show before signing with it (checks the password too).
+#[tauri::command]
+pub async fn pfx_summary(path: String, password: String) -> Res<crate::dsc::CertSummary> {
+    blocking(move || Ok(crate::dsc::Cert::from_pfx(&path, &password)?.summary())).await
+}
+
+/// Asks, online, whether signature `i`'s certificate has been revoked.
+#[tauri::command]
+pub async fn signature_revocation(state: State<'_, AppState>, doc: DocId, i: usize) -> Res<crate::dsc::Revocation> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        let (_, cms) = engine.sig_data(doc, i)?;
+        Ok(crate::dsc::revocation(&cms))
+    })
+    .await
+}
+
+/// A signing error that means only the timestamp failed (the app offers to sign without one).
+const TIMESTAMP_FAILED: &str = "TIMESTAMP|";
 
 /// Signs with a certificate and saves (in place, or as `target`). The token's
 /// driver asks for its PIN in its own window, over ours.
@@ -840,8 +870,9 @@ pub async fn sign_document(window: tauri::WebviewWindow, state: State<'_, AppSta
     };
     let engine = state.engine.clone();
     blocking(move || {
-        let cert = match (opts.cert.as_str(), test_cert()?) {
-            ("TEST", Some(c)) => c,
+        let cert = match (opts.cert.as_str(), test_cert()?, &opts.pfx) {
+            ("TEST", Some(c), _) => c,
+            ("PFX", _, Some(f)) => crate::dsc::Cert::from_pfx(&f.path, &f.password)?,
             _ => crate::dsc::Cert::find(&opts.cert)?,
         };
         let s = cert.summary();
@@ -861,10 +892,17 @@ pub async fn sign_document(window: tauri::WebviewWindow, state: State<'_, AppSta
             image,
             flags: opts.flags,
             lock: opts.lock,
-            // Room for the signature with a long certificate chain.
-            max: 24 * 1024,
+            // Room for the signature with a long certificate chain (and a timestamp, which brings its own).
+            max: if opts.timestamp.is_some() { 40 * 1024 } else { 24 * 1024 },
         };
-        engine.sign(doc, target, opts.page, req, |data| cert.sign(data, hwnd))
+        let tsa = opts.timestamp.filter(|u| !u.trim().is_empty());
+        engine.sign(doc, target, opts.page, req, |data| {
+            let cms = cert.sign(data, hwnd)?;
+            match &tsa {
+                Some(url) => crate::dsc::add_timestamp(&cms, url.trim()).map(|(c, _)| c).map_err(|e| format!("{TIMESTAMP_FAILED}{e}")),
+                None => Ok(cms),
+            }
+        })
     })
     .await
 }

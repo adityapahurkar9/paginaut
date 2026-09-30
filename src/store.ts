@@ -54,7 +54,11 @@ export interface Settings {
   /** Typography for Read and Book modes. */
   reflow: ReflowSettings;
   /** Digital signing choices, remembered (cert: thumbprint of the last one used). */
-  dsc: { reason: string; location: string; showDate: boolean; lock: boolean; newFile: boolean; place: "box" | "invisible"; cert: string };
+  dsc: {
+    reason: string; location: string; showDate: boolean; lock: boolean; newFile: boolean; place: "box" | "invisible"; cert: string;
+    /** Add a trusted timestamp (on unless turned off), from this service (RFC 3161). */
+    timestamp?: boolean; tsa?: string;
+  };
   /** Text recognition: the languages and model quality used last. */
   ocr: { langs: string[]; quality: "fast" | "best" };
   /** Which converter opens Office files ("auto": Microsoft Office, else LibreOffice, else the text preview). */
