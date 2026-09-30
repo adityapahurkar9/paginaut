@@ -422,8 +422,8 @@ Extract content (right-click the item on the page; Tools › Organize; command p
 
 ## Phase 7.1 (0.7.10): Convert pane (done)
 The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only covered Office files → PDF.
-- [x] Convert pane on the right (in place of the Sign pane; opening one closes the other), opened from Tools ›
-      Convert and the command palette: "This document to" and "Files to PDF" in one place, Office suite choices at
+- [x] Convert pane on the right (in place of the Sign pane; opening one closes the other), opened and closed by
+      Tools › Convert (0.7.11: straight away, no menu first) and from the command palette: "This document to" and "Files to PDF" in one place, Office suite choices at
       the bottom
 - [x] This document to Word (.docx): Microsoft Word when installed (Word reads the PDF itself: paragraphs, tables and
       pictures editable, close to the layout; 1.5 s), else Paginaut's own writer (src-tauri/src/docx.rs): text as
@@ -440,8 +440,8 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
 - [x] Text (.txt): MuPDF's text writer, reading order
 - [x] Pages: all, the selected ones, or a range; unsaved changes and rotations included. Open the result in its
       program or show it in its folder; Stop for long jobs
-- [x] Files to PDF: Office files (Phase 7), web pages (HTML, laid out on A4), e-books, XPS, text; Images (one PDF):
-      the Merge dialog with pictures picked
+- [x] Files to PDF: Office files (Phase 7), web pages (HTML, laid out on A4), e-books, XPS, text; Pictures to one
+      PDF: the Merge dialog with pictures picked
 - [x] Office files dialog: "Office suite choices", each suite with Available / Not installed, LibreOffice's download
 - Tests: src-tauri/examples/convert_test.rs (every format and program, pictures numbered, tables found, web page to
       A4, a PDF not converted again); unit tests for PackBits and font names

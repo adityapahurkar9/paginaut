@@ -22,8 +22,7 @@ import { startLayoutEdit } from "./LayoutPanel";
 import { loadSigs, newSig, openSignPane, pickSig, sigs, sigsOf, type SigKind } from "../sign";
 import { startSigning } from "../dsc";
 import { recognize, removeRecognized } from "../ocr";
-import { extractPages, insertBlankPage, startInsert, startMerge, startMergePictures, startSplit } from "./PagesUI";
-import { startExport } from "./ConvertPane";
+import { extractPages, insertBlankPage, startInsert, startMerge, startSplit } from "./PagesUI";
 import { toggleGrid } from "./PageGrid";
 import { startPageSize } from "../pagesize";
 import { startHeaders, startWatermark } from "./StampUI";
@@ -32,7 +31,7 @@ import { startSecure } from "./SecureUI";
 import { attachFiles, openPageTable, picturesDialog, showAttachments, startArea } from "../extract";
 import { addPicture, textEdit, toggleTextEdit } from "../textedit";
 import { redactTab, startRedact, stopRedact } from "../redact";
-import { officeDialog } from "../office";
+import { convertPane, officeDialog, openConvertPane } from "../office";
 import { pickAndConvert } from "./OfficeUI";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
@@ -536,20 +535,13 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { label: "Redact (remove or cover)…", check: !!tab && redactTab.value === tab, disabled: !tab?.info.value?.isPdf, run: () => tab && (redactTab.value === tab ? stopRedact() : startRedact(tab)) },
         soon("Compare", 7.5),
       ], "left", 280)} />
-      <TB icon={I(RefreshCw, 17)} label="Convert" menu onClick={(e) => openMenu(e, [
-        { head: "This document to" },
-        { label: "Word…", disabled: !tab, run: () => startExport(tab, "docx") },
-        { label: "Excel (its tables)…", disabled: !tab, run: () => startExport(tab, "xlsx") },
-        { label: "PowerPoint…", disabled: !tab, run: () => startExport(tab, "pptx") },
-        { label: "Images (PNG, JPEG, TIFF)…", disabled: !tab, run: () => startExport(tab, "images") },
-        { label: "Text…", disabled: !tab, run: () => startExport(tab, "txt") },
-        { head: "To PDF" },
-        { label: "Word, Excel, PowerPoint files…", run: () => void pickAndConvert() },
-        { label: "Images (one PDF)…", run: () => void startMergePictures() },
-        { label: "Web pages (HTML)…", run: () => void pickAndConvert(true) },
-        { sep: true },
-        { label: "Office suite choices…", run: () => (officeDialog.value = true) },
-      ], "left", 250)} />
+      <TB
+        icon={I(RefreshCw, 17)}
+        label="Convert"
+        title="Convert this document to Word, Excel, PowerPoint, pictures or text; files to PDF"
+        on={!!convertPane.value}
+        onClick={() => (convertPane.value ? (convertPane.value = null) : openConvertPane())}
+      />
     </>
   );
 }

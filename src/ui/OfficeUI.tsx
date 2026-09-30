@@ -12,7 +12,7 @@ import {
 } from "../office";
 import * as P from "../pages";
 import { baseName, openFiles, settings, type Tab } from "../store";
-import { testHook } from "./PagesUI";
+import { startMergePictures, testHook } from "./PagesUI";
 
 const mb = (bytes: number) => `${Math.round(bytes / (1 << 20)).toLocaleString()} MB`;
 
@@ -374,6 +374,9 @@ export function FilesToPdf() {
       <div class="ps-line">
         <button class="btn sm" disabled={d.running} onClick={() => void add()}>
           {d.items.length ? "Add files…" : "Choose files…"}
+        </button>
+        <button class="btn ghost sm" disabled={d.running} title="Pictures into one PDF (in the Merge dialog)" onClick={() => void startMergePictures()}>
+          Pictures to one PDF…
         </button>
         {done.length > 0 && !d.running && (
           <button class="btn ghost sm" onClick={() => void revealItemInDir(done[0].out!)}>
