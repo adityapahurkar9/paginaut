@@ -547,6 +547,22 @@ impl Doc {
         self.path.read().clone()
     }
 
+    /// A copy of the document for the calling thread alone (its private MuPDF context: nothing shared with other
+    /// threads), or None when its pages were changed in memory and only this document has them.
+    pub fn private_copy(&self) -> Result<Option<Document>, String> {
+        if self.content_edited.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let d = Document::open_private(&self.path())?;
+        if d.needs_password() {
+            if let Some(pw) = self.password.lock().as_deref() {
+                d.authenticate(pw);
+            }
+        }
+        layout_reflowable(&d, &self.path())?;
+        Ok(Some(d))
+    }
+
     fn page(&self, inner: &mut DocInner, index: usize) -> Result<Arc<Page>, String> {
         if let Some(p) = inner.pages.get(index) {
             return Ok(p);
@@ -937,6 +953,8 @@ impl Doc {
 
     /// Adds redaction marks (red outlines until applied), all as one undo step. Returns how many.
     pub fn redact_mark(&self, marks: &[RedactMark], author: &str) -> Result<usize, String> {
+        // Page bounds first: reading one not known yet takes the document's lock.
+        let origins = marks.iter().map(|m| self.bounds(m.page)).collect::<Result<Vec<_>, _>>()?;
         let mut inner = self.inner.lock();
         if !inner.doc.is_pdf() {
             return Err("Only PDFs can be redacted. Save this file as a PDF first (Save as).".into());
@@ -944,8 +962,7 @@ impl Doc {
         inner.doc.begin_op("Mark for redaction");
         let res = (|| -> Result<usize, String> {
             let mut n = 0;
-            for m in marks {
-                let [ox, oy, _, _] = self.bounds(m.page)?;
+            for (m, &[ox, oy, _, _]) in marks.iter().zip(&origins) {
                 let shift = |v: &[f32]| v.iter().enumerate().map(|(i, x)| x + if i % 2 == 0 { ox } else { oy }).collect::<Vec<f32>>();
                 let edit = mupdf::AnnotEdit {
                     quads: (!m.quads.is_empty()).then(|| shift(&m.quads)),
@@ -996,11 +1013,11 @@ impl Doc {
         if pages.is_empty() {
             return Ok(0);
         }
+        let bounds = pages.iter().map(|&(i, _)| self.bounds(i)).collect::<Result<Vec<_>, _>>()?;
         let mut inner = self.inner.lock();
         inner.doc.begin_op("Clear redaction marks");
         let res = (|| -> Result<(), String> {
-            for &(i, _) in &pages {
-                let b = self.bounds(i)?;
+            for (&(i, _), &b) in pages.iter().zip(&bounds) {
                 let page = self.page(&mut inner, i)?;
                 let list: Vec<serde_json::Value> = serde_json::from_str(&page.annots_json(&b)?).map_err(|e| e.to_string())?;
                 for a in list.iter().filter(|a| a["t"] == "Redact") {
@@ -2183,6 +2200,41 @@ impl Engine {
             // An error is e.g. an invalid regular expression, reported once.
             move |complete, limited, error| finished(SearchEnd { complete: complete || limited, error, limited }),
         )
+    }
+
+    /// Every page's words (see fo_text_words_json) and size, read in parallel; waits for them. `progress` gets the
+    /// number of pages read so far. Engine::cancel(sid) stops it ("stopped").
+    pub fn page_words(self: &Arc<Self>, doc: DocId, sid: u64, progress: impl Fn(usize) + Send + Sync + 'static) -> Result<Vec<(String, [f32; 2])>, String> {
+        let n = self.doc(doc)?.page_count();
+        let out: Arc<Mutex<Vec<(String, [f32; 2])>>> = Arc::new(Mutex::new(vec![(String::new(), [0.0; 2]); n]));
+        let done = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let pages = out.clone();
+        self.scan_pages(
+            doc,
+            0,
+            sid,
+            move |i, src| {
+                let (list, b) = src.list(i)?;
+                let json = list.text()?.words(&b)?;
+                pages.lock()[i] = (json, [b[2] - b[0], b[3] - b[1]]);
+                progress(done.fetch_add(1, Ordering::AcqRel) + 1);
+                Ok(true)
+            },
+            |_, _| {},
+            move |complete, _, error| {
+                let _ = tx.send((complete, error));
+            },
+        )?;
+        let (complete, error) = rx.recv().map_err(|_| "stopped".to_string())?;
+        if let Some(e) = error {
+            return Err(e);
+        }
+        if !complete {
+            return Err("stopped".into());
+        }
+        let v = std::mem::take(&mut *out.lock());
+        Ok(v)
     }
 
     /// Streams every page's reflow content (see fo_reflow_json), starting at `start`.

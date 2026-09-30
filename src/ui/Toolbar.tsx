@@ -10,7 +10,7 @@ import {
   Minus, Moon, MousePointer2, MoveHorizontal, PanelLeft, PanelRight, Plus, Redo2, RefreshCw, RotateCcw, RotateCw, Save, ScanText, ScrollText,
   Search, Signature, SquareSplitHorizontal, Sun, SunMoon, Trash2, FilePlus2, LayoutGrid, Type, Undo2, Wrench, Underline, Strikethrough, SquareDashed,
   PenLine, StickyNote, TypeOutline, Square, Circle, Slash, MoveUpRight, Stamp, MessagesSquare, Check, X, CalendarDays, UserRound,
-  FileLock2, ShieldCheck, TextCursorInput, EyeOff,
+  FileLock2, ShieldCheck, TextCursorInput, EyeOff, FileDiff,
 } from "lucide-preact";
 import * as A from "../actions";
 import * as P from "../pages";
@@ -34,6 +34,7 @@ import { redactTab, startRedact, stopRedact } from "../redact";
 import { convertPane, mdPane, officeDialog, openConvertPane } from "../office";
 import { isMarkdown, toggleMdPane } from "../markdown";
 import { pickAndConvert } from "./OfficeUI";
+import { openCompareSetup } from "../compare";
 import { activeTab, isDark, openFiles, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { helpPanel } from "./HelpDialogs";
@@ -74,6 +75,8 @@ function fileItems(): MenuItem[] {
     { sep: true },
     { label: "Convert Office files to PDF…", run: () => void pickAndConvert() },
     { label: "Office suite choices…", run: () => (officeDialog.value = true) },
+    { sep: true },
+    { label: "Compare files…", run: () => openCompareSetup() },
     { sep: true },
     { label: "Auto-save rotations", check: settings.value.autoSaveRotations, run: () => updateSettings({ autoSaveRotations: !settings.value.autoSaveRotations }) },
     ...(files.length ? [{ sep: true } as MenuItem, { head: "Recent" } as MenuItem] : []),
@@ -479,10 +482,6 @@ function SignTools({ tab }: { tab: Tab | null }) {
   );
 }
 
-/** Tools that are planned but not built yet show as disabled items with their phase. */
-
-/** Not built yet: shown greyed with the phase it comes in. */
-const soon = (label: string, phase: number): MenuItem => ({ label, hint: `Phase ${phase}`, disabled: true, run: () => {} });
 
 function ToolsTools({ tab }: { tab: Tab | null }) {
   return (
@@ -538,8 +537,8 @@ function ToolsTools({ tab }: { tab: Tab | null }) {
         { sep: true },
         { label: "Edit text and pictures", check: !!tab && textEdit.value === tab, disabled: !tab?.info.value?.isPdf, run: () => tab && toggleTextEdit(tab) },
         { label: "Redact (remove or cover)…", check: !!tab && redactTab.value === tab, disabled: !tab?.info.value?.isPdf, run: () => tab && (redactTab.value === tab ? stopRedact() : startRedact(tab)) },
-        soon("Compare", 7.5),
       ], "left", 280)} />
+      <TB icon={I(FileDiff, 17)} label="Compare" title="Compare two files: two versions of a PDF, or a PDF with its Word, PowerPoint, Excel or Markdown file" onClick={() => openCompareSetup()} />
       <TB
         icon={I(RefreshCw, 17)}
         label="Convert"

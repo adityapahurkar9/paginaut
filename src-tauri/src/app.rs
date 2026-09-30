@@ -1268,6 +1268,49 @@ pub fn convert_stop() {
     CONVERT_STOP.store(true, std::sync::atomic::Ordering::Release);
 }
 
+// ---------------------------------------------------------------- compare
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CompareEvent {
+    Reading { side: String, done: usize, total: usize },
+    Comparing,
+    Pictures { done: usize, total: usize },
+}
+
+static COMPARE_STOP: once_cell::sync::Lazy<std::sync::atomic::AtomicBool> = once_cell::sync::Lazy::new(|| std::sync::atomic::AtomicBool::new(false));
+/// Background work of a comparison runs under its own id, so Stop can cancel it.
+const COMPARE_SID: u64 = u64::MAX - 7;
+
+/// Lines two documents up word by word (see compare.rs).
+#[tauri::command]
+pub async fn compare_run(
+    state: State<'_, AppState>,
+    a: crate::compare::SideReq,
+    b: crate::compare::SideReq,
+    options: crate::compare::Options,
+    on_event: Channel<CompareEvent>,
+) -> Res<crate::compare::Outcome> {
+    let engine = state.engine.clone();
+    COMPARE_STOP.store(false, std::sync::atomic::Ordering::Release);
+    blocking(move || {
+        crate::compare::run(&engine, &a, &b, options, COMPARE_SID, &COMPARE_STOP, &|p| {
+            let _ = on_event.send(match p {
+                crate::compare::Progress::Reading(side, done, total) => CompareEvent::Reading { side: side.into(), done, total },
+                crate::compare::Progress::Comparing => CompareEvent::Comparing,
+                crate::compare::Progress::Pictures(done, total) => CompareEvent::Pictures { done, total },
+            });
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn compare_stop(state: State<'_, AppState>) {
+    COMPARE_STOP.store(true, std::sync::atomic::Ordering::Release);
+    state.engine.cancel(COMPARE_SID);
+}
+
 /// Opens a file Paginaut just made in the program Windows uses for it.
 #[tauri::command]
 pub fn open_path(app: tauri::AppHandle, path: String) -> Res<()> {

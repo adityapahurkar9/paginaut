@@ -80,6 +80,8 @@ export interface ViewerCallbacks {
    * corners (for area highlights on scans).
    */
   onSelectionEnd?(src: number, quads: Quad[], a: [number, number], b: [number, number]): void;
+  /** The view scrolled (by the user or the program). */
+  onScroll?(): void;
 }
 
 interface PageView {
@@ -262,7 +264,14 @@ export class Viewer {
     this.el.appendChild(this.sizer);
     host.appendChild(this.el);
 
-    this.el.addEventListener("scroll", () => this.schedule(), { passive: true });
+    this.el.addEventListener(
+      "scroll",
+      () => {
+        this.schedule();
+        this.cb.onScroll?.();
+      },
+      { passive: true },
+    );
     this.el.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     this.el.addEventListener("pointerdown", (e) => this.onPointerDown(e));
     this.ro = new ResizeObserver(() => this.onResize());
@@ -514,6 +523,22 @@ export class Viewer {
     const y = yPt !== undefined && yPt > 0 && spec.rot === 0 ? yPt : undefined;
     this.goToPage(v, y);
     return true;
+  }
+
+  /** The page (as shown) and height on it, in points, that is `offset` px below the top of the view. */
+  pointAt(offset: number): { page: number; y: number } {
+    if (!this.pages.length) return { page: 0, y: 0 };
+    const top = this.el.scrollTop + offset;
+    const page = this.pageAtY(top);
+    return { page, y: (top - this.pageRect(page).y) / this.cssScale };
+  }
+
+  /** Scrolls so the point `y` points down page `page` (as shown) is `offset` px below the top of the view. */
+  scrollToPoint(page: number, y: number, offset: number) {
+    if (!this.pages.length) return;
+    const p = Math.min(Math.max(0, page), this.pages.length - 1);
+    this.el.scrollTop = Math.max(0, this.pageRect(p).y + y * this.cssScale - offset);
+    this.schedule(true);
   }
 
   viewOfSource(src: number) {

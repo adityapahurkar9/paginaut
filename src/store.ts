@@ -61,6 +61,8 @@ export interface Settings {
   ocr: { langs: string[]; quality: "fast" | "best" };
   /** Which converter opens Office files ("auto": Microsoft Office, else LibreOffice, else the text preview). */
   officeEngine: "auto" | "msoffice" | "libreoffice" | "builtin";
+  /** Compare's options, as last chosen. */
+  compare?: Partial<import("./api").CompareOptions>;
 }
 
 export interface ReflowSettings {

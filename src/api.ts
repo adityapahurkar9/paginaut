@@ -55,6 +55,56 @@ export interface ExportDone {
   note: string;
 }
 
+/** Compare: marks of a change on one side. */
+export interface CompareMarks {
+  /** Documents: [page, x0, y0, x1, y1] in points (zero width: where the other side's words would go). */
+  boxes: [number, number, number, number, number][];
+  /** Text read from an Office file: [block, cell, from, to] (from = to: where the other side's words would go). */
+  spans: [number, number, number, number][];
+  /** [page or block, y]. */
+  at: [number, number];
+}
+export type ChangeKind = "changed" | "added" | "removed" | "moved" | "picture";
+export interface CompareChange {
+  kind: ChangeKind;
+  a: CompareMarks;
+  b: CompareMarks;
+  old: string;
+  new: string;
+  /** "Slide 3", "Sheet1 · B7". */
+  place?: string;
+}
+/** A paragraph, heading, slide or sheet title, or a row of cells, read from an Office file. */
+export interface TextBlock {
+  k: "h" | "p" | "slide" | "sheet" | "row";
+  t: string[];
+  refs?: string[];
+}
+export interface CompareOutcome {
+  changes: CompareChange[];
+  /** Places that match: [a page or block, a y, b page or block, b y]. */
+  anchors: [number, number, number, number][];
+  aBlocks: TextBlock[] | null;
+  bBlocks: TextBlock[] | null;
+  words: [number, number];
+  rough: boolean;
+  picturePages: number | null;
+}
+export interface CompareSideReq {
+  path: string;
+  doc: number | null;
+  fixed: boolean;
+}
+export interface CompareOptions {
+  matchCase: boolean;
+  skipEdges: boolean;
+  pictures: boolean;
+}
+export type CompareEvent =
+  | { kind: "reading"; side: "a" | "b"; done: number; total: number }
+  | { kind: "comparing" }
+  | { kind: "pictures"; done: number; total: number };
+
 export type InstallStage = "finding" | "downloading" | "checking" | "unpacking" | "preparing";
 export type InstallEvent = { kind: "progress"; stage: InstallStage; done: number; total: number };
 
@@ -447,6 +497,12 @@ export const api = {
     return invoke<ExportDone>("convert_from_pdf", { req, onEvent: ch });
   },
   convertStop: () => invoke<void>("convert_stop"),
+  compareRun: (a: CompareSideReq, b: CompareSideReq, options: CompareOptions, onEvent: (e: CompareEvent) => void) => {
+    const ch = new Channel<CompareEvent>();
+    ch.onmessage = onEvent;
+    return invoke<CompareOutcome>("compare_run", { a, b, options, onEvent: ch });
+  },
+  compareStop: () => invoke<void>("compare_stop"),
   markdownRead: (path: string) => invoke<string>("markdown_read", { path }),
   /** The Markdown file at `path` shown from `text` (a new document; pictures from its folder). */
   markdownPreview: (path: string, text: string) => invoke<DocInfo>("markdown_preview", { path, text }),

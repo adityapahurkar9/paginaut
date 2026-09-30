@@ -8,8 +8,9 @@ import { searchFlow } from "./reflow/find";
 import { setViewMode, viewModeOf } from "./modes";
 import { updateReflow, zoomText } from "./ui/Reflow";
 import {
-  activeTab, closeTab, cycleTab, findOpen, openFiles, paletteOpen, settings, showToast, updateSettings, type Tab,
+  activeKey, activeTab, closeTab, cycleTab, findOpen, openFiles, paletteOpen, settings, showToast, updateSettings, type Tab,
 } from "./store";
+import { closeCompare, COMPARE } from "./compare";
 
 export const OPENABLE = [
   "pdf", "xps", "oxps", "epub", "mobi", "fb2", "fbz", "cbz", "svg", "txt", "md", "markdown", "html", "htm", "xhtml",
@@ -88,6 +89,7 @@ export function toggleTheme() {
 export function closeActive() {
   const t = activeTab.value;
   if (t) closeTab(t);
+  else if (activeKey.value === COMPARE) closeCompare();
 }
 export const nextTab = () => cycleTab(1);
 export const prevTab = () => cycleTab(-1);

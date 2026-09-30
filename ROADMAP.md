@@ -461,13 +461,36 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       its last "/" (pictures of Markdown files and web pages opened by full path weren't found)
 - Tests: convert_test.rs (PDF → Markdown, Markdown → PDF, Markdown shown from edited text); unit tests for escaping
 
-## Phase 7.5 (0.7.50): Compare
-- [ ] Two PDFs side by side, scrolling together: word-by-word text diff with a list of changes, plus a picture overlay
-      for changes in drawings and scans
-- [ ] Word vs PDF: the .docx text read directly, compared with the PDF's text ("is this PDF the final version of this
-      Word file?"). Text only, since no two programs draw a Word file quite the same way
-- [ ] Excel vs PDF: cell by cell against the tables found in the PDF (Read-mode table detection); only as good as the
-      printout (hidden columns, number formats and page breaks change what's in the PDF)
+## Phase 7.5 (0.7.50): Compare (done)
+- [x] Compare tab (Tools › Compare, File › Compare files…, the command palette): pick the original and the changed file
+      (or an open one); the two side by side, scrolling together (lined up by matching words, page by page past pages
+      without any), what differs marked on both (red on the left, green on the right, purple for moved, dashed blue
+      for drawings), and the list of differences on the right: changed / added / removed / moved, where (page, slide,
+      sheet and cell), filters, F7 / Shift+F7 or Alt+↓/↑ to step through; click a mark on a page to find it in the list
+- [x] Any two files it opens: PDF with PDF, and a PDF with the Word, PowerPoint or Excel file it was made from (their
+      words read straight from the file: .docx/.pptx/.xlsx and OpenDocument; older .doc/.ppt/.xls through the PDF
+      Office or LibreOffice makes of them), Markdown with its PDF, Word with Word…
+- [x] Words lined up with patience diff (Myers for spreadsheets), stretches one word apart joined into one change,
+      the same words taken out in one place and put back in another shown as moved. Typography doesn't count (curly
+      quotes, dashes, ligatures, words hyphenated over two lines); running headers, footers and page numbers left out
+      (option); capitals count (option). Against Word files: list numbers and footnote numbers (not in Word's text)
+      left out. Letters MuPDF's own PDFs lose in Indian scripts (U+FFFD) match anything
+- [x] Excel: cells shown as Excel shows them (number formats, dates with Windows' short date, percentages, General's
+      10 digits) and matched cell by cell wherever the printout put them (wide sheets print column by column);
+      numbers that round to each other match; currency signs and hidden rows/columns left out. Shown as a sheet
+      with its column letters and row numbers
+- [x] Drawings and scans (two PDFs, pages of the same size): the pages drawn at 50 dpi, text left out (compared as
+      words), pixels differing where the other page has no similar shade nearby (a line a pixel off isn't a change),
+      grouped into boxes; slivers and specks dropped, a page mostly different shown as one box
+- [x] Engine: words with their boxes from MuPDF's text (a change of size inside a word splits it; footnote numbers
+      flagged); zip parts read through MuPDF; a small XML reader. Fix: marking redactions on a page not yet
+      measured deadlocked (the page's size was read under the document's own lock)
+- Speed: 668-page prospectus against itself (425,000 words a side, 668 page pairs of drawings) in 2.1 s; 300 scanned
+  pages in 3.4 s; Word/Excel/PowerPoint samples against their PDFs in 3–45 ms. Drawings are drawn by threads with
+  their own copies of the documents (through the shared ones they waited on each other's locks: 9.4 s)
+- Tests: compare_test.rs (Office samples against Office's PDFs, Word's and LibreOffice's PDFs of one file, Markdown
+  and its PDF, a changed Markdown file, a box drawn on a copy, two scanned agreements, a long document and a scan
+  against themselves); unit tests (number formats, word keys, list numbers, XML)
 
 ## Phase 7.6 (0.7.60): Easier to use
 - [ ] Rework the menus, toolbar tabs and bars into fewer, clearer places: every command findable in one obvious spot,
@@ -486,3 +509,7 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
 - [ ] Dependency update routine: bump MuPDF / Tesseract / Rust and JS packages on a schedule (immediately for
       security fixes), each bump gated by the test suite (rendering, speed, memory, Office quality)
 - [ ] Installer code signing
+- [ ] Settings › "Make Paginaut the default for PDFs" (and, as the user picks, the other files it opens): register
+      Paginaut's file types with Windows as a choice (Open with, Default apps) without taking any over, then open
+      Windows' Default apps page at Paginaut for the user to confirm (Windows 10/11 don't let programs set defaults
+      themselves); shows whether it's the default now. Office files stay with Office unless picked

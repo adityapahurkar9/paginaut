@@ -6,6 +6,7 @@ import * as A from "./actions";
 import { api } from "./api";
 import { activeTab, closeTab, dialog, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs } from "./store";
 import * as P from "./pages";
+import * as C from "./compare";
 import { renderer } from "./render/RenderManager";
 import { App, dropping, tool } from "./ui/App";
 import { bookScreen, exitBook } from "./modes";
@@ -30,7 +31,7 @@ render(<App />, document.getElementById("app")!);
 api.userName().then(setAuthor).catch(() => {});
 
 // Diagnostics hook for tools/cdp.mjs.
-(window as unknown as { paginaut: unknown }).paginaut = { openFiles, tabs, activeTab, renderer, actions: A, pages: P };
+(window as unknown as { paginaut: unknown }).paginaut = { openFiles, tabs, activeTab, renderer, actions: A, pages: P, compare: C };
 
 // Show the window once the first frame is painted (no white flash).
 requestAnimationFrame(() => requestAnimationFrame(() => getCurrentWindow().show()));

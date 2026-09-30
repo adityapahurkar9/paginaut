@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { BookOpen, FileImage, FileSpreadsheet, FileText, House, Plus, Presentation, X } from "lucide-preact";
+import { BookOpen, FileDiff, FileImage, FileSpreadsheet, FileText, House, Plus, Presentation, X } from "lucide-preact";
 import * as A from "../actions";
 import { api, type SystemInfo } from "../api";
 import { Viewer } from "../render/Viewer";
@@ -30,6 +30,8 @@ import { OcrBar, OcrDialog } from "./OcrUI";
 import { OfficeBar, OfficeDialog, openingText } from "./OfficeUI";
 import { ConvertPane } from "./ConvertPane";
 import { MarkdownPane } from "./MarkdownPane";
+import { CompareDialog, CompareView } from "./CompareUI";
+import { closeCompare, compare, COMPARE } from "../compare";
 import { officeKind } from "../office";
 import { InsertDialog, MergeDialog, SplitDialog } from "./PagesUI";
 import { HeaderDialog, WatermarkDialog } from "./StampUI";
@@ -58,7 +60,8 @@ export function App() {
             {tabs.value.map((t) => (
               <TabView key={t.key} tab={t} active={t.key === activeKey.value} />
             ))}
-            {!tab && <Home />}
+            {compare.value && <CompareView active={activeKey.value === COMPARE} />}
+            {!tab && activeKey.value !== COMPARE && <Home />}
             {tab && findOpen.value && <FindBar tab={tab} />}
             {tab && <LayoutPanel tab={tab} />}
             {tab && <PageSizePanel tab={tab} />}
@@ -84,6 +87,7 @@ export function App() {
       <HelpDialogs />
       <OcrDialog />
       <OfficeDialog />
+      <CompareDialog />
       <InsertDialog />
       <MergeDialog />
       <SplitDialog />
@@ -156,6 +160,35 @@ function TitleBar() {
             </span>
           </button>
         ))}
+        {compare.value && (
+          <button
+            class={`tab ${activeKey.value === COMPARE ? "on" : ""}`}
+            title={`${compare.value.a.path}\n${compare.value.b.path}`}
+            onMouseDown={(e) => {
+              if (e.button === 1) {
+                e.preventDefault();
+                closeCompare();
+              } else if (e.button === 0) activeKey.value = COMPARE;
+            }}
+          >
+            {compare.value.state === "opening" || compare.value.state === "comparing" ? <span class="spin" /> : <FileDiff size={15} />}
+            <span class="name">
+              Compare: {compare.value.a.name} · {compare.value.b.name}
+            </span>
+            <span
+              class="x"
+              role="button"
+              aria-label="Close the comparison"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                closeCompare();
+              }}
+            >
+              <X size={13} strokeWidth={2.2} />
+            </span>
+          </button>
+        )}
         {homeOpen.value && (
           <button
             class={`tab ${activeKey.value === HOME ? "on" : ""}`}

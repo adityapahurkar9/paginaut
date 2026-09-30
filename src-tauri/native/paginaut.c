@@ -7179,3 +7179,138 @@ int fo_ocr_has_layer(fo_ctx *c, fo_page *p)
 		return 0;
 	return found;
 }
+
+/* ---------------------------------------------------------------- compare: words and zip entries */
+
+static int word_break(int c) { return c <= 32 || c == 0xa0 || c == 0x2002 || c == 0x2003 || c == 0x2009 || c == 0x200b || c == 0x3000; }
+
+static void words_of_blocks(fz_context *ctx, fz_buffer *buf, fz_buffer *w, fz_stext_block *block, const float o[4], int *n)
+{
+	for (; block; block = block->next)
+	{
+		if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down)
+		{
+			words_of_blocks(ctx, buf, w, block->u.s.down->first_block, o, n);
+			continue;
+		}
+		if (block->type != FZ_STEXT_BLOCK_TEXT)
+			continue;
+		int first_in_block = 1;
+		for (fz_stext_line *line = block->u.t.first_line; line; line = line->next)
+		{
+			int first_in_line = 1;
+			float line_size = 0, base = 0;
+			fz_stext_char *ch;
+			/* The line's text size and baseline, from its largest characters. */
+			for (ch = line->first_char; ch; ch = ch->next)
+				if (ch->size > line_size)
+					line_size = ch->size, base = ch->origin.y;
+			ch = line->first_char;
+			while (ch)
+			{
+				fz_rect r = fz_empty_rect;
+				fz_stext_char *last = NULL;
+				float size = 0;
+				while (ch && word_break(ch->c))
+					ch = ch->next;
+				if (!ch)
+					break;
+				fz_clear_buffer(ctx, w);
+				for (; ch && !word_break(ch->c); ch = ch->next)
+				{
+					/* A change of size inside a word starts another: "short.¹" is "short." and a footnote's number. */
+					if (last && (ch->size < last->size * 0.75f || ch->size > last->size * 1.33f))
+						break;
+					fz_append_rune(ctx, w, ch->c);
+					r = fz_union_rect(r, fz_rect_from_quad(ch->quad));
+					if (ch->size > size)
+						size = ch->size;
+					last = ch;
+				}
+				fz_terminate_buffer(ctx, w);
+				/* flags: 1 first word of a block, 2 first of a line, 4 the line's last word ended by a hyphen
+				 * that joins it to the next line's first word, 8 small and raised (a footnote's number). */
+				int f = (first_in_block ? 1 : 0) | (first_in_line ? 2 : 0);
+				if (!ch && last && (line->flags & FZ_STEXT_LINE_FLAGS_JOINED) && fz_is_unicode_hyphen(last->c))
+					f |= 4;
+				if (size < line_size * 0.8f && last && last->origin.y < base - line_size * 0.15f)
+					f |= 8;
+				if ((*n)++)
+					fz_append_byte(ctx, buf, ',');
+				fz_append_byte(ctx, buf, '[');
+				json_str(ctx, buf, (const char *)w->data);
+				fz_append_printf(ctx, buf, ",%.1f,%.1f,%.1f,%.1f,%d]", r.x0 - o[0], r.y0 - o[1], r.x1 - o[0], r.y1 - o[1], f);
+				first_in_block = first_in_line = 0;
+			}
+		}
+	}
+}
+
+char *fo_text_words_json(fo_ctx *c, fo_text *t, const float b[4])
+{
+	fz_buffer *buf = NULL, *w = NULL;
+	char *s = NULL;
+	fz_var(buf);
+	fz_var(w);
+	fz_try(CTX)
+	{
+		int n = 0;
+		buf = fz_new_buffer(CTX, 8192);
+		w = fz_new_buffer(CTX, 64);
+		fz_append_byte(CTX, buf, '[');
+		words_of_blocks(CTX, buf, w, ((fz_stext_page *)t)->first_block, b, &n);
+		fz_append_byte(CTX, buf, ']');
+		s = buffer_to_string(CTX, buf);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_buffer(CTX, buf);
+		fz_drop_buffer(CTX, w);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
+int fo_zip_read(fo_ctx *c, const char *path, const char *entry, unsigned char **data, size_t *len)
+{
+	fz_archive *zip = NULL;
+	fz_buffer *buf = NULL;
+	char *p = NULL;
+	int missing = 0;
+	*data = NULL;
+	*len = 0;
+	fz_var(zip);
+	fz_var(buf);
+	fz_var(p);
+	fz_var(missing);
+	fz_try(CTX)
+	{
+		p = os_path(CTX, path);
+		zip = fz_open_archive(CTX, p);
+		if (!fz_has_archive_entry(CTX, zip, entry))
+			missing = 1;
+		else
+		{
+			buf = fz_read_archive_entry(CTX, zip, entry);
+			*len = buf->len;
+			*data = fz_malloc(CTX, buf->len ? buf->len : 1);
+			memcpy(*data, buf->data, buf->len);
+		}
+	}
+	fz_always(CTX)
+	{
+		fz_drop_buffer(CTX, buf);
+		fz_drop_archive(CTX, zip);
+		fz_free(CTX, p);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return missing;
+}

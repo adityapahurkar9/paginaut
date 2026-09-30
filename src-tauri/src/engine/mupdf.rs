@@ -1088,6 +1088,19 @@ pub enum RenderOutcome {
     Aborted,
 }
 
+/// One file out of a zip archive (an Office file's parts); None when it has no such entry.
+pub fn zip_read(path: &str, entry: &str) -> Result<Option<Vec<u8>>> {
+    let (p, e) = (CString::new(path).map_err(|e| e.to_string())?, CString::new(entry).map_err(|e| e.to_string())?);
+    with_ctx(|c| {
+        let (mut d, mut len) = (std::ptr::null_mut(), 0usize);
+        match unsafe { fo_zip_read(c, p.as_ptr(), e.as_ptr(), &mut d, &mut len) } {
+            0 => Ok(Some(take_bytes(c, d, len))),
+            1 => Ok(None),
+            _ => Err(last_error(c)),
+        }
+    })
+}
+
 pub fn render_size(bounds: &[f32; 4], scale: f32, rotate: i32) -> (u32, u32) {
     let (mut w, mut h) = (0, 0);
     unsafe { fo_render_size(bounds.as_ptr(), scale, rotate, &mut w, &mut h) };
@@ -1284,6 +1297,11 @@ impl Text {
             take_string(c, unsafe { fo_text_match_json(c, self.0, bounds.as_ptr(), n.as_ptr(), flags, snippets as c_int) })
                 .ok_or_else(|| last_error(c))
         })
+    }
+
+    /// The page's words in MuPDF's order, JSON (see fo_text_words_json).
+    pub fn words(&self, bounds: &[f32; 4]) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_text_words_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c)))
     }
 
     /// One `Vec` of quad coordinates (8 floats per quad) per hit.

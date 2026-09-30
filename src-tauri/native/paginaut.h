@@ -288,6 +288,13 @@ char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bounds[4], float dpi, po_te
 int fo_ocr_apply(fo_ctx *c, fo_page *p, const char *content, size_t len, int *font_num);
 int fo_ocr_has_layer(fo_ctx *c, fo_page *p);
 
+/* Compare: a page's words in MuPDF's order, JSON [["word",x0,y0,x1,y1,flags],...] relative to the page;
+ * flags: 1 first of a block, 2 first of a line, 4 ends in a hyphen joining it to the next line's first word,
+ * 8 small and raised (a footnote's number). */
+char *fo_text_words_json(fo_ctx *c, fo_text *t, const float bounds[4]);
+/* One file out of a zip (Office files): 0 read, 1 no such entry, -1 error. data freed with fo_free. */
+int fo_zip_read(fo_ctx *c, const char *path, const char *entry, unsigned char **data, size_t *len);
+
 void fo_free(fo_ctx *c, void *p);
 
 #endif

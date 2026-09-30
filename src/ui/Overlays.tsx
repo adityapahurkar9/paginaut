@@ -21,6 +21,7 @@ import { isMarkdown, openMdPane } from "../markdown";
 import { startRedact } from "../redact";
 import { officeDialog } from "../office";
 import { pickAndConvert } from "./OfficeUI";
+import { openCompareSetup } from "../compare";
 import { addBookmarkHere } from "./Sidebar";
 import { removeStamps } from "../stamps";
 import { helpPanel } from "./HelpDialogs";
@@ -223,6 +224,7 @@ function commands(): Item[] {
     c("Convert web pages (HTML) to PDF…", () => void pickAndConvert(true), ""),
     c("Convert images to one PDF…", () => void startMergePictures(), ""),
     c("Office suite choices: programs that open Office files, get LibreOffice…", () => (officeDialog.value = true), ""),
+    c("Compare files (PDF with PDF, Word, PowerPoint, Excel or Markdown)…", () => openCompareSetup(), ""),
     c("Remove recognized text", withTab((t) => void removeRecognized(t)), "", () => hasDoc() && !!activeTab.value?.info.value?.isPdf),
     c("Clear form", withTab((t) => void clearForm(t)), "", () => !!activeTab.value?.forms.value?.fields),
     c("Save a flattened copy of the form…", withTab((t) => void P.saveFlattened(t)), "", () => !!activeTab.value?.forms.value?.fields),

@@ -1,6 +1,7 @@
 pub mod engine;
 mod app;
 mod base64;
+pub mod compare;
 pub mod convert;
 mod docx;
 mod flow;
@@ -9,8 +10,10 @@ mod net;
 mod ocr;
 pub mod office;
 mod ocr_langs;
+pub mod officetext;
 mod sigstore;
 mod tiff;
+pub mod xml;
 pub mod dsc;
 
 use app::AppState;
@@ -221,6 +224,8 @@ pub fn run() {
             app::convert_options,
             app::convert_from_pdf,
             app::convert_stop,
+            app::compare_run,
+            app::compare_stop,
             app::open_path,
             app::markdown_read,
             app::markdown_preview,

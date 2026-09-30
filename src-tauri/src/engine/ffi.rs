@@ -95,6 +95,8 @@ extern "C" {
     pub fn fo_text_char_count(c: *mut fo_ctx, t: *mut fo_text) -> c_int;
     pub fn fo_text_search_json(c: *mut fo_ctx, t: *mut fo_text, bounds: *const c_float, needle: *const c_char) -> *mut c_char;
     pub fn fo_text_match_json(c: *mut fo_ctx, t: *mut fo_text, bounds: *const c_float, needle: *const c_char, flags: c_int, snippets: c_int) -> *mut c_char;
+    pub fn fo_text_words_json(c: *mut fo_ctx, t: *mut fo_text, bounds: *const c_float) -> *mut c_char;
+    pub fn fo_zip_read(c: *mut fo_ctx, path: *const c_char, entry: *const c_char, data: *mut *mut u8, len: *mut usize) -> c_int;
 
     pub fn fo_pdf_apply_page_edits(c: *mut fo_ctx, d: *mut fo_doc, rot: *const c_int, npages: c_int, order: *const c_int, count: c_int, file_pages: c_int) -> c_int;
     pub fn fo_pdf_can_save_incrementally(c: *mut fo_ctx, d: *mut fo_doc) -> c_int;
