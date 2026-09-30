@@ -382,7 +382,12 @@ Extract content (right-click the item on the page; Tools › Organize; command p
       its new place, so what was drawn over it still is. Paginaut's own forms are marked (whole page, or unbounded)
       so later moves aren't cut off; a picture inside someone else's form, or clipped where its new place would
       be cut off, still goes on top, seen whole (edit_test: under red stamped text after a move and a replace)
-- [ ] Later: edit a single line inside a table cell; bold/italic changes within a paragraph
+- [x] Bold and italic within a paragraph (0.8.5): the editor is rich text now, showing the paragraph's bold and
+      italic words as found (paragraphs report their runs of one style); Ctrl+B and Ctrl+I change the selection,
+      Enter makes a line break, paste comes in plain. The new text is laid out in the paragraph's own regular, bold,
+      italic and bold-italic faces where the page has them, and the matching built-in face where not (with one
+      face only, the HTML engine set bold words regular). A plain edit sends plain text as before
+- [ ] Later: edit a single line inside a table cell
 
 ### Phase 6.5 (0.6.50): Redact (done)
 - [x] Redact panel (Tools › Redact, Organize, command palette). Marks are standard Redact annotations (red

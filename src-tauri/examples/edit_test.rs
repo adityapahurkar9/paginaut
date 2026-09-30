@@ -33,7 +33,7 @@ fn main() {
     let new = "Edited by Paginaut: this paragraph was replaced. The quick brown fox jumps over the lazy dog, again and again, until the line wraps.";
     let old_start: String = body.t.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
     let t0 = std::time::Instant::now();
-    d.edit_text(0, &TextEdit { para: body.clone(), text: new.into() }).unwrap();
+    d.edit_text(0, &TextEdit { para: body.clone(), text: new.into(), runs: None }).unwrap();
     let ms = t0.elapsed().as_millis();
     let after = page_text(&d);
     let flat = after.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -64,9 +64,22 @@ fn main() {
 
     // Marathi in a Latin paragraph: letters the font lacks come from a fallback font.
     let heading = d.paragraphs(0).unwrap().into_iter().find(|p| p.t.contains("Page 1")).unwrap();
-    d.edit_text(0, &TextEdit { para: heading, text: "पान १ – Page one".into() }).unwrap();
+    d.edit_text(0, &TextEdit { para: heading, text: "पान १ – Page one".into(), runs: None }).unwrap();
     let flat = page_text(&d).split_whitespace().collect::<Vec<_>>().join(" ");
     check("Marathi heading", flat.contains("पान १ – Page one"), flat.chars().take(40).collect());
+
+    // Bold and italic words within a paragraph: read back as runs of those styles.
+    let para = d.paragraphs(0).unwrap().into_iter().filter(|p| p.t.len() > 80 && !p.t.contains("Edited by Paginaut")).last().unwrap();
+    let runs: Vec<(String, u8)> = vec![("Plain words, then ".into(), 0), ("bold ones".into(), 1), (", then ".into(), 0), ("italic ones".into(), 2), (" and both.".into(), 3)];
+    let text: String = runs.iter().map(|r| r.0.as_str()).collect();
+    d.edit_text(0, &TextEdit { para, text: text.clone(), runs: Some(runs) }).unwrap();
+    let back = d.paragraphs(0).unwrap().into_iter().find(|p| p.t.contains("Plain words")).unwrap();
+    let style_of = |word: &str| back.u.iter().find(|(t, _)| t.contains(word)).map(|r| r.1);
+    check(
+        "bold and italic runs",
+        back.t == text && style_of("Plain") == Some(0) && style_of("bold") == Some(1) && style_of("italic") == Some(2) && style_of("both") == Some(3),
+        format!("{:?}", back.u),
+    );
 
     // Pictures on page 3, which also has a page number stamped on it.
     let footer = StampPart {
@@ -106,7 +119,7 @@ fn main() {
     }
     // A text edit on the same page too, then the stamp must still come off.
     let para = d.paragraphs(2).unwrap().into_iter().max_by_key(|p| p.l.len()).unwrap();
-    d.edit_text(2, &TextEdit { para, text: "Page three, edited.".into() }).unwrap();
+    d.edit_text(2, &TextEdit { para, text: "Page three, edited.".into(), runs: None }).unwrap();
     d.picture_edit(2, pics[0].r, 0, none, &[]).unwrap();
     check("picture deleted", own(&d).is_empty(), String::new());
     d.undo(false).unwrap();

@@ -906,7 +906,7 @@ body.text-edit .pg { cursor: default; }
 .te-root { position: absolute; inset: 0; pointer-events: none; }
 .te-para { position: absolute; pointer-events: auto; cursor: text; border: 1px dashed rgba(26, 115, 232, 0.35); border-radius: 2px; }
 .te-para:hover { border-color: #1a73e8; background: rgba(26, 115, 232, 0.06); }
-.te-edit { position: absolute; pointer-events: auto; margin: 0; padding: 1px 2px; border: 1.5px solid #1a73e8; border-radius: 2px; background: #fff; resize: none; overflow: hidden; outline: none; box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.18); z-index: 2; white-space: pre-wrap; }
+.te-edit { cursor: text; position: absolute; pointer-events: auto; margin: 0; padding: 1px 2px; border: 1.5px solid #1a73e8; border-radius: 2px; background: #fff; resize: none; overflow: hidden; outline: none; box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.18); z-index: 2; white-space: pre-wrap; }
 .night .te-edit { filter: invert(0.9) hue-rotate(180deg); }
 .te-pic { position: absolute; pointer-events: auto; cursor: pointer; border: 1px dashed rgba(217, 119, 6, 0.55); }
 .te-pic:hover { border-color: #d97706; background: rgba(217, 119, 6, 0.07); }

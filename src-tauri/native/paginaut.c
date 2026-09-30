@@ -3724,7 +3724,15 @@ static fz_stext_page *paragraphs_of(fz_context *ctx, fz_display_list *l)
 }
 
 /* A paragraph's text: its lines joined by spaces; a word broken at a line's end ("exam-" "ple") joined again. */
-static void paragraph_text(fz_context *ctx, fz_buffer *out, fz_stext_block *b)
+/* 1 bold, 2 italic. */
+static int letter_style(fz_context *ctx, fz_stext_char *ch)
+{
+	return ch->font ? (fz_font_is_bold(ctx, ch->font) ? 1 : 0) | (fz_font_is_italic(ctx, ch->font) ? 2 : 0) : 0;
+}
+
+/* A paragraph's text, lines joined. With `styles`, one byte per letter written: its letter_style (a joining space
+ * takes the style of the letter before it). */
+static void paragraph_text(fz_context *ctx, fz_buffer *out, fz_buffer *styles, fz_stext_block *b)
 {
 	for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
 	{
@@ -3737,16 +3745,67 @@ static void paragraph_text(fz_context *ctx, fz_buffer *out, fz_stext_block *b)
 			int hyphen = out->data[out->len - 1] == '-';
 			int lower = line->first_char->c >= 'a' && line->first_char->c <= 'z';
 			if (hyphen && lower)
+			{
 				out->len--;
+				if (styles && styles->len)
+					styles->len--;
+			}
 			else if (out->data[out->len - 1] != ' ')
+			{
 				fz_append_byte(ctx, out, ' ');
+				if (styles)
+					fz_append_byte(ctx, styles, styles->len ? styles->data[styles->len - 1] : 0);
+			}
 		}
 		for (ch = line->first_char; ch; ch = ch->next)
 			last = ch;
 		for (ch = line->first_char; ch; ch = ch->next)
 			if (!(ch == last && ch->c == ' '))
+			{
 				fz_append_rune(ctx, out, ch->c);
+				if (styles)
+					fz_append_byte(ctx, styles, (unsigned char)letter_style(ctx, ch));
+			}
 	}
+}
+
+/* The text in runs of one style, [[text, style], ...], when it has more than one; else nothing. A space between
+ * two runs goes with the one before. */
+static void style_runs_json(fz_context *ctx, fz_buffer *buf, const char *text, const fz_buffer *styles)
+{
+	size_t i = 0, n = styles->len, start;
+	int runs = 0;
+	for (size_t k = 1; k < n; k++)
+		runs += styles->data[k] != styles->data[k - 1];
+	if (!runs)
+		return;
+	fz_append_string(ctx, buf, ",\"u\":[");
+	for (size_t k = 0; k < n;)
+	{
+		unsigned char st = styles->data[k];
+		const char *from = text + i;
+		start = k;
+		while (k < n && styles->data[k] == st)
+		{
+			int c;
+			i += fz_chartorune(&c, text + i);
+			k++;
+		}
+		fz_append_string(ctx, buf, start ? ",[" : "[");
+		{
+			char *piece = fz_malloc(ctx, (text + i - from) + 1);
+			memcpy(piece, from, text + i - from);
+			piece[text + i - from] = 0;
+			fz_try(ctx)
+				json_str(ctx, buf, piece);
+			fz_always(ctx)
+				fz_free(ctx, piece);
+			fz_catch(ctx)
+				fz_rethrow(ctx);
+		}
+		fz_append_printf(ctx, buf, ",%d]", st);
+	}
+	fz_append_byte(ctx, buf, ']');
 }
 
 /* How a paragraph's lines line up: l(eft), r(ight), c(entre) or j(ustified). */
@@ -3777,7 +3836,7 @@ static char paragraph_align(fz_stext_block *b)
 	return 'l';
 }
 
-static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz_stext_block *b, const float o[4], int *n, int *pics)
+static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz_buffer *styles, fz_stext_block *b, const float o[4], int *n, int *pics)
 {
 	for (; b; b = b->next)
 	{
@@ -3786,7 +3845,7 @@ static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz
 		int lines = 0;
 		if (b->type == FZ_STEXT_BLOCK_STRUCT && b->u.s.down)
 		{
-			paragraphs_json(ctx, buf, text, b->u.s.down->first_block, o, n, pics);
+			paragraphs_json(ctx, buf, text, styles, b->u.s.down->first_block, o, n, pics);
 			continue;
 		}
 		if (b->type == FZ_STEXT_BLOCK_IMAGE && b->u.i.image)
@@ -3800,7 +3859,8 @@ static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz
 		if (!first)
 			continue;
 		fz_clear_buffer(ctx, text);
-		paragraph_text(ctx, text, b);
+		fz_clear_buffer(ctx, styles);
+		paragraph_text(ctx, text, styles, b);
 		fz_terminate_buffer(ctx, text);
 		if ((*n)++)
 			fz_append_byte(ctx, buf, ',');
@@ -3826,6 +3886,7 @@ static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz
 		json_str(ctx, buf, fz_font_name(ctx, first->font));
 		fz_append_string(ctx, buf, ",\"t\":");
 		json_str(ctx, buf, fz_string_from_buffer(ctx, text));
+		style_runs_json(ctx, buf, fz_string_from_buffer(ctx, text), styles);
 		fz_append_byte(ctx, buf, '}');
 	}
 }
@@ -3833,19 +3894,21 @@ static void paragraphs_json(fz_context *ctx, fz_buffer *buf, fz_buffer *text, fz
 char *fo_paragraphs_json(fo_ctx *c, fo_list *l, const float b[4])
 {
 	fz_stext_page *t = NULL;
-	fz_buffer *buf = NULL, *text = NULL;
+	fz_buffer *buf = NULL, *text = NULL, *styles = NULL;
 	char *s = NULL;
 	fz_var(t);
 	fz_var(buf);
 	fz_var(text);
+	fz_var(styles);
 	fz_try(CTX)
 	{
 		int n = 0, pics = 0;
 		t = paragraphs_of(CTX, (fz_display_list *)l);
 		buf = fz_new_buffer(CTX, 4096);
 		text = fz_new_buffer(CTX, 256);
+		styles = fz_new_buffer(CTX, 256);
 		fz_append_byte(CTX, buf, '[');
-		paragraphs_json(CTX, buf, text, t->first_block, b, &n, &pics);
+		paragraphs_json(CTX, buf, text, styles, t->first_block, b, &n, &pics);
 		fz_append_byte(CTX, buf, ']');
 		s = buffer_to_string(CTX, buf);
 	}
@@ -3854,6 +3917,7 @@ char *fo_paragraphs_json(fo_ctx *c, fo_list *l, const float b[4])
 		fz_drop_stext_page(CTX, t);
 		fz_drop_buffer(CTX, buf);
 		fz_drop_buffer(CTX, text);
+		fz_drop_buffer(CTX, styles);
 	}
 	fz_catch(CTX)
 	{
@@ -3861,6 +3925,35 @@ char *fo_paragraphs_json(fo_ctx *c, fo_list *l, const float b[4])
 		return NULL;
 	}
 	return s;
+}
+
+/* The paragraph's own faces: the first font (with its file) of each style (letter_style) among the letters inside
+ * its lines (4 numbers each), kept. */
+static void paragraph_faces(fz_context *ctx, fz_stext_block *b, const float *lines, int nlines, fz_font *faces[4])
+{
+	for (; b; b = b->next)
+	{
+		if (b->type == FZ_STEXT_BLOCK_STRUCT && b->u.s.down)
+		{
+			paragraph_faces(ctx, b->u.s.down->first_block, lines, nlines, faces);
+			continue;
+		}
+		if (b->type != FZ_STEXT_BLOCK_TEXT)
+			continue;
+		for (fz_stext_line *line = b->u.t.first_line; line; line = line->next)
+			for (fz_stext_char *ch = line->first_char; ch; ch = ch->next)
+			{
+				fz_rect q = fz_rect_from_quad(ch->quad);
+				float x = (q.x0 + q.x1) / 2, y = (q.y0 + q.y1) / 2;
+				int k = letter_style(ctx, ch), inside = 0;
+				if (faces[k] || !ch->font || !ch->font->buffer || ch->font->t3procs)
+					continue;
+				for (int i = 0; i < nlines && !inside; i++)
+					inside = x >= lines[4 * i] && x <= lines[4 * i + 2] && y >= lines[4 * i + 1] && y <= lines[4 * i + 3];
+				if (inside)
+					faces[k] = fz_keep_font(ctx, ch->font);
+			}
+	}
 }
 
 /* The font of the letter nearest to p (page coordinates), kept; NULL if none. */
@@ -4092,6 +4185,7 @@ int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const fl
 	fz_device *dev = NULL;
 	fz_rect *rects = NULL;
 	char *fullcss = NULL;
+	fz_font *faces[4] = { NULL, NULL, NULL, NULL };
 	int began = 0;
 	if (!page)
 	{
@@ -4107,6 +4201,7 @@ int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const fl
 	fz_var(dev);
 	fz_var(rects);
 	fz_var(fullcss);
+	fz_var(faces);
 	fz_var(began);
 	fz_try(CTX)
 	{
@@ -4115,21 +4210,63 @@ int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const fl
 		float best = 1e12f;
 		size_t cl;
 
-		/* The paragraph's own font, if the new text can be set in it (the HTML engine falls
-		 * back letter by letter to a close font for anything it lacks). */
+		/* The paragraph's own fonts, if the new text can be set in them (the HTML engine falls back
+		 * letter by letter to a close font for anything they lack): each face it uses (regular, bold,
+		 * italic, bold italic) with its real weight and style, so bold words stay in its bold face. */
 		t = fz_new_stext_page_from_page(CTX, (fz_page *)p, NULL);
 		orig = font_at(CTX, t->first_block, fz_make_point(probe[0], probe[1]), &best);
-		cl = strlen(css) + 256;
+		paragraph_faces(CTX, t->first_block, lines, nlines, faces);
+		if (orig && orig->buffer && !orig->t3procs && !faces[(fz_font_is_bold(CTX, orig) ? 1 : 0) | (fz_font_is_italic(CTX, orig) ? 2 : 0)])
+			faces[(fz_font_is_bold(CTX, orig) ? 1 : 0) | (fz_font_is_italic(CTX, orig) ? 2 : 0)] = fz_keep_font(CTX, orig);
+		cl = strlen(css) + 1024;
 		fullcss = fz_malloc(CTX, cl);
-		if (orig && orig->buffer && !orig->t3procs)
+		fullcss[0] = 0;
+		for (int k = 0; k < 4; k++)
 		{
-			arch = fz_new_tree_archive(CTX, NULL);
-			fz_tree_archive_add_buffer(CTX, arch, "original.font", orig->buffer);
-			fz_snprintf(fullcss, cl, "@font-face{font-family:PgnOriginal;src:url(original.font)}%sp{font-family:PgnOriginal,%s;font-weight:normal;font-style:normal}",
-				css, fz_font_is_monospaced(CTX, orig) ? "monospace" : fz_font_is_serif(CTX, orig) ? "serif" : "sans-serif");
+			char file[16], face[256];
+			fz_buffer *data = NULL;
+			if (!faces[0] && !faces[1] && !faces[2] && !faces[3])
+				break;
+			if (!arch)
+				arch = fz_new_tree_archive(CTX, NULL);
+			fz_snprintf(file, sizeof file, "face%d.font", k);
+			if (faces[k])
+				fz_tree_archive_add_buffer(CTX, arch, file, faces[k]->buffer);
+			else
+			{
+				/* A style the paragraph's fonts don't have: the built-in font of its kind in that style (with only
+				 * one face declared, the HTML engine would set bold words in the regular one). */
+				static const char *base14[3][4] = {
+					{ "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique" },
+					{ "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic" },
+					{ "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique" },
+				};
+				fz_font *any = faces[0] ? faces[0] : faces[1] ? faces[1] : faces[2] ? faces[2] : faces[3];
+				int kind = fz_font_is_monospaced(CTX, any) ? 2 : fz_font_is_serif(CTX, any) ? 1 : 0, size = 0;
+				const unsigned char *bytes = fz_lookup_base14_font(CTX, base14[kind][k], &size);
+				if (!bytes)
+					continue;
+				data = fz_new_buffer_from_shared_data(CTX, bytes, (size_t)size);
+				fz_try(CTX)
+					fz_tree_archive_add_buffer(CTX, arch, file, data);
+				fz_always(CTX)
+					fz_drop_buffer(CTX, data);
+				fz_catch(CTX)
+					fz_rethrow(CTX);
+			}
+			fz_snprintf(face, sizeof face, "@font-face{font-family:PgnOriginal;font-weight:%s;font-style:%s;src:url(%s)}",
+				k & 1 ? "bold" : "normal", k & 2 ? "italic" : "normal", file);
+			fz_strlcat(fullcss, face, cl);
 		}
-		else
-			fz_strlcpy(fullcss, css, cl);
+		fz_strlcat(fullcss, css, cl);
+		if (arch)
+		{
+			fz_font *any = orig ? orig : faces[0] ? faces[0] : faces[1] ? faces[1] : faces[2] ? faces[2] : faces[3];
+			char family[128];
+			fz_snprintf(family, sizeof family, "p{font-family:PgnOriginal,%s}",
+				fz_font_is_monospaced(CTX, any) ? "monospace" : fz_font_is_serif(CTX, any) ? "serif" : "sans-serif");
+			fz_strlcat(fullcss, family, cl);
+		}
 
 		/* Laid out first, to line its first baseline up with the old one. */
 		hbuf = fz_new_buffer_from_copied_data(CTX, (const unsigned char *)html, strlen(html));
@@ -4168,6 +4305,8 @@ int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const fl
 		fz_drop_buffer(CTX, hbuf);
 		fz_drop_archive(CTX, arch);
 		fz_drop_font(CTX, orig);
+		for (int k = 0; k < 4; k++)
+			fz_drop_font(CTX, faces[k]);
 		fz_drop_stext_page(CTX, t);
 		fz_free(CTX, rects);
 		fz_free(CTX, fullcss);

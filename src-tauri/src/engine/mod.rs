@@ -314,13 +314,34 @@ pub struct Paragraph {
     pub a: String,
     pub font: String,
     pub t: String,
+    /// The text in runs of one style ([text, 1 bold | 2 italic]) when it mixes them; empty when it doesn't.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub u: Vec<(String, u8)>,
 }
 
-/// A paragraph's new text, with the paragraph as it was found (the text goes from its lines).
+/// A paragraph's new text, with the paragraph as it was found (the text goes from its lines). With `runs`, the
+/// text in runs of one style ([text, 1 bold | 2 italic]; `text` is then their letters).
 #[derive(Deserialize)]
 pub struct TextEdit {
     pub para: Paragraph,
     pub text: String,
+    #[serde(default)]
+    pub runs: Option<Vec<(String, u8)>>,
+}
+
+/// Text for the HTML engine: escaped, line breaks as <br/>.
+fn html_text(t: &str) -> String {
+    t.chars().fold(String::new(), |mut o, ch| {
+        match ch {
+            '&' => o.push_str("&amp;"),
+            '<' => o.push_str("&lt;"),
+            '>' => o.push_str("&gt;"),
+            '\n' => o.push_str("<br/>"),
+            '\r' => {}
+            _ => o.push(ch),
+        }
+        o
+    })
 }
 
 /// A redaction mark to add: text (quads, 8 numbers each) or an area, relative to the page origin.
@@ -833,18 +854,29 @@ impl Doc {
     /// size, spacing, colour and alignment, in its own font where that has the letters.
     pub fn edit_text(&self, index: usize, e: &TextEdit) -> Result<(), String> {
         let p = &e.para;
-        let esc: String = e.text.trim_end().chars().fold(String::new(), |mut o, ch| {
-            match ch {
-                '&' => o.push_str("&amp;"),
-                '<' => o.push_str("&lt;"),
-                '>' => o.push_str("&gt;"),
-                '\n' => o.push_str("<br/>"),
-                '\r' => {}
-                _ => o.push(ch),
+        // Runs carry their own weight and style (<b>, <i>) over a plain paragraph.
+        let runs = e.runs.as_ref().filter(|r| !r.is_empty());
+        let esc = match runs {
+            Some(runs) => {
+                let n = runs.len();
+                runs.iter()
+                    .enumerate()
+                    .map(|(k, (t, st))| {
+                        let t = if k + 1 == n { t.trim_end() } else { t.as_str() };
+                        let mut s = html_text(t);
+                        if st & 2 != 0 {
+                            s = format!("<i>{s}</i>");
+                        }
+                        if st & 1 != 0 {
+                            s = format!("<b>{s}</b>");
+                        }
+                        s
+                    })
+                    .collect::<String>()
             }
-            o
-        });
-        let html = if esc.trim().is_empty() { String::new() } else { format!("<p>{esc}</p>") };
+            None => html_text(e.text.trim_end()),
+        };
+        let html = if e.text.trim().is_empty() { String::new() } else { format!("<p>{esc}</p>") };
         let align = match p.a.as_str() {
             "r" => "right",
             "c" => "center",
@@ -857,8 +889,8 @@ impl Doc {
         let css = format!(
             "p{{margin:0;font-size:{size}pt;line-height:{}pt;color:{color};text-align:{align};font-family:{family};font-weight:{};font-style:{}}}",
             p.lead.clamp(size * 0.8, size * 4.0),
-            if p.b != 0 { "bold" } else { "normal" },
-            if p.i != 0 { "italic" } else { "normal" },
+            if p.b != 0 && runs.is_none() { "bold" } else { "normal" },
+            if p.i != 0 && runs.is_none() { "italic" } else { "normal" },
         );
         let lines: Vec<[f32; 4]> = p.l.iter().map(|l| [l[0], l[1], l[2], l[3]]).collect();
         let first = p.l.first().ok_or("That paragraph has no lines.")?;
@@ -884,8 +916,7 @@ impl Doc {
         Ok(list.into_iter().flatten().filter(|t| t.rows() > 0 && t.cols() > 0).collect())
     }
 
-    /// The table in `area` of page `index`, with the column lines `cols` if given (two or more).
-    /// The table in `area`: found, or with exactly these column lines, and row lines too if given.
+    /// The table in `area` of page `index`: found, or with exactly these column lines, and row lines too if given.
     pub fn table_in(&self, index: usize, area: [f32; 4], cols: &[f32], rows: &[f32]) -> Result<Option<table::Table>, String> {
         let b = self.bounds(index)?;
         let json = self.list(index, 1)?.table_in_json(&b, &area, cols, rows)?;

@@ -12,6 +12,52 @@ export const textEdit = signal<Tab | null>(null);
 
 let layer: EditLayer | null = null;
 
+type Run = [string, number];
+const BOLD = 1, ITALIC = 2;
+
+/** A paragraph's text in runs of one style (1 bold, 2 italic): as found, or all in the paragraph's style. */
+function runsOfParagraph(p: Paragraph): Run[] {
+  return p.u?.length ? p.u.map(([t, st]) => [t, st] as Run) : [[p.t, (p.b ? BOLD : 0) | (p.i ? ITALIC : 0)]];
+}
+
+/** The editor's content in runs of one style (<b>/<strong>, <i>/<em>, or inline weight and style); line breaks
+ * and new lines (Enter makes <br>; a pasted block <div>) as "\n". Adjacent runs of a style are joined. */
+function runsOfEditor(root: HTMLElement): Run[] {
+  const out: Run[] = [];
+  const push = (t: string, st: number) => {
+    if (!t) return;
+    const last = out[out.length - 1];
+    if (last && last[1] === st) last[0] += t;
+    else out.push([t, st]);
+  };
+  const walk = (n: Node, st: number) => {
+    if (n.nodeType === Node.TEXT_NODE) return push((n as Text).data.replace(/\u00a0/g, " "), st);
+    if (!(n instanceof HTMLElement)) return;
+    if (n.tagName === "BR") return push("\n", st);
+    let s = st;
+    if (n.tagName === "B" || n.tagName === "STRONG") s |= BOLD;
+    if (n.tagName === "I" || n.tagName === "EM") s |= ITALIC;
+    const fw = n.style.fontWeight, fs = n.style.fontStyle;
+    if (fw) s = fw === "bold" || Number(fw) >= 600 ? s | BOLD : s & ~BOLD;
+    if (fs) s = fs === "italic" || fs === "oblique" ? s | ITALIC : s & ~ITALIC;
+    if ((n.tagName === "DIV" || n.tagName === "P") && out.length && !out[out.length - 1][0].endsWith("\n")) push("\n", st);
+    n.childNodes.forEach((c) => walk(c, s));
+  };
+  root.childNodes.forEach((c) => walk(c, 0));
+  return out;
+}
+
+/** Runs compared by what they say and how: the text with whitespace squeezed, and each letter's style. */
+function runsKey(runs: Run[]) {
+  let text = "", styles = "";
+  for (const [t, st] of runs)
+    for (const ch of t) {
+      if (/\s/.test(ch)) text += text.endsWith(" ") ? "" : " ";
+      else (text += ch), (styles += st);
+    }
+  return `${text.trim()}|${styles}`;
+}
+
 export function toggleTextEdit(tab: Tab) {
   if (textEdit.value === tab) return stopTextEdit();
   if (!tab.info.value?.isPdf) return showToast("Only PDFs can be edited. Save this file as a PDF first (Save as).", 4500);
@@ -145,7 +191,7 @@ function place(el: HTMLElement, r: Box) {
 
 class EditLayer implements PageLayer {
   z = 25;
-  private open: { src: number; para: Paragraph; box: HTMLTextAreaElement } | null = null;
+  private open: { src: number; para: Paragraph; box: HTMLDivElement } | null = null;
   constructor(private tab: Tab) {}
 
   mount(page: LayerPage): HTMLElement {
@@ -291,10 +337,26 @@ class EditLayer implements PageLayer {
 
   private edit(root: HTMLElement, src: number, p: Paragraph) {
     this.commit();
-    const box = document.createElement("textarea");
+    // Rich text: bold and italic words (Ctrl+B, Ctrl+I) are kept as they're found and can be changed.
+    const box = document.createElement("div");
     box.className = "te-edit";
-    box.value = p.t;
+    box.contentEditable = "true";
     box.spellcheck = true;
+    box.title = "Ctrl+B bold · Ctrl+I italic · Ctrl+Enter done · Esc cancel";
+    for (const [t, st] of runsOfParagraph(p)) {
+      let node: Node = document.createTextNode(t);
+      if (st & ITALIC) {
+        const el = document.createElement("i");
+        el.append(node);
+        node = el;
+      }
+      if (st & BOLD) {
+        const el = document.createElement("b");
+        el.append(node);
+        node = el;
+      }
+      box.append(node);
+    }
     const family = p.mono ? "monospace" : p.serif ? "'Times New Roman', serif" : "Arial, sans-serif";
     Object.assign(box.style, {
       left: `${p.r[0] - 2}px`,
@@ -304,8 +366,8 @@ class EditLayer implements PageLayer {
       fontSize: `${p.s}px`,
       lineHeight: `${Math.max(p.s * 0.8, p.lead)}px`,
       fontFamily: family,
-      fontWeight: p.b ? "700" : "400",
-      fontStyle: p.i ? "italic" : "normal",
+      fontWeight: "400",
+      fontStyle: "normal",
       color: p.c,
       textAlign: ({ l: "left", r: "right", c: "center", j: "justify" } as const)[p.a] ?? "left",
     });
@@ -322,7 +384,19 @@ class EditLayer implements PageLayer {
       } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         this.commit();
+      } else if (e.key === "Enter") {
+        // A line break, not a new block.
+        e.preventDefault();
+        document.execCommand("insertLineBreak");
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key.toLowerCase() === "b" || e.key.toLowerCase() === "i")) {
+        e.preventDefault();
+        document.execCommand(e.key.toLowerCase() === "b" ? "bold" : "italic");
       }
+    });
+    // Pasted text comes in plain (its letters, not the other document's look).
+    box.addEventListener("paste", (e) => {
+      e.preventDefault();
+      document.execCommand("insertText", false, e.clipboardData?.getData("text/plain") ?? "");
     });
     box.addEventListener("pointerdown", (e) => e.stopPropagation());
     box.addEventListener("blur", () => this.commit());
@@ -331,6 +405,12 @@ class EditLayer implements PageLayer {
     requestAnimationFrame(() => {
       grow();
       box.focus();
+      // The caret at the end, as a text box would have it.
+      const range = document.createRange();
+      range.selectNodeContents(box);
+      range.collapse(false);
+      getSelection()?.removeAllRanges();
+      getSelection()?.addRange(range);
     });
   }
 
@@ -345,13 +425,16 @@ class EditLayer implements PageLayer {
     const o = this.open;
     if (!o) return;
     this.open = null;
-    const text = o.box.value.replace(/\s+$/, "");
-    const before = o.para.t.replace(/\s+/g, " ").trim();
-    if (text.replace(/\s+/g, " ").trim() === before) return void o.box.remove();
-    o.box.readOnly = true;
+    const runs = runsOfEditor(o.box);
+    const text = runs.map((r) => r[0]).join("").replace(/\s+$/, "");
+    if (runsKey(runs) === runsKey(runsOfParagraph(o.para))) return void o.box.remove();
+    o.box.contentEditable = "false";
     const tab = this.tab;
+    // Runs only when the styles are mixed or changed; plain text keeps the paragraph's own weight and style.
+    const base = (o.para.b ? BOLD : 0) | (o.para.i ? ITALIC : 0);
+    const styled = runs.some(([t, st]) => t.trim() && st !== base);
     api
-      .editText(tab.info.value!.docId, o.src, { para: o.para, text })
+      .editText(tab.info.value!.docId, o.src, { para: o.para, text, runs: styled ? runs : undefined })
       .then(() => {
         tab.history.push(DOC_STEP);
         tab.historyVersion.value++;
