@@ -91,9 +91,11 @@ impl Table {
                     continue;
                 }
                 let at = format!("{}{}", col_name(c), r + 1);
-                match number(text) {
-                    Some(n) => sheet.push_str(&format!(r#"<c r="{at}"><v>{n}</v></c>"#)),
-                    None => sheet.push_str(&format!(r#"<c r="{at}" t="inlineStr"><is><t xml:space="preserve">{}</t></is></c>"#, xml(text))),
+                match (number(text), percent(text)) {
+                    (Some(n), _) => sheet.push_str(&format!(r#"<c r="{at}"><v>{n}</v></c>"#)),
+                    // Styles 1 and 2: 0% and 0.00% (see STYLES).
+                    (None, Some((v, decimals))) => sheet.push_str(&format!(r#"<c r="{at}" s="{}"><v>{v}</v></c>"#, if decimals { 2 } else { 1 })),
+                    _ => sheet.push_str(&format!(r#"<c r="{at}" t="inlineStr"><is><t xml:space="preserve">{}</t></is></c>"#, xml(text))),
                 }
             }
             sheet.push_str("</row>");
@@ -119,6 +121,9 @@ impl Table {
     }
 }
 
+/// Cell styles: 0 plain, 1 a percentage (12%), 2 one with decimals (12.50%).
+const STYLES: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="10" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#;
+
 /// An Excel workbook with a sheet per table (names up to 31 characters, as Excel allows).
 pub fn workbook(tables: &[(String, &Table)]) -> Vec<u8> {
     let n = tables.len().max(1);
@@ -137,13 +142,14 @@ pub fn workbook(tables: &[(String, &Table)]) -> Vec<u8> {
         );
         files.push((format!("xl/worksheets/sheet{i}.xml"), body));
     }
-    types.push_str("</Types>");
-    rels.push_str("</Relationships>");
+    types.push_str(r#"<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>"#);
+    rels.push_str(r#"<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#);
     let mut all: Vec<(String, String)> = vec![
         ("[Content_Types].xml".into(), types),
         ("_rels/.rels".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#.into()),
         ("xl/workbook.xml".into(), format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{sheets}</sheets></workbook>"#)),
         ("xl/_rels/workbook.xml.rels".into(), rels),
+        ("xl/styles.xml".into(), STYLES.into()),
     ];
     all.extend(files);
     zip(&all)
@@ -183,6 +189,35 @@ fn number(s: &str) -> Option<String> {
     }
     let v: f64 = digits.parse().ok()?;
     Some(format!("{}", if neg { -v } else { v }))
+}
+
+/// A percentage ("12.5%", "-4 %", "(3%)" for a negative) as its value (0.125), and whether it has decimals.
+fn percent(s: &str) -> Option<(String, bool)> {
+    let t = s.trim();
+    let (neg, t) = match t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        Some(inner) => (true, inner.trim()),
+        None => (false, t),
+    };
+    let n = number(t.strip_suffix('%')?.trim_end())?;
+    let (minus, digits) = match n.strip_prefix('-') {
+        Some(d) => (!neg, d),
+        None => (neg, n.as_str()),
+    };
+    // Two places left, done on the digits (7.1 / 100 isn't exactly 0.071 in binary).
+    let (int, frac) = digits.split_once('.').unwrap_or((digits, ""));
+    let int = format!("{int:0>3}");
+    let (whole, moved) = int.split_at(int.len() - 2);
+    let whole = whole.trim_start_matches('0');
+    let frac = format!("{moved}{frac}");
+    let frac = frac.trim_end_matches('0');
+    let v = match (whole.is_empty(), frac.is_empty()) {
+        (true, true) => "0".to_string(),
+        (_, true) => whole.to_string(),
+        (true, false) => format!("0.{frac}"),
+        (false, false) => format!("{whole}.{frac}"),
+    };
+    let v = if minus && v != "0" { format!("-{v}") } else { v };
+    Some((v, digits.contains('.')))
 }
 
 pub(crate) fn xml(s: &str) -> String {
@@ -262,6 +297,32 @@ pub(crate) fn zip<N: AsRef<str>, B: AsRef<[u8]>>(files: &[(N, B)]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    /// Writes a workbook with numbers and percentages to PAGINAUT_XLSX_OUT, to open in Excel.
+    #[test]
+    fn workbook_with_percentages() {
+        let t = Table {
+            r: [0.0; 4],
+            xs: vec![0.0, 100.0, 200.0],
+            ys: vec![0.0, 20.0, 40.0, 60.0],
+            cells: vec![
+                (0, 0, 1, 1, "Share".into()),
+                (0, 1, 1, 1, "Growth".into()),
+                (1, 0, 1, 1, "12.5%".into()),
+                (1, 1, 1, 1, "(3%)".into()),
+                (2, 0, 1, 1, "1,23,456.50".into()),
+                (2, 1, 1, 1, "7.1 %".into()),
+            ],
+        };
+        let book = t.xlsx();
+        let text = String::from_utf8_lossy(&book);
+        assert!(text.contains(r#"<c r="A2" s="2"><v>0.125</v></c>"#), "{text}");
+        assert!(text.contains(r#"<c r="B2" s="1"><v>-0.03</v></c>"#));
+        assert!(text.contains("xl/styles.xml"));
+        if let Ok(out) = std::env::var("PAGINAUT_XLSX_OUT") {
+            std::fs::write(out, book).unwrap();
+        }
+    }
+
     #[test]
     fn numbers() {
         assert_eq!(number("1,23,456.50").as_deref(), Some("123456.5"));
@@ -269,6 +330,14 @@ mod tests {
         assert_eq!(number("007"), None);
         assert_eq!(number("0.5").as_deref(), Some("0.5"));
         assert_eq!(number("12a"), None);
+        assert_eq!(percent("12.5%"), Some(("0.125".into(), true)));
+        assert_eq!(percent("7.1 %"), Some(("0.071".into(), true)));
+        assert_eq!(percent("(3%)"), Some(("-0.03".into(), false)));
+        assert_eq!(percent("-150%"), Some(("-1.5".into(), false)));
+        assert_eq!(percent("1,200%"), Some(("12".into(), false)));
+        assert_eq!(percent("0%"), Some(("0".into(), false)));
+        assert_eq!(percent("12"), None);
+        assert_eq!(percent("abc%"), None);
         assert_eq!(col_name(0), "A");
         assert_eq!(col_name(27), "AB");
         assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
