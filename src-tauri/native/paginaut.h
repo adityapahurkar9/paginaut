@@ -284,7 +284,7 @@ typedef struct po_tess po_tess;
 int fo_ocr_init(void);
 /* Share of the page (per 10,000) left to read once its text is left out: a quick check for scans. */
 int fo_ocr_ink(fo_ctx *c, fo_list *l, const float bounds[4]);
-char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bounds[4], float dpi, po_tess *t, fo_cookie *k, int *aborted);
+char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bounds[4], float dpi, po_tess *t, fo_cookie *k, int redo, int *aborted);
 int fo_ocr_apply(fo_ctx *c, fo_page *p, const char *content, size_t len, int *font_num);
 int fo_ocr_has_layer(fo_ctx *c, fo_page *p);
 

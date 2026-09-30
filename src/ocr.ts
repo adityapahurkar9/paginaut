@@ -24,6 +24,8 @@ export interface OcrLang {
 export interface OcrEnd {
   complete: boolean;
   pages: number;
+  /** Of those, pages whose earlier recognised text was replaced. */
+  replaced: number;
   words: number;
   changed: boolean;
   dirty: boolean;
@@ -169,8 +171,8 @@ export async function recognize(tab: Tab) {
   ocrDialog.value = tab;
 }
 
-/** Starts recognition on `pages` (indices in the file). */
-export function startOcr(tab: Tab, pages: number[], langs: string[], quality: OcrQuality) {
+/** Starts recognition on `pages` (indices in the file); `replace` reads text Paginaut recognised before again. */
+export function startOcr(tab: Tab, pages: number[], langs: string[], quality: OcrQuality, replace = false) {
   const info = tab.info.value;
   if (!info || !pages.length) return;
   const state = ocrState(tab);
@@ -180,7 +182,7 @@ export function startOcr(tab: Tab, pages: number[], langs: string[], quality: Oc
   state.value = { phase: "running", sid, done: 0, total: pages.length, stopping: false, finished };
   const docId = info.docId;
   api
-    .ocrRun(docId, pages, langs, quality, sid, (ev) => {
+    .ocrRun(docId, pages, langs, quality, replace, sid, (ev) => {
       const cur = state.value;
       if (ev.kind === "progress") {
         if (cur?.phase === "running" && cur.sid === sid) state.value = { ...cur, done: ev.done, total: ev.total };

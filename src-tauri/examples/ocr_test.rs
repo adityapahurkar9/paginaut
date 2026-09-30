@@ -22,7 +22,7 @@ fn main() {
     let b = p.bounds().unwrap();
     let list = p.display_list(0).unwrap();
     let t1 = Instant::now();
-    let json = list.ocr(&b, 300.0, &tess, None).unwrap().unwrap();
+    let json = list.ocr(&b, 300.0, &tess, None, false).unwrap().unwrap();
     println!("page {page} recognised in {:?}", t1.elapsed());
     let v: Value = serde_json::from_str(&json).unwrap();
     if v["blank"].as_i64() == Some(1) {
@@ -50,7 +50,7 @@ fn main() {
         let p = doc.load_page(page + 1).unwrap();
         let b = p.bounds().unwrap();
         let t2 = Instant::now();
-        let _ = p.display_list(0).unwrap().ocr(&b, 300.0, &tess, None).unwrap();
+        let _ = p.display_list(0).unwrap().ocr(&b, 300.0, &tess, None, false).unwrap();
         println!("page {} recognised in {:?}", page + 1, t2.elapsed());
     }
 }

@@ -1100,6 +1100,7 @@ pub fn ocr_run(
     pages: Vec<usize>,
     langs: Vec<String>,
     quality: String,
+    replace: Option<bool>,
     sid: u64,
     on_event: Channel<OcrEvent>,
 ) -> Res<()> {
@@ -1109,6 +1110,7 @@ pub fn ocr_run(
         doc,
         pages,
         models,
+        replace.unwrap_or(false),
         sid,
         move |done, total| {
             let _ = progress.send(OcrEvent::Progress { done, total });
@@ -1124,6 +1126,13 @@ pub fn ocr_run(
 pub struct OcrRemoved {
     pages: usize,
     dirty: bool,
+}
+
+/// How many pages carry text Paginaut recognised (which recognising again can replace).
+#[tauri::command]
+pub async fn ocr_layers(state: State<'_, AppState>, doc: DocId) -> Res<usize> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.ocr_layer_pages()).await
 }
 
 /// Removes the text Paginaut recognised on every page (one undo step).

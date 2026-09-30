@@ -2,6 +2,7 @@
 // result) and the Recognize text dialog (pages, languages, accuracy).
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { ScanText, X } from "lucide-preact";
+import { api } from "../api";
 import { docSigs } from "../dsc";
 import * as P from "../pages";
 import {
@@ -38,10 +39,11 @@ export function OcrBar({ tab }: { tab: Tab }) {
   if (st?.phase === "done") {
     const e = st.end;
     const added = e.pages > 0;
+    const did = e.replaced ? `Recognized ${plural(e.pages, "page")} again` : `Added text to ${plural(e.pages, "page")}`;
     const text = e.error
-      ? `Text recognition stopped with an error: ${e.error}${added ? ` Text was added to ${plural(e.pages, "page")}.` : ""}`
+      ? `Text recognition stopped with an error: ${e.error}${added ? ` ${did}.` : ""}`
       : added
-        ? `${st.stopped ? "Stopped. " : ""}Added text to ${plural(e.pages, "page")}: you can now search, select and copy it.${tab.dirty.value ? " Save to keep it." : ""}`
+        ? `${st.stopped ? "Stopped. " : ""}${did}: you can now search, select and copy it.${tab.dirty.value ? " Save to keep it." : ""}`
         : st.stopped
           ? "Stopped before any text was found."
           : "No new text found: the pages already have text, or have nothing to read.";
@@ -49,6 +51,11 @@ export function OcrBar({ tab }: { tab: Tab }) {
       <div class={`formbar ocrbar ${e.error ? "warn" : ""}`}>
         <ScanText size={16} />
         <span title={text}>{text}</span>
+        {added && !e.error && (
+          <button class="btn ghost" onClick={() => void recognize(tab)} title="Wrong language, or words misread? Read the pages again with other languages or Best accuracy">
+            Recognize again…
+          </button>
+        )}
         {added && tab.dirty.value && (
           <button class="btn ghost" onClick={() => void P.save(tab)}>
             Save
@@ -90,6 +97,13 @@ function OcrDialogInner({ tab }: { tab: Tab }) {
   const [range, setRange] = useState("");
   const [error, setError] = useState("");
   const [preparing, setPreparing] = useState(false);
+  // Pages Paginaut recognised before: read again (replacing their text) unless unticked.
+  const [layers, setLayers] = useState(0);
+  const [replace, setReplace] = useState(true);
+  useEffect(() => {
+    const doc = tab.info.value?.docId;
+    if (doc !== undefined) api.ocrLayers(doc).then(setLayers, () => {});
+  }, []);
   const all = ocrLangs.value;
   const byCode = useMemo(() => new Map(all.map((l) => [l.code, l])), [all]);
   const order = tab.edits.value?.order ?? [];
@@ -133,7 +147,7 @@ function OcrDialogInner({ tab }: { tab: Tab }) {
     }
     rememberChoice(chosen, quality);
     close();
-    startOcr(tab, pages, chosen, quality);
+    startOcr(tab, pages, chosen, quality, layers > 0 && replace);
   };
 
   const add = (code: string) => code && !chosen.includes(code) && setLangs([...chosen, code]);
@@ -148,8 +162,17 @@ function OcrDialogInner({ tab }: { tab: Tab }) {
         </button>
         <h2>Recognize text</h2>
         <span class="muted">
-          Finds the text in scanned pages, so you can search, select and copy it and read them in Read mode. Text already on the pages stays as it is.
+          Finds the text in scanned pages, so you can search, select and copy it and read them in Read mode. Text already on the pages stays as it is
+          {layers > 0 && replace ? ", except text recognized before, which is read again" : ""}.
         </span>
+        {layers > 0 && (
+          <label class="chk">
+            <input type="checkbox" checked={replace} onChange={(e) => setReplace(e.currentTarget.checked)} />
+            <span>
+              Read the text recognized before again, and replace it ({plural(layers, "page")}). Useful when words were misread: try other languages or Best accuracy.
+            </span>
+          </label>
+        )}
 
         <div class="ocr-field">
           <label>Pages</label>

@@ -570,11 +570,14 @@ export const api = {
   ocrDelete: (code: string, quality: string) => invoke<void>("ocr_delete", { code, quality }),
   ocrCheck: (doc: number) => invoke<{ sampled: number; scans: number }>("ocr_check", { doc }),
   /** Recognises `pages` (indices in the file); cancelling `sid` stops it and keeps what was read. */
-  ocrRun: (doc: number, pages: number[], langs: string[], quality: string, sid: number, onEvent: (e: OcrEvent) => void) => {
+  /** With `replace`, pages Paginaut recognised before are read again and their text replaced. */
+  ocrRun: (doc: number, pages: number[], langs: string[], quality: string, replace: boolean, sid: number, onEvent: (e: OcrEvent) => void) => {
     const ch = new Channel<OcrEvent>();
     ch.onmessage = onEvent;
-    return invoke<void>("ocr_run", { doc, pages, langs, quality, sid, onEvent: ch });
+    return invoke<void>("ocr_run", { doc, pages, langs, quality, replace, sid, onEvent: ch });
   },
+  /** Pages carrying text Paginaut recognised. */
+  ocrLayers: (doc: number) => invoke<number>("ocr_layers", { doc }),
   ocrRemove: (doc: number) => invoke<{ pages: number; dirty: boolean }>("ocr_remove", { doc }),
   cancel: (ids: number[]) => (ids.length ? invoke<void>("cancel", { ids }) : Promise.resolve()),
   systemInfo: () => invoke<SystemInfo>("system_info"),

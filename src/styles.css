@@ -1244,3 +1244,7 @@ body.text-edit .pg { cursor: default; }
 .pane-sec.read-aloud { display: flex; flex-direction: column; gap: 6px; }
 .pane-sec.read-aloud label { font-size: 11px; font-weight: 700; color: var(--tx3); text-transform: uppercase; letter-spacing: 0.04em; }
 .pane-sec.read-aloud .btn { align-self: flex-start; display: inline-flex; gap: 6px; align-items: center; }
+
+/* Recognize text: the "read again" choice wraps. */
+.ocr-dialog .chk { white-space: normal; align-items: flex-start; }
+.ocr-dialog .chk input { margin-top: 3px; }

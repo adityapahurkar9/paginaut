@@ -241,6 +241,7 @@ pub fn run() {
             app::ocr_check,
             app::ocr_run,
             app::ocr_remove,
+            app::ocr_layers,
             app::office_engines,
             app::office_set_preference,
             app::office_install,

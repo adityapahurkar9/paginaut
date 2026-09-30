@@ -1221,11 +1221,12 @@ impl List {
 
     /// Recognises what's drawn on the page but isn't text yet (see fo_ocr_page).
     /// `None` if the cookie aborted it.
-    pub fn ocr(&self, bounds: &[f32; 4], dpi: f32, tess: &Tess, cookie: Option<&Cookie>) -> Result<Option<String>> {
+    /// With `redo`, an earlier OCR layer's words are read again rather than left as they are.
+    pub fn ocr(&self, bounds: &[f32; 4], dpi: f32, tess: &Tess, cookie: Option<&Cookie>, redo: bool) -> Result<Option<String>> {
         with_kind(self.1, |c| {
             let mut aborted = 0;
             let k = cookie.map_or(std::ptr::null_mut(), |k| k.0);
-            let s = take_string(c, unsafe { fo_ocr_page(c, self.0, bounds.as_ptr(), dpi, tess.0, k, &mut aborted) });
+            let s = take_string(c, unsafe { fo_ocr_page(c, self.0, bounds.as_ptr(), dpi, tess.0, k, redo as c_int, &mut aborted) });
             if aborted != 0 {
                 Ok(None)
             } else {

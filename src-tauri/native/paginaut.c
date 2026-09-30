@@ -6727,10 +6727,17 @@ static void ocr_word(void *arg, int line, const int lb[4], const int bl[4], cons
 		o->failed = 1;
 }
 
+/* A line of recognised text: in the invisible font OCR layers are written in. */
+static int ocr_line(fz_context *ctx, fz_stext_line *line)
+{
+	return line->first_char && line->first_char->font && strstr(fz_font_name(ctx, line->first_char->font), "GlyphLessFont") != NULL;
+}
+
 /* Renders what isn't text yet in grey at scale: text drawing is left out, and text
  * the page already has but that isn't drawn (e.g. an earlier OCR layer over a scan)
- * is painted over. *dark counts the pixels darker than mid-grey. NULL if aborted. */
-static fz_pixmap *render_untexted(fz_context *ctx, fz_display_list *l, fz_rect b, float scale, fz_cookie *k, size_t *dark)
+ * is painted over, except with redo an earlier OCR layer's (to read those words again).
+ * *dark counts the pixels darker than mid-grey. NULL if aborted. */
+static fz_pixmap *render_untexted(fz_context *ctx, fz_display_list *l, fz_rect b, float scale, fz_cookie *k, size_t *dark, int redo)
 {
 	fz_pixmap *pix = NULL;
 	fz_device *draw = NULL, *dev = NULL;
@@ -6764,6 +6771,8 @@ static fz_pixmap *render_untexted(fz_context *ctx, fz_display_list *l, fz_rect b
 				continue;
 			for (fz_stext_line *line = block->u.t.first_line; line; line = line->next)
 			{
+				if (redo && ocr_line(ctx, line))
+					continue;
 				fz_irect r = fz_round_rect(fz_transform_rect(line->bbox, m));
 				r.x0 = fz_maxi(r.x0 - 2, 0);
 				r.y0 = fz_maxi(r.y0 - 2, 0);
@@ -6812,7 +6821,7 @@ int fo_ocr_ink(fo_ctx *c, fo_list *l, const float bf[4])
 	fz_var(pix);
 	fz_try(CTX)
 	{
-		pix = render_untexted(CTX, (fz_display_list *)l, fz_make_rect(bf[0], bf[1], bf[2], bf[3]), 50.0f / 72, NULL, &dark);
+		pix = render_untexted(CTX, (fz_display_list *)l, fz_make_rect(bf[0], bf[1], bf[2], bf[3]), 50.0f / 72, NULL, &dark, 0);
 		ink = (int)(dark * 10000 / ((size_t)pix->w * pix->h));
 	}
 	fz_always(CTX)
@@ -6829,7 +6838,7 @@ int fo_ocr_ink(fo_ctx *c, fo_list *l, const float bf[4])
  * Tesseract on it.
  * JSON {"l":[{"b":[line box],"bl":[baseline x1,y1,x2,y2],"w":[[x0,y0,x1,y1,conf,"text"],...]}],"blank":1?}
  * in points relative to the page origin. *aborted is set when k was aborted. */
-char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bf[4], float dpi, po_tess *t, fo_cookie *k, int *aborted)
+char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bf[4], float dpi, po_tess *t, fo_cookie *k, int redo, int *aborted)
 {
 	fz_pixmap *pix = NULL;
 	fz_buffer *buf = NULL;
@@ -6848,7 +6857,7 @@ char *fo_ocr_page(fo_ctx *c, fo_list *l, const float bf[4], float dpi, po_tess *
 		fo_render_size(bf, scale, 0, &w, &h);
 		if ((double)w * h > 40e6)
 			scale *= (float)sqrt(40e6 / ((double)w * h));
-		pix = render_untexted(CTX, (fz_display_list *)l, fz_make_rect(bf[0], bf[1], bf[2], bf[3]), scale, (fz_cookie *)k, &dark);
+		pix = render_untexted(CTX, (fz_display_list *)l, fz_make_rect(bf[0], bf[1], bf[2], bf[3]), scale, (fz_cookie *)k, &dark, redo);
 		if (!pix)
 		{
 			*aborted = 1;

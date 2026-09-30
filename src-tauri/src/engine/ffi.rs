@@ -220,7 +220,7 @@ extern "C" {
 
     pub fn fo_ocr_init() -> c_int;
     pub fn fo_ocr_ink(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> c_int;
-    pub fn fo_ocr_page(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, dpi: c_float, t: *mut po_tess, k: *mut fo_cookie, aborted: *mut c_int) -> *mut c_char;
+    pub fn fo_ocr_page(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, dpi: c_float, t: *mut po_tess, k: *mut fo_cookie, redo: c_int, aborted: *mut c_int) -> *mut c_char;
     pub fn fo_ocr_apply(c: *mut fo_ctx, p: *mut fo_page, content: *const c_char, len: usize, font_num: *mut c_int) -> c_int;
     pub fn fo_ocr_has_layer(c: *mut fo_ctx, p: *mut fo_page) -> c_int;
 

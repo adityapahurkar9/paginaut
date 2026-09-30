@@ -1,6 +1,6 @@
 //! OCR job check: cargo run --release --example ocr_job -- <scan.pdf> <pages> <scratch-dir> [langs]
 //! Recognises the first <pages> pages in parallel, adds the text, searches it,
-//! checks a second run adds nothing, undoes/redoes, saves those pages as a new
+//! checks a second run adds nothing and a run replacing the text reads it again without doubling it, undoes/redoes, saves those pages as a new
 //! PDF, reopens it and searches again.
 use paginaut_lib::engine::{ocr::Models, Engine, SearchOptions};
 use std::sync::mpsc;
@@ -11,18 +11,19 @@ fn models(langs: &str) -> Models {
     Models { langs: langs.into(), files: langs.split('+').map(|l| (l.to_string(), format!("{dir}/{l}.traineddata"))).collect() }
 }
 
-fn run(engine: &std::sync::Arc<Engine>, doc: u64, pages: usize, langs: &str) -> paginaut_lib::engine::ocr::OcrEnd {
+fn run(engine: &std::sync::Arc<Engine>, doc: u64, pages: usize, langs: &str, replace: bool) -> paginaut_lib::engine::ocr::OcrEnd {
     let (tx, rx) = mpsc::channel();
     let t0 = Instant::now();
     engine
-        .ocr(doc, (0..pages).collect(), models(langs), 77, |done, total| if done % 8 == 0 || done == total { eprintln!("  {done}/{total}") }, move |end| tx.send(end).unwrap())
+        .ocr(doc, (0..pages).collect(), models(langs), replace, 77, |done, total| if done % 8 == 0 || done == total { eprintln!("  {done}/{total}") }, move |end| tx.send(end).unwrap())
         .unwrap();
     let end = rx.recv().unwrap();
     println!(
-        "ocr: {:?}, complete={} pages={} words={} changed={} error={:?}",
+        "ocr: {:?}, complete={} pages={} replaced={} words={} changed={} error={:?}",
         t0.elapsed(),
         end.complete,
         end.pages,
+        end.replaced,
         end.words,
         end.changed,
         end.error
@@ -53,7 +54,7 @@ fn main() {
     d.forms_init().unwrap();
     println!("scan check: {}", serde_json::to_string(&d.scan_check().unwrap()).unwrap());
 
-    let end = run(&engine, info.doc_id, pages, &langs);
+    let end = run(&engine, info.doc_id, pages, &langs, false);
     assert!(end.changed);
     println!("page 1 text: {:?}", d.text(0).unwrap().lock().all().chars().take(160).collect::<String>());
     println!("scan check after: {}", serde_json::to_string(&d.scan_check().unwrap()).unwrap());
@@ -64,9 +65,21 @@ fn main() {
     println!("'{word}' via page text: {hits}");
 
     // A second run finds nothing new: the text layer covers what was read.
-    let again = run(&engine, info.doc_id, pages, &langs);
+    let again = run(&engine, info.doc_id, pages, &langs, false);
     // At most a few leftovers (words the first run dropped as unsure).
     assert!(again.words * 20 <= end.words, "second run read the pages again");
+
+    // Recognising again, replacing: every page is read again and its text swapped, not added to.
+    let chars = |d: &paginaut_lib::engine::Doc| (0..pages).map(|i| d.text(i).unwrap().lock().char_count()).sum::<usize>();
+    let before = chars(&d);
+    let replaced = run(&engine, info.doc_id, pages, &langs, true);
+    let after = chars(&d);
+    println!("replace: chars {before} -> {after}, '{word}' in memory: {}", count(&engine, info.doc_id, word));
+    assert!(replaced.replaced > 0 && replaced.words * 10 >= end.words * 9, "the replacing run didn't read the pages again");
+    assert!(after < before * 11 / 10, "the text was added to, not replaced");
+    d.undo(false).unwrap();
+    assert_eq!(chars(&d), before, "undo brings back the text as it was");
+    d.undo(true).unwrap();
 
     d.undo(false).unwrap();
     println!("after undo, page 1 chars: {}", d.text(0).unwrap().lock().char_count());

@@ -35,6 +35,8 @@ pub struct OcrEnd {
     pub complete: bool,
     /// Pages that got text.
     pub pages: usize,
+    /// Of those, pages whose earlier recognised text was replaced.
+    pub replaced: usize,
     pub words: usize,
     /// The document changed (a new undo step).
     pub changed: bool,
@@ -42,6 +44,9 @@ pub struct OcrEnd {
     pub dirty: bool,
     pub error: Option<String>,
 }
+
+/// A page's recognised text (content, words), and whether it replaces the page's earlier OCR layer.
+type PageText = (String, usize, bool);
 
 /// How many pages have something to read but (almost) no text, among a sample.
 #[derive(Serialize)]
@@ -291,17 +296,22 @@ impl Doc {
         Ok(ScanCheck { sampled: k, scans })
     }
 
-    /// Adds recognised text (content per page) as one undo step.
-    fn apply_ocr(&self, results: &BTreeMap<usize, (String, usize)>) -> Result<(usize, usize), String> {
+    /// Adds recognised text (content per page) as one undo step; returns (pages, replaced, words).
+    fn apply_ocr(&self, results: &BTreeMap<usize, PageText>) -> Result<(usize, usize, usize), String> {
         let mut inner = self.inner.lock();
-        let (mut pages, mut words, mut font) = (0, 0, 0);
+        let (mut pages, mut replaced, mut words, mut font) = (0, 0, 0, 0);
         inner.doc.begin_op("Recognize text");
         let res = (|| -> Result<(), String> {
-            for (&i, (content, n)) in results {
+            for (&i, (content, n, redo)) in results {
+                // Nothing read (a page left blank): an earlier layer stays rather than going for nothing.
                 if content.is_empty() {
                     continue;
                 }
                 let page = self.page(&mut inner, i)?;
+                if *redo {
+                    page.ocr_apply("", &mut font)?;
+                    replaced += 1;
+                }
                 page.ocr_apply(content, &mut font)?;
                 pages += 1;
                 words += n;
@@ -314,7 +324,20 @@ impl Doc {
             self.content_edited.store(true, Ordering::Release);
             self.edited();
         }
-        res.map(|_| (pages, words))
+        res.map(|_| (pages, replaced, words))
+    }
+
+    /// Pages carrying text Paginaut recognised.
+    pub fn ocr_layer_pages(&self) -> Result<usize, String> {
+        let mut inner = self.inner.lock();
+        if !inner.doc.is_pdf() {
+            return Ok(0);
+        }
+        let mut n = 0;
+        for i in 0..self.page_count() {
+            n += self.page(&mut inner, i)?.has_ocr_layer() as usize;
+        }
+        Ok(n)
     }
 
     /// Removes the text layers Paginaut added (one undo step). Returns the pages changed.
@@ -357,11 +380,14 @@ impl Engine {
     /// starting at the page you're on) and adds their text to the document as one
     /// undo step. Stopping (cancelling `sid`) keeps what was read so far.
     /// `progress(done, total)` runs after each page; `finished` once at the end.
+    /// With `replace`, pages Paginaut recognised before are read again and their text replaced.
+    #[allow(clippy::too_many_arguments)]
     pub fn ocr(
         self: &Arc<Self>,
         doc: DocId,
         pages: Vec<usize>,
         models: Models,
+        replace: bool,
         sid: u64,
         progress: impl Fn(usize, usize) + Send + Sync + 'static,
         finished: impl FnOnce(OcrEnd) + Send + 'static,
@@ -378,17 +404,18 @@ impl Engine {
         let next = Arc::new(AtomicUsize::new(0));
         let done = Arc::new(AtomicUsize::new(0));
         let remaining = Arc::new(AtomicUsize::new(runners));
-        let results: Arc<Mutex<BTreeMap<usize, (String, usize)>>> = Arc::new(Mutex::new(BTreeMap::new()));
+        let results: Arc<Mutex<BTreeMap<usize, PageText>>> = Arc::new(Mutex::new(BTreeMap::new()));
         let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let progress = Arc::new(progress);
         let engine = Arc::downgrade(self);
-        let finished = Arc::new(Mutex::new(Some(Box::new(move |cancelled: bool, results: BTreeMap<usize, (String, usize)>, error: Option<String>| {
+        let finished = Arc::new(Mutex::new(Some(Box::new(move |cancelled: bool, results: BTreeMap<usize, PageText>, error: Option<String>| {
             let mut end = OcrEnd { complete: !cancelled && error.is_none(), error, ..Default::default() };
             // A closed document takes nothing.
             if let Some(d) = engine.upgrade().and_then(|e| e.doc(doc).ok()) {
                 match d.apply_ocr(&results) {
-                    Ok((p, w)) => {
+                    Ok((p, r, w)) => {
                         end.pages = p;
+                        end.replaced = r;
                         end.words = w;
                         end.changed = p > 0;
                         end.dirty = d.has_changes();
@@ -400,7 +427,7 @@ impl Engine {
                 }
             }
             finished(end);
-        }) as Box<dyn FnOnce(bool, BTreeMap<usize, (String, usize)>, Option<String>) + Send>)));
+        }) as Box<dyn FnOnce(bool, BTreeMap<usize, PageText>, Option<String>) + Send>)));
 
         for _ in 0..runners {
             let (d, pages, next, done, remaining, results, error, progress, finished, models) = (
@@ -423,17 +450,22 @@ impl Engine {
                         break;
                     }
                     let i = pages[k];
-                    let res = (|| -> Result<Option<(String, usize)>, String> {
+                    let res = (|| -> Result<Option<PageText>, String> {
                         let b = d.bounds(i)?;
+                        let redo = replace && {
+                            let mut inner = d.inner.lock();
+                            d.page(&mut inner, i)?.has_ocr_layer()
+                        };
                         let list = d.fresh_list(i)?;
-                        let Some(json) = with_tess(&models, |t| list.ocr(&b, DPI, t, Some(&ctl.cookie)))? else {
+                        let Some(json) = with_tess(&models, |t| list.ocr(&b, DPI, t, Some(&ctl.cookie), redo))? else {
                             return Ok(None);
                         };
                         let page: PageJson = serde_json::from_str(&json).map_err(|e| e.to_string())?;
                         if page.blank == 1 || page.l.is_empty() {
-                            return Ok(Some((String::new(), 0)));
+                            return Ok(Some((String::new(), 0, redo)));
                         }
-                        Ok(Some(page_content(&page.l, [b[0], b[1]])))
+                        let (content, n) = page_content(&page.l, [b[0], b[1]]);
+                        Ok(Some((content, n, redo)))
                     })();
                     match res {
                         Ok(Some(r)) => {
