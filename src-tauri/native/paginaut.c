@@ -2910,6 +2910,159 @@ static void put_color_rect(fz_context *ctx, fz_buffer *buf, const unsigned char 
 	fz_append_printf(ctx, buf, "%g %g %g rg %g %g %g %g re f\n", rgb[0] / 255.0f, rgb[1] / 255.0f, rgb[2] / 255.0f, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
 }
 
+static int pix_lum(const unsigned char *q)
+{
+	return (q[0] * 3 + q[1] * 6 + q[2]) / 10;
+}
+
+/* The new margins filled with the page's own paper: patches of blank paper (no ink, close to the paper's colour)
+ * from near the content's edges, laid at random over the margins, each pixel a blend of the four patches over it,
+ * and faded into the softened edge of the content near it so there's no seam. `src` is the content rendered
+ * (crop rect x0..x1, y0..y1 inclusive, k pixels per point of the crop), placed at scale s into `placed` (PDF
+ * space) on a W x H page. A picture of the whole page (only its margins are seen), or NULL when the content has no
+ * blank paper to take patches from (text up to its edges: the edges are stretched instead). */
+static pdf_obj *paper_texture(fz_context *ctx, pdf_document *doc, fz_pixmap *src, int x0, int y0, int x1, int y1, float k, float s,
+	float W, float H, fz_rect placed)
+{
+	float per = k / s, kk = fz_min(per, 2400.0f / fz_max(W, H)), ratio = per / kk;
+	int ow = (int)ceilf(W * kk), oh = (int)ceilf(H * kk), cw = x1 - x0 + 1, ch = y1 - y0 + 1, n = 0, hist[256] = { 0 }, total = 0, L = 0;
+	float cx0 = placed.x0 * kk, cy0 = (H - placed.y1) * kk, cx1 = placed.x1 * kk, cy1 = (H - placed.y0) * kk;
+	int band = fz_maxi(3, fz_mini(cw, ch) / 12), P, G, Ps, gw, gh;
+	long paper[3] = { 0, 0, 0 }, pn = 0;
+	unsigned char pc[3];
+	int (*cand)[2] = NULL;
+	int *assign = NULL;
+	fz_pixmap *out = NULL;
+	fz_buffer *jpeg = NULL;
+	fz_image *img = NULL;
+	pdf_obj *ref = NULL;
+	unsigned int seed = 12345;
+	if (cw < 16 || ch < 16 || ow < 2 || oh < 2)
+		return NULL;
+	#define SRC(xx, yy) (src->samples + (size_t)fz_clampi(yy, 0, src->h - 1) * src->stride + (size_t)fz_clampi(xx, 0, src->w - 1) * src->n)
+	#define IN_BAND(xx, yy) ((xx) - x0 < band || x1 - (xx) < band || (yy) - y0 < band || y1 - (yy) < band)
+	/* The paper's lightness: the 80th percentile of the edge band (ink is darker), and its colour. */
+	for (int y = y0; y <= y1; y += 2)
+		for (int x = x0; x <= x1; x += 2)
+			if (IN_BAND(x, y))
+				hist[pix_lum(SRC(x, y))]++, total++;
+	for (int a = 0, acc = 0; a < 256; a++)
+		if ((acc += hist[a]) >= total * 8 / 10)
+		{
+			L = a;
+			break;
+		}
+	for (int y = y0; y <= y1; y += 2)
+		for (int x = x0; x <= x1; x += 2)
+			if (IN_BAND(x, y) && abs(pix_lum(SRC(x, y)) - L) <= 10)
+			{
+				const unsigned char *q = SRC(x, y);
+				paper[0] += q[0], paper[1] += q[1], paper[2] += q[2], pn++;
+			}
+	if (!pn)
+		return NULL;
+	for (int c = 0; c < 3; c++)
+		pc[c] = (unsigned char)(paper[c] / pn);
+
+	P = fz_clampi((int)(fz_min(cx1 - cx0, cy1 - cy0) / 10), 12, 48) & ~1;
+	G = P / 2;
+	Ps = fz_maxi(4, (int)(P * ratio));
+	fz_var(cand);
+	fz_var(assign);
+	fz_var(out);
+	fz_var(jpeg);
+	fz_var(img);
+	fz_try(ctx)
+	{
+		int bw = fz_maxi(2 * Ps, fz_mini(cw, ch) * 15 / 100), step = fz_maxi(2, Ps / 2), sample = fz_maxi(1, Ps / 12);
+		cand = fz_malloc(ctx, 512 * sizeof(*cand));
+		/* Blank patches near the edges. */
+		for (int y = y0; y + Ps <= y1 && n < 512; y += step)
+			for (int x = x0; x + Ps <= x1 && n < 512; x += step)
+			{
+				int lo = 255, hi = 0;
+				long sum = 0, cnt = 0;
+				if (!(x - x0 < bw || x1 - (x + Ps) < bw || y - y0 < bw || y1 - (y + Ps) < bw))
+					continue;
+				for (int yy = y; yy < y + Ps; yy += sample)
+					for (int xx = x; xx < x + Ps; xx += sample)
+					{
+						int l = pix_lum(SRC(xx, yy));
+						lo = fz_mini(lo, l), hi = fz_maxi(hi, l), sum += l, cnt++;
+					}
+				if (hi - lo <= 45 && abs((int)(sum / cnt) - L) <= 18)
+					cand[n][0] = x, cand[n][1] = y, n++;
+			}
+		if (n >= 3)
+		{
+			gw = ow / G + 3, gh = oh / G + 3;
+			assign = fz_malloc(ctx, (size_t)gw * gh * sizeof(int));
+			for (int i = 0; i < gw * gh; i++)
+				assign[i] = (int)((seed = seed * 1103515245u + 12345u) >> 8) % n;
+			out = fz_new_pixmap(ctx, fz_device_rgb(ctx), ow, oh, NULL, 0);
+			for (int y = 0; y < oh; y++)
+			{
+				unsigned char *row = out->samples + (size_t)y * out->stride;
+				for (int x = 0; x < ow; x++)
+				{
+					unsigned char *o = row + x * 3;
+					float dx = fz_max(fz_max(cx0 - x, x + 1 - cx1), 0), dy = fz_max(fz_max(cy0 - y, y + 1 - cy1), 0), d = fz_max(dx, dy);
+					float acc[3] = { 0, 0, 0 }, wsum = 0, t;
+					if (d <= 0)
+					{
+						memcpy(o, pc, 3);
+						continue;
+					}
+					for (int b = y / G - 1; b <= y / G; b++)
+						for (int a = x / G - 1; a <= x / G; a++)
+						{
+							int lx = x - a * G, ly = y - b * G, idx = assign[(b + 1) * gw + (a + 1)];
+							float wx = 1 - fabsf(lx - (P - 1) / 2.0f) / (P / 2.0f), wy = 1 - fabsf(ly - (P - 1) / 2.0f) / (P / 2.0f), w = fz_max(wx, 0.01f) * fz_max(wy, 0.01f);
+							const unsigned char *q = SRC(cand[idx][0] + (int)(lx * ratio), cand[idx][1] + (int)(ly * ratio));
+							acc[0] += w * q[0], acc[1] += w * q[1], acc[2] += w * q[2], wsum += w;
+						}
+					t = d / P;
+					if (t < 1)
+					{
+						/* Near the content: the softened edge beside it, fading into the paper. */
+						int ex = (int)fz_clamp(x, cx0, cx1 - 1), ey = (int)fz_clamp(y, cy0, cy1 - 1), r = fz_maxi(2, (int)(2 * ratio)), st = fz_maxi(1, r / 2);
+						int sx = x0 + (int)((ex - cx0) * ratio), sy = y0 + (int)((ey - cy0) * ratio);
+						float e[3] = { 0, 0, 0 }, en = 0, sm = t * t * (3 - 2 * t);
+						for (int yy = sy - r; yy <= sy + r; yy += st)
+							for (int xx = sx - r; xx <= sx + r; xx += st)
+							{
+								const unsigned char *q = SRC(fz_clampi(xx, x0, x1), fz_clampi(yy, y0, y1));
+								e[0] += q[0], e[1] += q[1], e[2] += q[2], en++;
+							}
+						for (int c = 0; c < 3; c++)
+							o[c] = (unsigned char)fz_clamp(e[c] / en * (1 - sm) + acc[c] / wsum * sm, 0, 255);
+					}
+					else
+						for (int c = 0; c < 3; c++)
+							o[c] = (unsigned char)fz_clamp(acc[c] / wsum, 0, 255);
+				}
+			}
+			/* As a JPEG: paper grain doesn't compress losslessly. */
+			jpeg = fz_new_buffer_from_pixmap_as_jpeg(ctx, out, fz_default_color_params, 88, 0);
+			img = fz_new_image_from_buffer(ctx, jpeg);
+			ref = pdf_add_image(ctx, doc, img);
+		}
+	}
+	fz_always(ctx)
+	{
+		fz_free(ctx, cand);
+		fz_free(ctx, assign);
+		fz_drop_pixmap(ctx, out);
+		fz_drop_buffer(ctx, jpeg);
+		fz_drop_image(ctx, img);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	#undef SRC
+	#undef IN_BAND
+	return ref;
+}
+
 /* Defined with the stamps below: keep stamps out of a content rewrite. */
 static pdf_obj *stamps_aside(fz_context *ctx, pdf_page *page);
 static void stamps_back(fz_context *ctx, pdf_page *page, pdf_obj *saved);
@@ -3055,7 +3208,8 @@ int fo_pdf_page_size(fo_ctx *c, fo_page *p, const float crop[4], const float siz
 				}
 				else
 				{
-					/* Extend edges: the crop box's outer rows and columns of pixels, stretched outwards. */
+					/* The content as pixels, for the paper (fill 3) or its edges stretched outwards (fill 2, and
+					 * the paper's fallback). */
 					float k = fz_min(2.0f, 1400.0f / fz_max(cw, ch));
 					int x0, y0, x1, y1;
 					struct { fz_rect r; const char *name; int sx, sy, w, h; } strips[4];
@@ -3065,29 +3219,41 @@ int fo_pdf_page_size(fo_ctx *c, fo_page *p, const float crop[4], const float siz
 					y0 = fz_clampi((int)((C.y0 - bounds.y0) * k), 0, pix->h - 1);
 					x1 = fz_clampi((int)((C.x1 - bounds.x0) * k) - 1, x0, pix->w - 1);
 					y1 = fz_clampi((int)((C.y1 - bounds.y0) * k) - 1, y0, pix->h - 1);
-					strips[0].r = top; strips[0].name = "PaginautT"; strips[0].sx = x0; strips[0].sy = y0; strips[0].w = x1 - x0 + 1; strips[0].h = 1;
-					strips[1].r = bottom; strips[1].name = "PaginautB"; strips[1].sx = x0; strips[1].sy = y1; strips[1].w = x1 - x0 + 1; strips[1].h = 1;
-					strips[2].r = left; strips[2].name = "PaginautL"; strips[2].sx = x0; strips[2].sy = y0; strips[2].w = 1; strips[2].h = y1 - y0 + 1;
-					strips[3].r = right; strips[3].name = "PaginautR"; strips[3].sx = x1; strips[3].sy = y0; strips[3].w = 1; strips[3].h = y1 - y0 + 1;
-					for (int i = 0; i < 4; i++)
+					if (fill == 3 && (img = paper_texture(CTX, doc, pix, x0, y0, x1, y1, k, s, W, H, placed)) != NULL)
 					{
-						fz_rect r = strips[i].r;
-						if (r.x1 - r.x0 < 0.01f || r.y1 - r.y0 < 0.01f)
-							continue;
-						img = strip_image(CTX, doc, pix, strips[i].sx, strips[i].sy, strips[i].w, strips[i].h);
-						pdf_dict_puts(CTX, xobjs, strips[i].name, img);
+						pdf_dict_puts(CTX, xobjs, "PaginautPaper", img);
 						pdf_drop_obj(CTX, img);
 						img = NULL;
-						fz_append_printf(CTX, buf, "q %g 0 0 %g %g %g cm /%s Do Q\n", r.x1 - r.x0, r.y1 - r.y0, r.x0, r.y0, strips[i].name);
+						/* The whole page drawn, but only the margins seen (the content's place cut out). */
+						fz_append_printf(CTX, buf, "q 0 0 %g %g re %g %g %g %g re W* n %g 0 0 %g 0 0 cm /PaginautPaper Do Q\n",
+							W, H, placed.x0, placed.y0, placed.x1 - placed.x0, placed.y1 - placed.y0, W, H);
 					}
-					tl = pix->samples + y0 * pix->stride + x0 * pix->n;
-					tr = pix->samples + y0 * pix->stride + x1 * pix->n;
-					bl = pix->samples + y1 * pix->stride + x0 * pix->n;
-					br = pix->samples + y1 * pix->stride + x1 * pix->n;
-					put_color_rect(CTX, buf, tl, corners[0]);
-					put_color_rect(CTX, buf, tr, corners[1]);
-					put_color_rect(CTX, buf, bl, corners[2]);
-					put_color_rect(CTX, buf, br, corners[3]);
+					else
+					{
+						strips[0].r = top; strips[0].name = "PaginautT"; strips[0].sx = x0; strips[0].sy = y0; strips[0].w = x1 - x0 + 1; strips[0].h = 1;
+						strips[1].r = bottom; strips[1].name = "PaginautB"; strips[1].sx = x0; strips[1].sy = y1; strips[1].w = x1 - x0 + 1; strips[1].h = 1;
+						strips[2].r = left; strips[2].name = "PaginautL"; strips[2].sx = x0; strips[2].sy = y0; strips[2].w = 1; strips[2].h = y1 - y0 + 1;
+						strips[3].r = right; strips[3].name = "PaginautR"; strips[3].sx = x1; strips[3].sy = y0; strips[3].w = 1; strips[3].h = y1 - y0 + 1;
+						for (int i = 0; i < 4; i++)
+						{
+							fz_rect r = strips[i].r;
+							if (r.x1 - r.x0 < 0.01f || r.y1 - r.y0 < 0.01f)
+								continue;
+							img = strip_image(CTX, doc, pix, strips[i].sx, strips[i].sy, strips[i].w, strips[i].h);
+							pdf_dict_puts(CTX, xobjs, strips[i].name, img);
+							pdf_drop_obj(CTX, img);
+							img = NULL;
+							fz_append_printf(CTX, buf, "q %g 0 0 %g %g %g cm /%s Do Q\n", r.x1 - r.x0, r.y1 - r.y0, r.x0, r.y0, strips[i].name);
+						}
+						tl = pix->samples + y0 * pix->stride + x0 * pix->n;
+						tr = pix->samples + y0 * pix->stride + x1 * pix->n;
+						bl = pix->samples + y1 * pix->stride + x0 * pix->n;
+						br = pix->samples + y1 * pix->stride + x1 * pix->n;
+						put_color_rect(CTX, buf, tl, corners[0]);
+						put_color_rect(CTX, buf, tr, corners[1]);
+						put_color_rect(CTX, buf, bl, corners[2]);
+						put_color_rect(CTX, buf, br, corners[3]);
+					}
 				}
 				fz_append_string(CTX, buf, "Q\n");
 			}

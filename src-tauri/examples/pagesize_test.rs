@@ -70,6 +70,18 @@ fn main() {
     let ext = PageSizeOptions { fit: 2, anchor: [0.5, 0.5], remove: false, fill: 2, color: [0.0; 3] };
     let r = d.page_size(&[PageSizeOp { page: pic.first, crop: [0.0, 0.0, pw, ph], size: Some([pw + 200.0, ph + 100.0]) }], &ext).unwrap();
     check("extend edges", r[0] == [pw + 200.0, ph + 100.0], format!("{:?} → {:?}", [pw, ph], r[0]));
+    // 6. A scan on a bigger page with its own paper in the new space: a picture covering the page behind it.
+    let scan = engine
+        .insert_pages(info.doc_id, vec![paginaut_lib::engine::InsertSource { path: format!("{dir}/scan-300.pdf"), pages: Some(vec![0]), password: None }], None)
+        .unwrap();
+    let [sw, sh] = scan.sizes[0];
+    let paper = PageSizeOptions { fit: 0, anchor: [0.5, 0.5], remove: false, fill: 3, color: [0.0; 3] };
+    let r = d.page_size(&[PageSizeOp { page: scan.first, crop: [0.0, 0.0, sw, sh], size: Some([sw * 1.4, sh * 1.25]) }], &paper).unwrap();
+    let whole = d.pictures(scan.first, false).unwrap().iter().any(|p| p.r[0] < 1.0 && p.r[1] < 1.0 && (p.r[2] - r[0][0]).abs() < 1.0 && (p.r[3] - r[0][1]).abs() < 1.0);
+    std::fs::write(format!("{tmp}/paper-fill.png"), d.area_data(scan.first, [0.0, 0.0, r[0][0], r[0][1]], 0, "png", 40.0).unwrap()).unwrap();
+    std::fs::write(format!("{tmp}/paper-corner.png"), d.area_data(scan.first, [0.0, 0.0, 160.0, 120.0], 0, "png", 300.0).unwrap()).unwrap();
+    check("paper texture", whole, format!("{:?}", d.pictures(scan.first, false).unwrap().iter().map(|p| p.r).collect::<Vec<_>>()));
+
     let n_all = d.page_count();
     let saved = engine.save(info.doc_id, (0..n_all).collect(), vec![0; n_all], None).unwrap();
     let sizes = engine.page_sizes(saved.doc_id).unwrap();

@@ -50,7 +50,8 @@ export interface PageSizeSettings {
   custom: [number, number];
   fit: 0 | 1 | 2;
   anchor: [number, number];
-  fill: 0 | 1 | 2;
+  /** New space: nothing, a colour, the edges stretched, the page's own paper. */
+  fill: 0 | 1 | 2 | 3;
   color: string;
 }
 

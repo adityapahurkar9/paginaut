@@ -275,7 +275,11 @@ Page size (crop and resize in one tool; Tools › Organize, right-click on pages
       out (the outermost pixel rows and columns of the content, for scans). Only the new margins are filled
 - [x] Apply to: this page, selected, all, odd, even, a range (same margins on each). One undo step; page sizes come
       back on undo/redo (src-tauri/examples/pagesize_test.rs)
-- [ ] Optional, later: content-aware fill of the new margins (inpainting from the page's own picture)
+- [x] Content-aware fill of the new margins (0.8.6): "Paper" fills the new space with the page's own paper: blank
+      patches (no ink, close to the paper's colour) from near the content's edges, laid at random and blended four
+      at a time, fading into the softened edge of the content so there's no seam; saved as one JPEG behind the page
+      with the content's place cut out. A page with text up to its edges (no blank paper) gets its edges stretched
+      instead (pagesize_test: a scan on a bigger page)
 
 Strike-through in both places (highlight stays in the Comment tab only):
 - [x] Fill & Sign strike line (Sign tab, Sign pane, Stamp menu): drag a black line across anything, scans too ("strike

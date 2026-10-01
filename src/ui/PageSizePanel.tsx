@@ -221,8 +221,8 @@ export function PageSizePanel({ tab }: { tab: Tab }) {
             {s.fit !== 1 && (
               <>
                 <div class="seg nowrap">
-                  {(["Nothing", "Colour", "Extend edges"] as const).map((name, i) => (
-                    <button key={name} class={`segb ${s.fill === i ? "on" : ""}`} onClick={() => setPs({ fill: i as 0 | 1 | 2 })}>
+                  {(["Nothing", "Colour", "Extend edges", "Paper"] as const).map((name, i) => (
+                    <button key={name} class={`segb ${s.fill === i ? "on" : ""}`} onClick={() => setPs({ fill: i as 0 | 1 | 2 | 3 })}>
                       {name}
                     </button>
                   ))}
@@ -240,7 +240,9 @@ export function PageSizePanel({ tab }: { tab: Tab }) {
                     ? "New space is left empty (it shows as white; stays see-through if the page is laid over another)."
                     : s.fill === 1
                       ? "New space around the content is filled with this colour."
-                      : "The outermost pixels of the content are stretched into the new space (good for scans)."}
+                      : s.fill === 2
+                        ? "The outermost pixels of the content are stretched into the new space."
+                        : "New space looks like the page's own paper: blank patches from near its edges, blended in (best for scans)."}
                 </span>
               </>
             )}
