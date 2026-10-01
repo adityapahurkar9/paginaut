@@ -654,6 +654,10 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       script match; voice/speed changes while paused stay paused; the Recognize dialog counts recognized pages
       from the page objects (no page loads under the document lock); Excel keeps "12.0%"'s decimals
 
+### 0.8.5: editing and the window
+- [x] Bold and italic within a paragraph; table cells edit one by one (Phase 6.3)
+- [x] Windows 11 Snap Layouts on the maximize button (Deferred, at the top); Paginaut's own Windows manifest
+
 ### 0.8.4: tables and pictures
 - [x] Table rows adjustable, group headings over their columns, the table menu in Read and Book modes (Phase 6.2's
       tables); a moved or replaced picture keeps its place in the drawing order (Phase 6.3)
