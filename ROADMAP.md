@@ -50,7 +50,8 @@ Deferred:
       own manifest (src-tauri/windows/app.manifest). Checked with hit tests and window messages; the flyout
       itself needs a real mouse over the button
 - [ ] Faster JPEG decoding for heavy scans (first sharp page on the 914 MB scan: 0.31 s vs 0.3 s target).
-      Needs libjpeg-turbo built into MuPDF (extra build tools: NASM, CMake).
+      Needs libjpeg-turbo built into MuPDF (extra build tools: NASM, CMake). Left as is by choice (2026-10-01):
+      the gain is small (0.31 s against 0.3 s)
 - [x] Drag-and-drop from Explorer (checked by hand in 0.8.1)
 
 ## Phase 2.5: Read and Book modes (reflowed text)
