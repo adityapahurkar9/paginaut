@@ -8348,6 +8348,50 @@ char *fo_text_words_json(fo_ctx *c, fo_text *t, const float b[4])
 	return s;
 }
 
+/* The names of a zip archive's entries, one per line. */
+int fo_zip_list(fo_ctx *c, const char *path, unsigned char **data, size_t *len)
+{
+	fz_archive *zip = NULL;
+	fz_buffer *buf = NULL;
+	char *p = NULL;
+	int i, n;
+	*data = NULL;
+	*len = 0;
+	fz_var(zip);
+	fz_var(buf);
+	fz_var(p);
+	fz_try(CTX)
+	{
+		p = os_path(CTX, path);
+		zip = fz_open_archive(CTX, p);
+		buf = fz_new_buffer(CTX, 4096);
+		n = fz_count_archive_entries(CTX, zip);
+		for (i = 0; i < n; i++)
+		{
+			const char *name = fz_list_archive_entry(CTX, zip, i);
+			if (!name)
+				continue;
+			fz_append_string(CTX, buf, name);
+			fz_append_byte(CTX, buf, 10);
+		}
+		*len = buf->len;
+		*data = fz_malloc(CTX, buf->len ? buf->len : 1);
+		memcpy(*data, buf->data, buf->len);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_buffer(CTX, buf);
+		fz_drop_archive(CTX, zip);
+		fz_free(CTX, p);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}
+
 int fo_zip_read(fo_ctx *c, const char *path, const char *entry, unsigned char **data, size_t *len)
 {
 	fz_archive *zip = NULL;

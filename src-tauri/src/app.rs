@@ -1728,16 +1728,28 @@ pub fn protocol<R: tauri::Runtime>(ctx: UriSchemeContext<'_, R>, request: Reques
 
 // ---------------------------------------------------------------- read aloud
 
+/// Windows' voices, then the Piper voices installed.
 #[tauri::command]
-pub async fn tts_voices() -> Res<Vec<crate::tts::Voice>> {
-    blocking(crate::tts::voices).await
+pub async fn tts_voices(piper: State<'_, crate::piper::Voices>) -> Res<Vec<crate::tts::Voice>> {
+    let piper = piper.inner().clone();
+    blocking(move || {
+        // Without Windows' voices (some editions), Piper's still read.
+        let mut list = crate::tts::voices().unwrap_or_default();
+        list.extend(piper.installed());
+        Ok(list)
+    })
+    .await
 }
 
 /// The spoken text as [u32 length of the words' JSON][the words' JSON][WAV], all in one reply.
 #[tauri::command]
-pub async fn tts_speak(text: String, voice: String, rate: f64) -> Res<tauri::ipc::Response> {
+pub async fn tts_speak(piper: State<'_, crate::piper::Voices>, text: String, voice: String, rate: f64) -> Res<tauri::ipc::Response> {
+    let piper = piper.inner().clone();
     blocking(move || {
-        let (wav, words) = crate::tts::speak(&text, &voice, rate)?;
+        let (wav, words) = match voice.strip_prefix(crate::piper::PREFIX) {
+            Some(id) => piper.speak(id, &text, rate)?,
+            None => crate::tts::speak(&text, &voice, rate)?,
+        };
         let json = serde_json::to_vec(&words).map_err(|e| e.to_string())?;
         let mut out = Vec::with_capacity(4 + json.len() + wav.len());
         out.extend_from_slice(&(json.len() as u32).to_le_bytes());
@@ -1746,6 +1758,55 @@ pub async fn tts_speak(text: String, voice: String, rate: f64) -> Res<tauri::ipc
         Ok(tauri::ipc::Response::new(out))
     })
     .await
+}
+
+/// The Piper voices on offer, with which are installed.
+#[tauri::command]
+pub fn piper_voices(piper: State<'_, crate::piper::Voices>) -> Vec<crate::piper::VoiceInfo> {
+    piper.list()
+}
+
+/// Downloads a Piper voice (and Piper, the first time); resolves when it's ready to use.
+#[tauri::command]
+pub async fn piper_download(piper: State<'_, crate::piper::Voices>, id: String, on_event: Channel<DownloadEvent>) -> Res<()> {
+    let piper = piper.inner().clone();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if crate::piper::DOWNLOADS.lock().insert(id.clone(), stop.clone()).is_some() {
+        return Err("That voice is already downloading.".into());
+    }
+    let key = id.clone();
+    let res = blocking(move || {
+        let mut last = 0u64;
+        piper.download(&id, &stop, &mut |done, total| {
+            if done == total || done.saturating_sub(last) >= total / 100 {
+                last = done;
+                let _ = on_event.send(DownloadEvent::Progress { done, total });
+            }
+        })
+    })
+    .await;
+    crate::piper::DOWNLOADS.lock().remove(&key);
+    res
+}
+
+#[tauri::command]
+pub fn piper_download_stop(id: String) {
+    if let Some(flag) = crate::piper::DOWNLOADS.lock().get(&id) {
+        flag.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// A voice's sample recording (MP3).
+#[tauri::command]
+pub async fn piper_sample(piper: State<'_, crate::piper::Voices>, id: String) -> Res<tauri::ipc::Response> {
+    let piper = piper.inner().clone();
+    blocking(move || piper.sample(&id).map(tauri::ipc::Response::new)).await
+}
+
+#[tauri::command]
+pub async fn piper_delete(piper: State<'_, crate::piper::Voices>, id: String) -> Res<()> {
+    let piper = piper.inner().clone();
+    blocking(move || piper.delete(&id)).await
 }
 
 /// Where the page's maximize button is (physical pixels of the client area), for Snap Layouts (snap.rs).

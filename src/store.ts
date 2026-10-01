@@ -236,7 +236,7 @@ export const activeTab = computed(() => tabs.value.find((t) => t.key === activeK
 
 export const paletteOpen = signal(false);
 /** The Settings dialog, at one of its tabs. */
-export type SettingsTab = "general" | "defaults" | "themes" | "sidebar" | "signing" | "ocr" | "office" | "compare" | "shortcuts" | "about";
+export type SettingsTab = "general" | "defaults" | "themes" | "sidebar" | "signing" | "ocr" | "speech" | "office" | "compare" | "shortcuts" | "about";
 export const settingsOpen = signal<SettingsTab | null>(null);
 export function openSettings(tab: SettingsTab = "general") {
   settingsOpen.value = tab;

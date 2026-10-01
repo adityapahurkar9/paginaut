@@ -80,7 +80,7 @@ Four views: Single · Double (cover on its own optional) · Read · Book.
 - [x] Page overlay layers in the viewer (used by Fix layout; forms and annotations build on them)
 Later (after OCR, Phase 5):
 - [x] Read aloud (0.8.2) on the same text, so running headers, footers and page numbers are skipped; see Phase 8
-- [ ] Natural offline voices (Piper) as downloadable add-ons: waiting on the go-ahead to download voice models
+- [x] Natural offline voices (Piper), downloaded on request in Settings › Read aloud: 130 voices in 40 languages (Hindi, Marathi, Malayalam, Telugu, Nepali among them) pinned by hash to one commit of rhasspy/piper-voices; Piper 2023.11.14-2 runs as its own program; a sample plays before downloading; sentences are spoken one by one and words timed by length inside each; a downloaded voice is used first for its script
 
 ## Phase 3: Form filling (done)
 - [x] Engine: fields listed per page (text, checkbox, radio, dropdown, list, signature), values set through MuPDF so

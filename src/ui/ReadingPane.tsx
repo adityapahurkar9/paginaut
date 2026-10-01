@@ -5,7 +5,7 @@ import { speaking, toggleReadAloud } from "../speech";
 import { VoiceChoices } from "./SpeechBar";
 import { bookScreen, setViewMode, viewModeOf } from "../modes";
 import { closePane, pane } from "../panes";
-import { activeTab } from "../store";
+import { activeTab, openSettings } from "../store";
 import { startLayoutEdit } from "./LayoutPanel";
 import { TypeControls } from "./Reflow";
 
@@ -41,6 +41,9 @@ export function ReadingPane() {
           <VoiceChoices />
           <button class="btn sm" disabled={!ready && !speaking.value} onClick={() => toggleReadAloud(ready)} title="From where you are, or the text you selected (Ctrl+Shift+U)">
             <AudioLines size={15} strokeWidth={1.7} /> {speaking.value ? "Stop reading" : "Read aloud"}
+          </button>
+          <button class="linkish" onClick={() => openSettings("speech")}>
+            More voices…
           </button>
         </section>
         {ready && (mode === "read" || mode === "book") && (

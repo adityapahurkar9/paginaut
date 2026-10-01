@@ -1109,6 +1109,19 @@ pub fn zip_read(path: &str, entry: &str) -> Result<Option<Vec<u8>>> {
     })
 }
 
+/// The names of a zip archive's entries.
+pub fn zip_list(path: &str) -> Result<Vec<String>> {
+    let p = CString::new(path).map_err(|e| e.to_string())?;
+    with_ctx(|c| {
+        let (mut d, mut len) = (std::ptr::null_mut(), 0usize);
+        if unsafe { fo_zip_list(c, p.as_ptr(), &mut d, &mut len) } != 0 {
+            return Err(last_error(c));
+        }
+        let names = take_bytes(c, d, len);
+        Ok(String::from_utf8_lossy(&names).lines().map(str::to_owned).collect())
+    })
+}
+
 pub fn render_size(bounds: &[f32; 4], scale: f32, rotate: i32) -> (u32, u32) {
     let (mut w, mut h) = (0, 0);
     unsafe { fo_render_size(bounds.as_ptr(), scale, rotate, &mut w, &mut h) };

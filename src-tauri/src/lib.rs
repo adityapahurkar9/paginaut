@@ -7,6 +7,8 @@ mod defaults;
 #[cfg(windows)]
 mod snap;
 mod tts;
+mod piper;
+mod piper_voices;
 pub mod compare;
 pub mod convert;
 mod docx;
@@ -269,6 +271,11 @@ pub fn run() {
             app::tts_voices,
             app::snap_button,
             app::tts_speak,
+            app::piper_voices,
+            app::piper_download,
+            app::piper_download_stop,
+            app::piper_delete,
+            app::piper_sample,
             app::pfx_summary,
             app::signature_revocation,
             app::update_check,
@@ -289,6 +296,8 @@ pub fn run() {
             let builtin = app.path().resource_dir().map(|d| d.join("tessdata")).unwrap_or_default();
             let user = app.path().app_local_data_dir().map(|d| d.join("tessdata")).unwrap_or_default();
             app.manage(ocr::ModelDirs { builtin, user });
+            // Piper voices (read aloud), downloaded on request.
+            app.manage(piper::Voices { dir: app.path().app_local_data_dir().map(|d| d.join("voices")).unwrap_or_default() });
             // The signed add-on list kept from the last check (which OCR languages, which LibreOffice).
             if let Ok(dir) = app.path().app_local_data_dir() {
                 addons::load_cached(&dir);

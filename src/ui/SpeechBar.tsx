@@ -14,7 +14,7 @@ export function VoiceChoices() {
   const chosen = list.some((v) => v.id === voice) ? voice : "";
   return (
     <>
-      <select class="inp sm" aria-label="Voice" title="Voice. Windows' voice switches to one for the text's language when it's installed (add voices in Windows Settings › Time & language › Speech)" value={chosen} onChange={(e) => setSpeech({ voice: e.currentTarget.value })}>
+      <select class="inp sm" aria-label="Voice" title="Voice. Windows' voice switches to one for the text's language when there is one (download natural voices in Settings › Read aloud)" value={chosen} onChange={(e) => setSpeech({ voice: e.currentTarget.value })}>
         <option value="">{`Windows' voice${list.find((v) => v.default) ? ` (${voiceName(list.find((v) => v.default)!.name)})` : ""}`}</option>
         {list.map((v) => (
           <option key={v.id} value={v.id}>

@@ -334,7 +334,7 @@ function ViewTools({ tab }: { tab: Tab | null }) {
       <TB
         icon={I(AudioLines, 17)}
         label={speaking.value ? "Stop reading" : "Read aloud"}
-        title="Read the text aloud with a Windows voice, from where you are or the text you selected (Ctrl+Shift+U)"
+        title="Read the text aloud with a Windows or downloaded voice, from where you are or the text you selected (Ctrl+Shift+U)"
         on={!!speaking.value}
         disabled={!tab && !speaking.value}
         onClick={() => toggleReadAloud(tab)}

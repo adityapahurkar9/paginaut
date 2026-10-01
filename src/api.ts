@@ -565,6 +565,16 @@ export const api = {
   markdownSave: (path: string, text: string) => invoke<void>("markdown_save", { path, text }),
   /** Opens a file Paginaut made in its usual program. */
   openPath: (path: string) => invoke<void>("open_path", { path }),
+  piperVoices: () => invoke<import("./speech").PiperVoice[]>("piper_voices"),
+  piperDownload: (id: string, onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
+    const ch = new Channel<{ kind: "progress"; done: number; total: number }>();
+    ch.onmessage = onEvent;
+    return invoke<void>("piper_download", { id, onEvent: ch });
+  },
+  piperDownloadStop: (id: string) => invoke<void>("piper_download_stop", { id }),
+  piperDelete: (id: string) => invoke<void>("piper_delete", { id }),
+  /** A voice's sample recording (MP3). */
+  piperSample: (id: string) => invoke<ArrayBuffer>("piper_sample", { id }),
   ocrLanguages: () => invoke<import("./ocr").OcrLang[]>("ocr_languages"),
   ocrDownload: (code: string, quality: string, onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
     const ch = new Channel<{ kind: "progress"; done: number; total: number }>();

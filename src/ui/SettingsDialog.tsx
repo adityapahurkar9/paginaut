@@ -1,11 +1,13 @@
 // Settings (Help › Settings, Ctrl+,): every setting in one place, a tab per area.
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { Fragment, type ComponentChildren } from "preact";
-import { ArrowDown, ArrowUp, X } from "lucide-preact";
+import { ArrowDown, ArrowUp, Play, Square, X } from "lucide-preact";
 import { compareOptions, setCompareOption } from "../compare";
 import { DEFAULT_TSA } from "../dsc";
 import { deleteModel, downloadModel, downloads, loadLangs, ocrLangs, rememberChoice, stopDownload, type OcrLang, type OcrQuality } from "../ocr";
 import { moveOnRail, onRail, openPane, railOrder, railShown, resetRail, setOnRail, setRailShown } from "../panes";
+import { downloadVoice, loadPiperVoices, piperVoices, playSample, removeVoice, samplePlaying, stopVoiceDownload, voiceDownloads, type PiperVoice } from "../speech";
+import { VoiceChoices } from "./SpeechBar";
 import { settings, settingsOpen, updateSettings, type Settings, type SettingsTab } from "../store";
 import { About, Shortcuts } from "./HelpDialogs";
 import { OfficeSettings } from "./OfficeUI";
@@ -20,6 +22,7 @@ const TABS: [SettingsTab, string][] = [
   ["sidebar", "Side bar"],
   ["signing", "Signing"],
   ["ocr", "Text recognition"],
+  ["speech", "Read aloud"],
   ["office", "Office files"],
   ["compare", "Compare"],
   ["shortcuts", "Keyboard shortcuts"],
@@ -61,6 +64,7 @@ export function SettingsDialog() {
           {tab === "sidebar" && <SideBar />}
           {tab === "signing" && <Signing />}
           {tab === "ocr" && <Ocr />}
+          {tab === "speech" && <ReadAloud />}
           {tab === "office" && <OfficeSettings />}
           {tab === "compare" && <Compare />}
           {tab === "shortcuts" && <Shortcuts />}
@@ -306,6 +310,86 @@ function Compare() {
       <Check on={o.matchCase} label="Capitals count (“Apple” and “apple” differ)" set={(matchCase) => setCompareOption({ matchCase })} />
       <Check on={o.skipEdges} label="Leave out running headers, footers and page numbers" set={(skipEdges) => setCompareOption({ skipEdges })} />
       <Check on={o.pictures} label="Compare drawings and scans too (two PDFs with pages of the same size)" set={(pictures) => setCompareOption({ pictures })} />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- read aloud
+
+function ReadAloud() {
+  useEffect(() => void loadPiperVoices(), []);
+  const all = piperVoices.value;
+  const active = voiceDownloads.value;
+  // Languages by name (with the country when a language has several).
+  const langs = [...new Map((all ?? []).map((v) => [v.tag, v])).values()].sort((a, b) => a.lang.localeCompare(b.lang) || a.country.localeCompare(b.country));
+  const several = (v: PiperVoice) => langs.filter((l) => l.lang === v.lang).length > 1;
+  const langName = (v: PiperVoice) => (several(v) ? `${v.lang} (${v.country})` : v.lang);
+  const [pick, setPick] = useState<string>("");
+  const tag = pick || langs.find((l) => l.tag === navigator.language)?.tag || langs.find((l) => l.tag.startsWith("en"))?.tag || langs[0]?.tag || "";
+  const mine = (all ?? []).filter((v) => v.installed || v.id in active);
+  const offered = (all ?? []).filter((v) => v.tag === tag && !mine.includes(v));
+  const listen = (v: PiperVoice) => (
+    <button class="ib sm" aria-label={`Listen to ${v.name}`} title={samplePlaying.value === v.id ? "Stop" : "Listen to a sample"} onClick={() => void playSample(v.id)}>
+      {samplePlaying.value === v.id ? <Square size={12} strokeWidth={2} /> : <Play size={13} strokeWidth={1.8} />}
+    </button>
+  );
+  const action = (v: PiperVoice) =>
+    v.id in active ? (
+      <span class="set-dl">
+        <span class="rf-bar">
+          <span style={{ width: `${Math.round(active[v.id] * 100)}%` }} />
+        </span>
+        <button class="linkish" onClick={() => stopVoiceDownload(v.id)}>
+          Stop
+        </button>
+      </span>
+    ) : v.installed ? (
+      <button class="linkish danger" title="Delete the downloaded voice" onClick={() => void removeVoice(v.id)}>
+        Remove
+      </button>
+    ) : (
+      <button class="linkish" onClick={() => void downloadVoice(v.id)}>
+        Download ({mb(v.size)})
+      </button>
+    );
+  const row = (v: PiperVoice, lang: boolean) => (
+    <Fragment key={v.id}>
+      {listen(v)}
+      <span>
+        {v.name}
+        {lang && <span class="muted"> · {langName(v)}</span>}
+      </span>
+      <span>{action(v)}</span>
+    </Fragment>
+  );
+  return (
+    <>
+      <h3>Read aloud</h3>
+      <span class="hint">View › Read aloud (Ctrl+Shift+U) reads the document's text, as Read mode shows it.</span>
+      <Field label="Voice and speed" hint="Windows' voice switches to one for the text's language when there is one: a downloaded voice below first, else one installed in Windows (Settings › Time & language › Speech).">
+        <div class="set-row">
+          <VoiceChoices />
+        </div>
+      </Field>
+      <div class="tool-field">
+        <label>Natural voices</label>
+        <span class="hint">Voices from the Piper project that sound more like a person and work offline. Each is a download of about 60–130 MB; the first also gets Piper itself (22 MB).</span>
+        {!all ? (
+          <span class="hint">Reading the list…</span>
+        ) : (
+          <>
+            {mine.length > 0 && <div class="set-voices">{mine.map((v) => row(v, true))}</div>}
+            <select class="inp sm set-ocr-add" aria-label="Language" value={tag} onChange={(e) => setPick((e.target as HTMLSelectElement).value)}>
+              {langs.map((l) => (
+                <option key={l.tag} value={l.tag}>
+                  {langName(l)}
+                </option>
+              ))}
+            </select>
+            {offered.length ? <div class="set-voices">{offered.map((v) => row(v, false))}</div> : <span class="hint">Every voice for this language is downloaded.</span>}
+          </>
+        )}
+      </div>
     </>
   );
 }

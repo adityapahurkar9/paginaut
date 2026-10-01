@@ -1,5 +1,5 @@
 // Read aloud: the document's reflowed text (as Read mode has it: no running headers, footers or page numbers)
-// spoken with a voice installed in Windows, a paragraph at a time. Read and Book modes mark the word being
+// spoken with a voice installed in Windows or a downloaded Piper voice, a paragraph at a time. Read and Book modes mark the word being
 // spoken and keep it in view; the page view follows the pages.
 import { effect, signal } from "@preact/signals";
 import { api } from "./api";
@@ -31,6 +31,95 @@ export const voices = signal<Voice[] | null>(null);
 
 export const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 export const speechPrefs = () => ({ voice: "", rate: 1, ...settings.value.speech });
+
+/** A Piper voice on offer (Settings › Read aloud). */
+export interface PiperVoice {
+  id: string;
+  name: string;
+  lang: string;
+  country: string;
+  tag: string;
+  quality: string;
+  /** Bytes to download (with Piper itself while no voice is installed). */
+  size: number;
+  installed: boolean;
+}
+
+/** Piper voices are told apart from Windows' by this in front of their id. */
+export const PIPER = "piper:";
+export const piperVoices = signal<PiperVoice[] | null>(null);
+/** Voice downloads under way: id → share done. */
+export const voiceDownloads = signal<Record<string, number>>({});
+
+export async function loadPiperVoices() {
+  try {
+    piperVoices.value = await api.piperVoices();
+  } catch (e) {
+    showToast(`Couldn't list the voices: ${e}`, 5000);
+  }
+}
+
+/** Reads both lists again (a voice came or went). */
+function refreshVoices() {
+  voicesAsked = null;
+  void loadVoices().catch(() => {});
+  void loadPiperVoices();
+}
+
+export async function downloadVoice(id: string) {
+  if (id in voiceDownloads.value) return;
+  voiceDownloads.value = { ...voiceDownloads.value, [id]: 0 };
+  try {
+    await api.piperDownload(id, (ev) => (voiceDownloads.value = { ...voiceDownloads.value, [id]: ev.total ? ev.done / ev.total : 0 }));
+  } catch (e) {
+    if (String(e) !== "stopped") showToast(`Couldn't download the voice: ${e}`, 5000);
+  } finally {
+    const { [id]: _, ...rest } = voiceDownloads.value;
+    voiceDownloads.value = rest;
+    refreshVoices();
+  }
+}
+
+export const stopVoiceDownload = (id: string) => void api.piperDownloadStop(id);
+
+export async function removeVoice(id: string) {
+  // Reading with it carries on with Windows' voice (its files go).
+  if (speechPrefs().voice === PIPER + id) setSpeech({ voice: "" });
+  try {
+    await api.piperDelete(id);
+  } catch (e) {
+    showToast(`Couldn't remove the voice: ${e}`);
+  }
+  refreshVoices();
+}
+
+let sample: { id: string; audio: HTMLAudioElement } | null = null;
+export const samplePlaying = signal<string | null>(null);
+/** Plays (or stops) a voice's sample recording, fetched from the voice repository. */
+export async function playSample(id: string) {
+  const was = sample?.id;
+  if (sample) {
+    sample.audio.pause();
+    URL.revokeObjectURL(sample.audio.src);
+    sample = null;
+    samplePlaying.value = null;
+  }
+  if (was === id) return;
+  samplePlaying.value = id;
+  try {
+    const buf = await api.piperSample(id);
+    if (samplePlaying.value !== id) return;
+    const audio = new Audio(URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" })));
+    sample = { id, audio };
+    audio.addEventListener("ended", () => {
+      if (sample?.audio === audio) void playSample(id);
+    });
+    await audio.play();
+  } catch (e) {
+    if (samplePlaying.value === id) samplePlaying.value = null;
+    showToast(`Couldn't play the sample: ${e}`, 5000);
+  }
+}
 
 let voicesAsked: Promise<Voice[]> | null = null;
 export function loadVoices(): Promise<Voice[]> {
@@ -66,9 +155,13 @@ function voiceFor(text: string): string {
   const letters = text.match(/\p{L}/gu)?.length ?? 0;
   for (const [re, langs] of SCRIPTS) {
     if ((text.match(re)?.length ?? 0) * 2 < letters) continue;
+    const fits = (v: Voice) => langs.includes(v.lang.split("-")[0]);
+    // A downloaded Piper voice first: it was got for this.
+    const piper = list.find((v) => v.id.startsWith(PIPER) && fits(v));
+    if (piper) return piper.id;
     const def = list.find((v) => v.default);
-    if (def && langs.includes(def.lang.split("-")[0])) return "";
-    return list.find((v) => langs.includes(v.lang.split("-")[0]))?.id ?? "";
+    if (def && fits(def)) return "";
+    return list.find(fits)?.id ?? "";
   }
   return "";
 }
