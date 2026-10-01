@@ -565,6 +565,14 @@ export const api = {
   markdownSave: (path: string, text: string) => invoke<void>("markdown_save", { path, text }),
   /** Opens a file Paginaut made in its usual program. */
   openPath: (path: string) => invoke<void>("open_path", { path }),
+  /** Windows' print dialog, then the pages (file index and extra turn, as shown); `current` indexes `pages`. */
+  /** Resolves with the pages printed, or null when the dialog was cancelled. */
+  print: (doc: number, name: string, pages: { page: number; rot: number }[], current: number, onEvent: (e: { kind: "started"; total: number } | { kind: "page"; done: number }) => void) => {
+    const ch = new Channel<{ kind: "started"; total: number } | { kind: "page"; done: number }>();
+    ch.onmessage = onEvent;
+    return invoke<number | null>("print_doc", { doc, name, pages, current, onEvent: ch });
+  },
+  printStop: () => invoke<void>("print_stop"),
   piperVoices: () => invoke<import("./speech").PiperVoice[]>("piper_voices"),
   piperDownload: (id: string, onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
     const ch = new Channel<{ kind: "progress"; done: number; total: number }>();

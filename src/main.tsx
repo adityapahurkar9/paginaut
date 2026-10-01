@@ -24,6 +24,7 @@ import "./extract";
 import { endPageSize, pageSizeEdit } from "./pagesize";
 import { initOffice } from "./office";
 import { pauseOrResume, speaking, toggleReadAloud } from "./speech";
+import { printTab } from "./print";
 
 // Before any file opens: which program converts Office files.
 initOffice();
@@ -108,7 +109,8 @@ window.addEventListener("keydown", (e) => {
       case "w": handled(); return A.closeActive();
       case "t": handled(); return openHome();
       case "f": handled(); return A.openFind();
-      case "k": case "p": handled(); paletteOpen.value = true; return;
+      case "k": handled(); paletteOpen.value = true; return;
+      case "p": handled(); if (ready) void printTab(ready); return;
       case ",": handled(); return openSettings();
       case "g": handled(); return (document.getElementById("page-input") as HTMLInputElement | null)?.focus();
       case "=": case "+": handled(); return A.zoomIn();

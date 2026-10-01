@@ -6,6 +6,8 @@ mod update;
 mod defaults;
 #[cfg(windows)]
 mod snap;
+#[cfg(windows)]
+mod print;
 mod tts;
 mod piper;
 mod piper_voices;
@@ -276,6 +278,8 @@ pub fn run() {
             app::piper_download_stop,
             app::piper_delete,
             app::piper_sample,
+            app::print_doc,
+            app::print_stop,
             app::pfx_summary,
             app::signature_revocation,
             app::update_check,

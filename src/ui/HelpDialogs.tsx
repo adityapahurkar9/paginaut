@@ -5,7 +5,7 @@ import { checkForUpdates, installUpdate, setAutoUpdates, stopUpdate, updatesSett
 
 const SHORTCUTS: [string, [string, string][]][] = [
   ["Files", [
-    ["Open", "Ctrl+O"], ["Save", "Ctrl+S"], ["Save as", "Ctrl+Shift+S"], ["New tab (Home)", "Ctrl+T"], ["Close tab", "Ctrl+W"],
+    ["Open", "Ctrl+O"], ["Save", "Ctrl+S"], ["Save as", "Ctrl+Shift+S"], ["Print", "Ctrl+P"], ["New tab (Home)", "Ctrl+T"], ["Close tab", "Ctrl+W"],
     ["Next / previous tab", "Ctrl+Tab / Ctrl+Shift+Tab"], ["File menu", "Alt+F"], ["Settings", "Ctrl+,"],
   ]],
   ["Viewing", [

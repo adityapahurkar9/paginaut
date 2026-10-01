@@ -1809,6 +1809,78 @@ pub async fn piper_delete(piper: State<'_, crate::piper::Voices>, id: String) ->
     blocking(move || piper.delete(&id)).await
 }
 
+// ---------------------------------------------------------------- printing
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PrintEvent {
+    /// The dialog said print: this many pages.
+    Started { total: usize },
+    Page { done: usize },
+}
+
+static PRINTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PRINT_STOP: once_cell::sync::Lazy<Arc<std::sync::atomic::AtomicBool>> = once_cell::sync::Lazy::new(Default::default);
+
+/// Shows Windows' print dialog and prints `pages` (as shown: file index and extra turn); `current` is the page
+/// in view (an index into `pages`). Resolves with the pages printed, or None when the dialog was cancelled.
+#[tauri::command]
+pub async fn print_doc(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    doc: DocId,
+    name: String,
+    pages: Vec<serde_json::Value>,
+    current: usize,
+    on_event: Channel<PrintEvent>,
+) -> Res<Option<usize>> {
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::Ordering;
+        let pages: Vec<crate::print::Shown> = pages.into_iter().map(serde_json::from_value).collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+        let hwnd = window.hwnd().map(|h| h.0 as isize).unwrap_or(0);
+        let d = state.engine.doc(doc)?;
+        if PRINTING.swap(true, Ordering::AcqRel) {
+            return Err("Something is already printing.".into());
+        }
+        let r = async {
+            // The dialog runs on the window's thread (see print::ask), modal: the window still paints meanwhile.
+            let (tx, rx) = tauri::async_runtime::channel(1);
+            let count = pages.len();
+            window
+                .run_on_main_thread(move || {
+                    let _ = tx.try_send(crate::print::ask(hwnd, count, current));
+                })
+                .map_err(|e| e.to_string())?;
+            let mut rx = rx;
+            let Some(chosen) = rx.recv().await.ok_or("The print dialog closed unexpectedly.")?? else { return Ok(None) };
+            let _ = on_event.send(PrintEvent::Started { total: chosen.pages.len() });
+            PRINT_STOP.store(false, Ordering::Release);
+            let stop = PRINT_STOP.clone();
+            blocking(move || {
+                crate::print::print(chosen, &d, &name, &pages, &stop, |done| {
+                    let _ = on_event.send(PrintEvent::Page { done });
+                })
+            })
+            .await
+            .map(Some)
+        }
+        .await;
+        PRINTING.store(false, Ordering::Release);
+        r
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, state, doc, name, pages, current, on_event);
+        Err("Printing isn't available here.".into())
+    }
+}
+
+#[tauri::command]
+pub fn print_stop() {
+    PRINT_STOP.store(true, std::sync::atomic::Ordering::Release);
+}
+
 /// Where the page's maximize button is (physical pixels of the client area), for Snap Layouts (snap.rs).
 #[tauri::command]
 pub fn snap_button(x: i32, y: i32, w: i32, h: i32, shown: bool) -> Res<()> {

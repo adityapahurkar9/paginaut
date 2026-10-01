@@ -26,6 +26,7 @@ import { addBookmarkHere, bookmarksFromHeadings } from "./Sidebar";
 import { removeStamps } from "../stamps";
 import { activeTab, baseName, dialog, findOpen, openFiles, openSettings, paletteOpen, recent, settings, toast, unlockTab, updateSettings, type Tab } from "../store";
 import { speaking, toggleReadAloud } from "../speech";
+import { printTab } from "../print";
 
 // ---------------------------------------------------------------- menu
 
@@ -278,6 +279,7 @@ function commands(): Item[] {
     c("Redo", withTab((t) => P.redo(t)), "Ctrl+Y", () => !!activeTab.value?.history.canRedo),
     c("Save", withTab((t) => P.save(t)), "Ctrl+S", () => !!activeTab.value?.dirty.value),
     c("Save as…", withTab((t) => P.save(t, true)), "Ctrl+Shift+S", hasDoc),
+    c("Print…", withTab((t) => printTab(t)), "Ctrl+P", hasDoc),
     c("Single page", withTab((t) => void setViewMode(t, "single")), "", hasDoc),
     c("Double page (two side by side)", withTab((t) => void setViewMode(t, "double")), "", hasDoc),
     c(settings.value.coverSeparate ? "Double page: cover with the other pages" : "Double page: cover on its own", () => setCoverSeparate(!settings.value.coverSeparate), ""),

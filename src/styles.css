@@ -1246,6 +1246,11 @@ body.text-edit .pg { cursor: default; }
 .speechbar .inp { max-width: 190px; }
 .speechbar .sb-doc { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx2); font-size: 12px; padding: 0 4px; }
 .speechbar .spin.sm { width: 12px; height: 12px; }
+.printbar { gap: 8px; padding: 6px 12px; font-size: 13px; }
+.printbar.above { bottom: 64px; }
+.printbar .pb-bar { width: 90px; display: inline-block; }
+.printbar .pb-bar span { display: block; height: 100%; background: var(--acc); }
+.printbar .linkish { padding: 0; font-size: 12.5px; }
 .rf .rf-reading { background: color-mix(in srgb, var(--hit) 22%, transparent); border-radius: 3px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--hit) 22%, transparent); }
 ::highlight(rf-speak) { background-color: var(--hit-active); color: inherit; }
 .pane-sec.read-aloud { display: flex; flex-direction: column; gap: 6px; }

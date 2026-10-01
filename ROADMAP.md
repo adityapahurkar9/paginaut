@@ -80,7 +80,7 @@ Four views: Single · Double (cover on its own optional) · Read · Book.
 - [x] Page overlay layers in the viewer (used by Fix layout; forms and annotations build on them)
 Later (after OCR, Phase 5):
 - [x] Read aloud (0.8.2) on the same text, so running headers, footers and page numbers are skipped; see Phase 8
-- [x] Natural offline voices (Piper), downloaded on request in Settings › Read aloud: 130 voices in 40 languages (Hindi, Marathi, Malayalam, Telugu, Nepali among them) pinned by hash to one commit of rhasspy/piper-voices; Piper 2023.11.14-2 runs as its own program; a sample plays before downloading; sentences are spoken one by one and words timed by length inside each; a downloaded voice is used first for its script
+- [x] Natural offline voices (Piper), downloaded on request in Settings › Read aloud: 130 voices in 50 languages (Hindi, Marathi, Malayalam, Telugu, Nepali among them) pinned by hash to one commit of rhasspy/piper-voices; Piper 2023.11.14-2 runs as its own program; a sample plays before downloading; sentences are spoken one by one and words timed by length inside each; a downloaded voice is used first for its script
 
 ## Phase 3: Form filling (done)
 - [x] Engine: fields listed per page (text, checkbox, radio, dropdown, list, signature), values set through MuPDF so
@@ -658,6 +658,17 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       page-turn edges doesn't move the reading; turning a page doesn't stop it; a removed voice falls back to the
       script match; voice/speed changes while paused stay paused; the Recognize dialog counts recognized pages
       from the page objects (no page loads under the document lock); Excel keeps "12.0%"'s decimals
+
+### 0.8.6: natural voices and printing
+- [x] Natural offline voices (Piper) for read aloud, downloaded in Settings › Read aloud (Phase 2's list)
+- [x] Print (File › Print, Home, Ctrl+P; the command palette moved to Ctrl+K only): Windows' own print dialog
+      (Windows 11's, shown from the window's thread: called from another thread it never appears), then each
+      page drawn by MuPDF in 256-row bands at up to 300 dpi and handed to the printer. Pages print as shown: in the
+      order and turned as arranged, with comments and form entries; turned to suit the paper (a page only turned
+      sideways goes back upright), fitted to the printable area and centred. All pages, the current page or
+      ranges; copies and collation by the printer driver. A bar shows the progress with Stop; cancelling a
+      printer's own save prompt (Microsoft Print to PDF) is a quiet cancel
+- [x] Page size: fill new margins with the page's own paper
 
 ### 0.8.5: editing and the window
 - [x] Bold and italic within a paragraph; table cells edit one by one (Phase 6.3)

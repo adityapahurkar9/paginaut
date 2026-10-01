@@ -11,8 +11,10 @@ import {
   Search, Signature, SquareSplitHorizontal, Sun, SunMoon, Trash2, FilePlus2, LayoutGrid, Type, Undo2, Wrench, Underline, Strikethrough, SquareDashed,
   PenLine, StickyNote, TypeOutline, Square, Circle, Slash, MoveUpRight, Stamp, MessagesSquare, Check, X, CalendarDays, UserRound,
   FileLock2, ShieldCheck, TextCursorInput, EyeOff, FileDiff, Settings2, AudioLines,
+  Printer,
 } from "lucide-preact";
 import { speaking, toggleReadAloud } from "../speech";
+import { printing, printTab } from "../print";
 import * as A from "../actions";
 import * as P from "../pages";
 import { setCoverSeparate, setViewMode, viewModeOf, type ViewMode } from "../modes";
@@ -71,6 +73,7 @@ function fileItems(): MenuItem[] {
     { label: "Open…", hint: "Ctrl+O", icon: <FolderOpen size={15} />, run: A.openDialog },
     { label: isPdf || !ready ? "Save" : "Save as PDF…", hint: "Ctrl+S", icon: <Save size={15} />, disabled: !ready || (isPdf && !ready.dirty.value), run: () => ready && void P.save(ready) },
     { label: "Save as…", hint: "Ctrl+Shift+S", icon: <FileOutput size={15} />, disabled: !ready, run: () => ready && void P.save(ready, true) },
+    { label: "Print…", hint: "Ctrl+P", icon: <Printer size={15} />, disabled: !ready || !!printing.value, run: () => ready && void printTab(ready) },
     { sep: true },
     { label: "Document properties…", hint: "Ctrl+D", disabled: !ready, run: () => ready && startProperties(ready) },
     { sep: true },
@@ -275,6 +278,7 @@ function HomeTools({ tab }: { tab: Tab | null }) {
         onClick={() => tab && void P.save(tab)}
       />
       <TB icon={I(FileOutput, 17)} label="Save as" title="Save a copy as (Ctrl+Shift+S)" disabled={!tab || saving} onClick={() => tab && void P.save(tab, true)} />
+      <TB icon={I(Printer, 17)} label="Print" title="Print (Ctrl+P)" disabled={tab?.status.value !== "ready" || !!printing.value} onClick={() => tab && void printTab(tab)} />
       <div class="sep" />
       <IB icon={I(MousePointer2)} label="Select text" title="Select text (V)" on={tool.value === "select"} onClick={() => (tool.value = "select")} />
       <IB icon={I(Hand)} label="Hand tool" title="Hand (H) · or hold the middle button" on={tool.value === "hand"} onClick={() => (tool.value = "hand")} />

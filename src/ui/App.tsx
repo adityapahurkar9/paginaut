@@ -48,6 +48,7 @@ import { PageDragGhost } from "./Sidebar";
 import { PageGrid } from "./PageGrid";
 import { selectedAnnot } from "../annots";
 import { SpeechBar } from "./SpeechBar";
+import { PrintBar } from "./PrintBar";
 
 export const tool = signal<"select" | "hand">("select");
 export const dropping = signal(false);
@@ -82,6 +83,7 @@ export function App() {
             )}
             {tab && tab.mode.value === "pages" && <AnnotBar tab={tab} />}
             <SpeechBar />
+            <PrintBar />
           </div>
         </div>
         <OrganizePane />
