@@ -1747,3 +1747,12 @@ pub async fn tts_speak(text: String, voice: String, rate: f64) -> Res<tauri::ipc
     })
     .await
 }
+
+/// Where the page's maximize button is (physical pixels of the client area), for Snap Layouts (snap.rs).
+#[tauri::command]
+pub fn snap_button(x: i32, y: i32, w: i32, h: i32, shown: bool) -> Res<()> {
+    #[cfg(windows)]
+    return crate::snap::place(x, y, w, h, shown);
+    #[cfg(not(windows))]
+    Ok(())
+}

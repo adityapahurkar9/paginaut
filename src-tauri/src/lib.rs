@@ -4,6 +4,8 @@ mod base64;
 pub mod addons;
 mod update;
 mod defaults;
+#[cfg(windows)]
+mod snap;
 mod tts;
 pub mod compare;
 pub mod convert;
@@ -265,6 +267,7 @@ pub fn run() {
             app::default_apps_set,
             app::default_apps_open,
             app::tts_voices,
+            app::snap_button,
             app::tts_speak,
             app::pfx_summary,
             app::signature_revocation,
@@ -300,6 +303,11 @@ pub fn run() {
             #[cfg(windows)]
             if let Some(win) = app.get_webview_window("main") {
                 enable_touchpad_pinch(&win);
+                if let Ok(hwnd) = win.hwnd() {
+                    if let Err(e) = snap::install(app.handle(), hwnd.0 as isize) {
+                        eprintln!("snap layouts: {e}");
+                    }
+                }
             }
             Ok(())
         })

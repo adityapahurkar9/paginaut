@@ -47,6 +47,8 @@ windows = { version = "0.62", features = [
   "Win32_UI_Shell",
   # Compare: Excel's short date follows Windows' own.
   "Win32_Globalization",
+  # Snap Layouts on our own maximize button (snap.rs).
+  "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader",
   # Read aloud: the voices installed in Windows.
   "Foundation", "Foundation_Collections", "Media_Core", "Media_SpeechSynthesis", "Storage_Streams",
 ] }

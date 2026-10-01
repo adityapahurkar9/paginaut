@@ -82,7 +82,7 @@ svg { display: block; flex-shrink: 0; }
 .drag { flex: 1; }
 .winbtns { display: flex; }
 .winbtn { width: 46px; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; color: var(--tx); }
-.winbtn:hover { background: var(--hover); }
+.winbtn:hover, .winbtn.hot { background: var(--hover); }
 .winbtn.close:hover { background: #c42b1c; color: #fff; }
 
 /* ---------------------------------------------------------------- menu tabs */

@@ -41,9 +41,14 @@ Feedback on 0.2.0 (fixed in 0.2.1):
 - [x] Two-page "fit" now fits the spread you're on (a few landscape pages no longer shrink every spread)
 
 Deferred:
-- [ ] Windows 11 Snap Layouts on the custom maximize button. The page area is a WebView2 window owned by
-      another process, so Windows never asks our window about the button. Needs a small transparent window over
-      the button; planned with Phase 8 polish. (Win+Z already opens Snap Layouts.)
+- [x] Windows 11 Snap Layouts on our maximize button (0.8.5, src-tauri/src/snap.rs): an invisible layered child
+      window sits exactly over the page's maximize button (the page reports where it is, and hides it with the
+      title bar in Book mode and full screen), above the WebView; it answers HTMAXBUTTON, maximizes or restores
+      on a click, and tells the page when the mouse is over it so the button lights up. One pixel of non-client
+      area is kept at the top while the window isn't maximized (Windows wants it before offering the layouts from
+      a child window). Layered child windows need the app to declare Windows 10/11 support: Paginaut now has its
+      own manifest (src-tauri/windows/app.manifest). Checked with hit tests and window messages; the flyout
+      itself needs a real mouse over the button
 - [ ] Faster JPEG decoding for heavy scans (first sharp page on the 914 MB scan: 0.31 s vs 0.3 s target).
       Needs libjpeg-turbo built into MuPDF (extra build tools: NASM, CMake).
 - [x] Drag-and-drop from Explorer (checked by hand in 0.8.1)
