@@ -8,7 +8,7 @@ import { openSignPane } from "./sign";
 import type { DocInfo, Widget } from "./api";
 import { adoptSaved, onDocReady, save } from "./pages";
 import { onSignatureClick } from "./forms";
-import { ask, baseName, settings, showToast, updateSettings, type Tab } from "./store";
+import { ask, askSecret, baseName, onLinux, settings, showToast, updateSettings, type Tab } from "./store";
 
 export interface CertSummary {
   thumb: string;
@@ -187,7 +187,13 @@ onSignatureClick((tab, src, w) => {
 });
 
 export async function listCerts(): Promise<CertSummary[]> {
+  if (onLinux) await invoke("pkcs11_module", { path: settings.value.dsc.pkcs11 ?? null });
   return invoke<CertSummary[]>("certs");
+}
+
+/** Linux: a DSC token's driver (a PKCS#11 .so file) to look in as well; null forgets it. */
+export function setTokenDriver(path: string | null) {
+  updateSettings({ dsc: { ...settings.value.dsc, pkcs11: path ?? undefined } });
 }
 
 let pending: { tab: Tab; setup: SignSetup } | null = null;
@@ -248,6 +254,12 @@ async function finish(tab: Tab, setup: SignSetup, src: number, rect?: number[], 
     if (!target) return;
   }
   const flags = SHOW_LABELS | SHOW_TEXT_NAME | (setup.showDate ? SHOW_DATE : 0) | (setup.image ? 0 : SHOW_GRAPHIC_NAME);
+  // Linux: the token's PIN is typed here (Windows' drivers ask in their own window); kept for this signature only.
+  let pin: string | null = null;
+  if (onLinux && setup.cert.hardware && !setup.pfx) {
+    pin = await askSecret("Token PIN", `The PIN of the token holding ${setup.cert.name}'s certificate. Tokens lock after a few wrong tries.`, "PIN", "Sign");
+    if (pin === null) return showToast("Not signed.");
+  }
   const sign = (timestamp: boolean) =>
     invoke<DocInfo>("sign_document", {
       doc: info.docId,
@@ -264,10 +276,11 @@ async function finish(tab: Tab, setup: SignSetup, src: number, rect?: number[], 
         image: setup.image,
         flags,
         lock: setup.lock,
+        pin,
       },
     });
   tab.saving.value = true;
-  showToast(setup.cert.hardware ? "Signing… if your token asks for its PIN, type it in the token's window." : "Signing…", 60000);
+  showToast(setup.cert.hardware && !onLinux ? "Signing… if your token asks for its PIN, type it in the token's window." : "Signing…", 60000);
   try {
     let saved: DocInfo;
     try {
@@ -281,7 +294,7 @@ async function finish(tab: Tab, setup: SignSetup, src: number, rect?: number[], 
         { label: "Sign without it", value: "sign", primary: true },
       ]);
       if (r !== "sign") return showToast("Not signed.");
-      if (setup.cert.hardware) showToast("Signing… if your token asks for its PIN again, type it in the token's window.", 60000);
+      if (setup.cert.hardware && !onLinux) showToast("Signing… if your token asks for its PIN again, type it in the token's window.", 60000);
       saved = await sign(false);
     }
     await adoptSaved(tab, saved);

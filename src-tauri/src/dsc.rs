@@ -867,10 +867,11 @@ mod imp {
     }
 }
 
-/// Linux: OpenSSL (the system's libssl). Certificates come from .pfx/.p12 files; the signature is built the
-/// same way as on Windows (CMS SignedData, detached, SHA-256, the chain, signing-certificate-v2) and checked
-/// against the system's trusted certificates (/etc/ssl/certs). Timestamps (RFC 3161) and revocation (OCSP)
-/// are asked for over the network as on Windows.
+/// Linux: OpenSSL (the system's libssl). Certificates come from .pfx/.p12 files and from DSC tokens and smart
+/// cards through their PKCS#11 drivers (pkcs11.rs); the signature is built the same way as on Windows (CMS
+/// SignedData, detached, SHA-256, the chain, signing-certificate-v2) and checked against the system's trusted
+/// certificates (/etc/ssl/certs). Timestamps (RFC 3161) and revocation (OCSP) are asked for over the network
+/// as on Windows.
 #[cfg(not(windows))]
 mod imp {
     use super::{CertSummary, Revocation, SigCheck};
@@ -995,7 +996,7 @@ mod imp {
         c.subject_alt_names().and_then(|s| s.iter().find_map(|g| g.email().map(str::to_string))).unwrap_or_default()
     }
 
-    fn summarize(c: &X509Ref, provider: &str) -> CertSummary {
+    fn summarize(c: &X509Ref, provider: &str, hardware: bool) -> CertSummary {
         let thumb = c.digest(MessageDigest::sha1()).map(|d| d.iter().map(|b| format!("{b:02X}")).collect()).unwrap_or_default();
         let (not_before, not_after) = (epoch(c.not_before()), epoch(c.not_after()));
         let t = now();
@@ -1009,7 +1010,7 @@ mod imp {
             not_before,
             not_after,
             provider: provider.into(),
-            hardware: false,
+            hardware,
             current: not_before <= t && t <= not_after,
             likely: !self_signed,
         }
@@ -1027,20 +1028,47 @@ mod imp {
         Ok(b.build())
     }
 
-    /// Linux has no shared store DSC drivers fill: certificates come from files.
+    /// The certificates on the DSC tokens and smart cards plugged in (certificate files are opened one by one).
     pub fn list() -> Result<Vec<CertSummary>, String> {
-        Ok(Vec::new())
+        Ok(crate::pkcs11::certificates().iter().map(|t| summarize(&t.cert, &t.label, true)).collect())
+    }
+
+    /// Where a certificate's key is: in memory (a certificate file), or on a token (with the PIN to give it).
+    enum Key {
+        File(PKey<Private>),
+        Token(crate::pkcs11::TokenCert, Option<String>),
     }
 
     pub struct Cert {
         cert: X509,
-        key: PKey<Private>,
+        key: Key,
         chain: Vec<X509>,
     }
 
     impl Cert {
-        pub fn find(_: &str) -> Result<Cert, String> {
-            Err("On Linux, sign with your certificate file (.pfx or .p12).".into())
+        pub fn find(thumb: &str) -> Result<Cert, String> {
+            let t = crate::pkcs11::certificates()
+                .into_iter()
+                .find(|t| summarize(&t.cert, "", true).thumb.eq_ignore_ascii_case(thumb))
+                .ok_or("The certificate's token isn't plugged in (or its driver isn't installed): plug it in and press Refresh.")?;
+            // The token's own copies of the issuers, up the chain.
+            let mut chain: Vec<X509> = Vec::new();
+            let mut at = t.cert.clone();
+            while let Some(up) = t.others.iter().find(|o| o.subject_name().to_der().ok() == at.issuer_name().to_der().ok() && o.to_der().ok() != at.to_der().ok()) {
+                if chain.iter().any(|c| c.to_der().ok() == up.to_der().ok()) {
+                    break;
+                }
+                chain.push(up.clone());
+                at = up.clone();
+            }
+            Ok(Cert { cert: t.cert.clone(), key: Key::Token(t, None), chain })
+        }
+
+        /// The token's PIN, for the signature about to be made.
+        pub fn set_pin(&mut self, pin: Option<String>) {
+            if let Key::Token(_, p) = &mut self.key {
+                *p = pin;
+            }
         }
 
         pub fn from_pfx(path: &str, password: &str) -> Result<Cert, String> {
@@ -1050,11 +1078,14 @@ mod imp {
             let cert = parsed.cert.ok_or("The file has no certificate.")?;
             let key = parsed.pkey.ok_or("The file has no private key: it can't sign.")?;
             let chain = parsed.ca.map(|s| s.into_iter().collect()).unwrap_or_default();
-            Ok(Cert { cert, key, chain })
+            Ok(Cert { cert, key: Key::File(key), chain })
         }
 
         pub fn summary(&self) -> CertSummary {
-            summarize(&self.cert, "Certificate file")
+            match &self.key {
+                Key::File(_) => summarize(&self.cert, "Certificate file", false),
+                Key::Token(t, _) => summarize(&self.cert, &t.label, true),
+            }
         }
 
         pub fn dn(&self) -> [String; 5] {
@@ -1067,6 +1098,10 @@ mod imp {
             let cert_hash = hash(MessageDigest::sha256(), &self.cert.to_der().map_err(err)?).map_err(err)?;
             // SigningCertificateV2 { [ESSCertIDv2 { certHash }] } (SHA-256, the default, so no algorithm).
             let scv2 = der(0x30, &der(0x30, &der(0x30, &der(0x04, &cert_hash))));
+            let key = match &self.key {
+                Key::File(k) => k,
+                Key::Token(t, pin) => return self.sign_on_token(t, pin.as_deref(), data, scv2),
+            };
             // SAFETY: OpenSSL objects made and freed here; the certificate and key outlive the calls (OpenSSL
             // takes its own references to them).
             unsafe {
@@ -1075,7 +1110,7 @@ mod imp {
                     return Err("Couldn't start the signature.".into());
                 }
                 let r = (|| {
-                    let si = CMS_add1_signer(cms, self.cert.as_ptr() as *mut c_void, self.key.as_ptr() as *mut c_void, EVP_sha256(), CMS_BINARY | CMS_NOSMIMECAP);
+                    let si = CMS_add1_signer(cms, self.cert.as_ptr() as *mut c_void, key.as_ptr() as *mut c_void, EVP_sha256(), CMS_BINARY | CMS_NOSMIMECAP);
                     if si.is_null() {
                         return Err("The certificate's key couldn't sign.".to_string());
                     }
@@ -1100,6 +1135,64 @@ mod imp {
                 r
             }
         }
+
+        /// The CMS put together here around the token's signature of its signed attributes (content type,
+        /// signing time, message digest, signing-certificate-v2): OpenSSL can't use a key it can't hold.
+        fn sign_on_token(&self, t: &crate::pkcs11::TokenCert, pin: Option<&str>, data: &[u8], scv2: Vec<u8>) -> Result<Vec<u8>, String> {
+            const OID_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
+            const OID_SIGNED_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02];
+            const OID_CONTENT_TYPE: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x03];
+            const OID_MESSAGE_DIGEST: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04];
+            const OID_SIGNING_TIME: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x05];
+            const OID_SCV2: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x10, 0x02, 0x2f];
+            const OID_SHA256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+            const OID_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+            const OID_ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+            let oid = |o: &[u8]| der(0x06, o);
+            let attr = |o: &[u8], value: Vec<u8>| der(0x30, &[oid(o), der(0x31, &value)].concat());
+            let digest = hash(MessageDigest::sha256(), data).map_err(err)?;
+            let mut attrs = vec![
+                attr(OID_CONTENT_TYPE, oid(OID_DATA)),
+                attr(OID_SIGNING_TIME, der(0x17, utc_time(now()).as_bytes())),
+                attr(OID_MESSAGE_DIGEST, der(0x04, &digest)),
+                attr(OID_SCV2, scv2),
+            ];
+            // A DER SET OF is sorted by its members' encodings.
+            attrs.sort();
+            let attrs = attrs.concat();
+            let (sig, ec) = crate::pkcs11::sign(t, pin, &der(0x31, &attrs))?;
+            let sha256 = der(0x30, &[oid(OID_SHA256), vec![0x05, 0x00]].concat());
+            let sig_alg = if ec { der(0x30, &oid(OID_ECDSA_SHA256)) } else { der(0x30, &[oid(OID_RSA), vec![0x05, 0x00]].concat()) };
+            let serial = self.cert.serial_number().to_bn().map_err(err)?.to_vec();
+            let serial = if serial.first().map_or(true, |&b| b & 0x80 != 0) { [&[0u8][..], &serial].concat() } else { serial };
+            let issuer_serial = der(0x30, &[self.cert.issuer_name().to_der().map_err(err)?, der(0x02, &serial)].concat());
+            let signer_info = der(0x30, &[der(0x02, &[1]), issuer_serial, sha256.clone(), der(0xa0, &attrs), sig_alg, der(0x04, &sig)].concat());
+            let mut certs = vec![self.cert.to_der().map_err(err)?];
+            for c in &self.chain {
+                certs.push(c.to_der().map_err(err)?);
+            }
+            let signed_data = der(
+                0x30,
+                &[der(0x02, &[1]), der(0x31, &sha256), der(0x30, &oid(OID_DATA)), der(0xa0, &certs.concat()), der(0x31, &signer_info)].concat(),
+            );
+            Ok(der(0x30, &[oid(OID_SIGNED_DATA), der(0xa0, &signed_data)].concat()))
+        }
+    }
+
+    /// UTCTime for `t` (seconds since 1970): YYMMDDHHMMSSZ.
+    fn utc_time(t: i64) -> String {
+        let (days, secs) = (t.div_euclid(86_400), t.rem_euclid(86_400));
+        // Civil date from days since 1970 (Howard Hinnant's algorithm).
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+        format!("{:02}{m:02}{d:02}{:02}{:02}{:02}Z", y % 100, secs / 3600, secs % 3600 / 60, secs % 60)
     }
 
     /// The timestamp token in a signature's unsigned attributes (DER), if any.
@@ -1347,5 +1440,33 @@ mod linux_tests {
         let oid = [0x06, 0x0b, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x10, 0x02, 0x2f];
         assert!(cms.windows(oid.len()).any(|w| w == oid));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Linux: signing with a key on a token, through SoftHSM (a token in software) set up by the test's caller:
+/// PAGINAUT_SOFTHSM_CONF=<softhsm2.conf> with a token "Paginaut DSC" (PIN 1234) holding a key and certificate
+/// "Token Signer" with the same id.
+#[cfg(all(test, not(windows)))]
+mod token_tests {
+    #[test]
+    fn signs_on_a_token() {
+        let Ok(conf) = std::env::var("PAGINAUT_SOFTHSM_CONF") else { return };
+        std::env::set_var("SOFTHSM2_CONF", conf);
+        crate::pkcs11::set_module(Some("/usr/lib/softhsm/libsofthsm2.so".into()));
+        let list = super::list().unwrap();
+        let c = list.iter().find(|c| c.name == "Token Signer").expect("the token's certificate is listed");
+        assert!(c.hardware);
+        assert_eq!(c.provider, "Paginaut DSC");
+        let mut cert = super::Cert::find(&c.thumb).unwrap();
+        let data = b"bytes covered by a token signature";
+        cert.set_pin(Some("0000".into()));
+        let wrong = cert.sign(data, 0).unwrap_err();
+        assert!(wrong.contains("Wrong PIN"), "{wrong}");
+        cert.set_pin(Some("1234".into()));
+        let cms = cert.sign(data, 0).unwrap();
+        let check = super::verify(data, &cms, None);
+        assert!(check.intact, "{check:?}");
+        assert_eq!(check.signer, "Token Signer");
+        assert!(!super::verify(b"other bytes", &cms, None).intact);
     }
 }

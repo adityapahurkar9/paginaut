@@ -507,8 +507,11 @@ export function AskDialog() {
 function AskInner() {
   const d = dialog.value!;
   const primary = useRef<HTMLButtonElement>(null);
+  const field = useRef<HTMLInputElement>(null);
+  // A secret answer goes back as "ok:<text>".
+  const answer = (v: string) => d.resolve(d.secret !== undefined && v !== "cancel" ? `ok:${field.current?.value ?? ""}` : v);
   useEffect(() => {
-    primary.current?.focus();
+    (field.current ?? primary.current)?.focus();
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
@@ -523,9 +526,22 @@ function AskInner() {
       <div class="dialog" role="alertdialog" aria-label={d.title}>
         <h2>{d.title}</h2>
         <span style={{ color: "var(--tx2)" }}>{d.text}</span>
+        {d.secret !== undefined && (
+          <input
+            ref={field}
+            class="inp"
+            type="password"
+            aria-label={d.secret}
+            placeholder={d.secret}
+            autocomplete="off"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") answer(d.buttons.find((b) => b.primary)?.value ?? "ok");
+            }}
+          />
+        )}
         <div class="row">
           {[...d.buttons].reverse().map((b) => (
-            <button key={b.value} ref={b.primary ? primary : undefined} class={`btn ${b.primary ? "pri" : ""}`} onClick={() => d.resolve(b.value)}>
+            <button key={b.value} ref={b.primary ? primary : undefined} class={`btn ${b.primary ? "pri" : ""}`} onClick={() => answer(b.value)}>
               {b.label}
             </button>
           ))}

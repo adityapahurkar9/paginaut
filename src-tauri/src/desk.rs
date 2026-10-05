@@ -626,12 +626,25 @@ pub struct SignOptions {
     pub pfx: Option<PfxFile>,
     /// A timestamp service (RFC 3161) to get a trusted timestamp from.
     pub timestamp: Option<String>,
+    /// Linux: the token's PIN (Windows' drivers ask for it themselves).
+    #[serde(default)]
+    #[cfg_attr(windows, allow(dead_code))]
+    pub pin: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct PfxFile {
     pub path: String,
     pub password: String,
+}
+
+/// Linux: the PKCS#11 driver chosen in Settings for a token Paginaut doesn't find by itself (None: only those).
+#[tauri::command]
+pub fn pkcs11_module(path: Option<String>) {
+    #[cfg(target_os = "linux")]
+    crate::pkcs11::set_module(path);
+    #[cfg(not(target_os = "linux"))]
+    let _ = path;
 }
 
 /// A certificate file's certificate, to show before signing with it (checks the password too).
@@ -667,11 +680,14 @@ pub async fn sign_document(window: tauri::WebviewWindow, state: State<'_, AppSta
     };
     let engine = state.engine.clone();
     blocking(move || {
-        let cert = match (opts.cert.as_str(), test_cert()?, &opts.pfx) {
+        #[allow(unused_mut)]
+        let mut cert = match (opts.cert.as_str(), test_cert()?, &opts.pfx) {
             ("TEST", Some(c), _) => c,
             ("PFX", _, Some(f)) => crate::dsc::Cert::from_pfx(&f.path, &f.password)?,
             _ => crate::dsc::Cert::find(&opts.cert)?,
         };
+        #[cfg(not(windows))]
+        cert.set_pin(opts.pin.clone());
         let s = cert.summary();
         if !s.current {
             return Err(format!("This certificate isn't valid today (valid until {}).", fmt_day(s.not_after)));

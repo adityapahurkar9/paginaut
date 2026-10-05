@@ -48,6 +48,8 @@ gtk = "0.18"
 openssl = "0.10"
 openssl-sys = "0.9"
 foreign-types = "0.3"
+# DSC tokens and smart cards through their PKCS#11 drivers (pkcs11.rs).
+cryptoki = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 # Same versions Tauri uses, to reach WebView2 settings it doesn't expose (touchpad pinch).

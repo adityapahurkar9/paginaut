@@ -21,6 +21,8 @@ mod snap;
 mod print;
 #[cfg(target_os = "linux")]
 mod print_linux;
+#[cfg(target_os = "linux")]
+mod pkcs11;
 #[cfg(desktop)]
 mod tts;
 #[cfg(desktop)]
@@ -368,6 +370,7 @@ fn run_desktop() {
             desk::update_install,
             desk::update_stop,
             desk::open_path,
+            desk::pkcs11_module,
             app::book_cover,
             app::save_repaired,
             shelf::scan_books,

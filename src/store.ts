@@ -58,6 +58,8 @@ export interface Settings {
     reason: string; location: string; showDate: boolean; lock: boolean; newFile: boolean; place: "box" | "invisible"; cert: string;
     /** Add a trusted timestamp (on unless turned off), from this service (RFC 3161). */
     timestamp?: boolean; tsa?: string;
+    /** Linux: a DSC token's PKCS#11 driver Paginaut doesn't find by itself. */
+    pkcs11?: string;
   };
   /** Text recognition: the languages and model quality used last. */
   ocr: { langs: string[]; quality: "fast" | "best" };
@@ -291,7 +293,7 @@ export interface AskButton {
   value: string;
   primary?: boolean;
 }
-export const dialog = signal<{ title: string; text: string; buttons: AskButton[]; resolve: (v: string) => void } | null>(null);
+export const dialog = signal<{ title: string; text: string; buttons: AskButton[]; secret?: string; resolve: (v: string) => void } | null>(null);
 
 /** Shows a modal question; resolves with the chosen button's value ("cancel" on Esc). */
 export function ask(title: string, text: string, buttons: AskButton[]): Promise<string> {
@@ -307,6 +309,25 @@ export function ask(title: string, text: string, buttons: AskButton[]): Promise<
     };
   });
 }
+/** Asks for something not to be shown as it's typed (a token's PIN): the text, or null when cancelled. */
+export function askSecret(title: string, text: string, label: string, ok: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    dialog.value = {
+      title,
+      text,
+      secret: label,
+      buttons: [
+        { label: "Cancel", value: "cancel" },
+        { label: ok, value: "ok", primary: true },
+      ],
+      resolve: (v) => {
+        dialog.value = null;
+        resolve(v === "cancel" ? null : v.replace(/^ok:/, ""));
+      },
+    };
+  });
+}
+
 let toastTimer = 0;
 export function showToast(text: string, ms = 2600) {
   clearTimeout(toastTimer);

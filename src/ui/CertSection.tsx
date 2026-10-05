@@ -4,10 +4,10 @@
 import { useEffect, useState } from "preact/hooks";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FileKey, KeyRound, RefreshCw, Usb, X } from "lucide-preact";
-import { dscDefaults, listCerts, openPfx, proceed, signField, type CertSummary, type PfxChoice, type SignSetup } from "../dsc";
+import { dscDefaults, listCerts, openPfx, proceed, setTokenDriver, signField, type CertSummary, type PfxChoice, type SignSetup } from "../dsc";
 import { sigs } from "../sign";
 import { testHook } from "./PagesUI";
-import { onLinux, type Tab } from "../store";
+import { onLinux, settings, type Tab } from "../store";
 
 const REASONS = [
   "I approve this document",
@@ -115,6 +115,19 @@ export function CertSection({ tab }: { tab: Tab | null }) {
     <div class="cert-sec">
       <div class="cert-head">
         <span class="muted">Your certificates</span>
+        {onLinux && (
+          <button
+            class="btn ghost sm"
+            title={settings.value.dsc.pkcs11 ? `Token driver: ${settings.value.dsc.pkcs11} (click to choose another; Cancel forgets it)` : "Your token isn't listed? Choose its driver (a PKCS#11 .so file from the token's Linux software)"}
+            onClick={async () => {
+              const path = await open({ title: "The token's PKCS#11 driver", filters: [{ name: "PKCS#11 driver", extensions: ["so", "so.*"] }, { name: "All files", extensions: ["*"] }] });
+              setTokenDriver(typeof path === "string" ? path : null);
+              refresh();
+            }}
+          >
+            <Usb size={13} /> Token driver…
+          </button>
+        )}
         <button class="btn ghost sm" onClick={refresh} title="Plugged in a token? Look again">
           <RefreshCw size={13} /> Refresh
         </button>
@@ -148,10 +161,10 @@ export function CertSection({ tab }: { tab: Tab | null }) {
           <div class="muted cert-empty">Looking for certificates…</div>
         ) : !shown.length ? (
           <div class="cert-empty">
-            <strong>{onLinux ? "Sign with your certificate file." : "No signing certificate found."}</strong>
+            <strong>No signing certificate found.</strong>
             <span class="muted">
               {onLinux
-                ? "Choose your .pfx or .p12 file below. For a DSC token, use the .pfx your provider gave you, or export one with the token's own tool. "
+                ? "Plug in your DSC token and press Refresh (install the token's Linux driver first; if it still isn't listed, choose the driver with Token driver…), or use a .pfx or .p12 file below. "
                 : "Plug in your DSC token (its driver puts the certificate into Windows), then press Refresh. "}
               {err}
             </span>
