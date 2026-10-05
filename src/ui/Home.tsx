@@ -1,4 +1,5 @@
-import { Combine, FileText, FolderOpen, X } from "lucide-preact";
+import { useState } from "preact/hooks";
+import { BookImage, BookOpen, Combine, File, FileText, FolderOpen, X } from "lucide-preact";
 import * as A from "../actions";
 import { Logo } from "./Logo";
 import { startMerge } from "./PagesUI";
@@ -13,8 +14,31 @@ function ago(ms: number) {
   return new Date(ms).toLocaleDateString();
 }
 
+/** What the Recent list can be narrowed to, by file extension. */
+type Kind = "pdf" | "ebook" | "comic" | "other";
+const KINDS: { id: Kind; label: string; Icon: typeof FileText }[] = [
+  { id: "pdf", label: "PDFs", Icon: FileText },
+  { id: "ebook", label: "E-books", Icon: BookOpen },
+  { id: "comic", label: "Comics", Icon: BookImage },
+  { id: "other", label: "Others", Icon: File },
+];
+function kindOf(path: string): Kind {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "pdf") return "pdf";
+  if (["epub", "mobi", "fb2", "fbz"].includes(ext)) return "ebook";
+  if (["cbz", "cbr"].includes(ext)) return "comic";
+  return "other";
+}
+
 export function Home() {
-  const list = recent.value;
+  const all = recent.value;
+  const [want, setWant] = useState<Kind | "all">("all");
+  // Tabs only for the kinds there are, and none when everything is one kind.
+  const counts = new Map<Kind, number>();
+  for (const r of all) counts.set(kindOf(r.path), (counts.get(kindOf(r.path)) ?? 0) + 1);
+  const kinds = KINDS.filter((k) => counts.has(k.id));
+  const shown = want !== "all" && counts.has(want) ? want : "all";
+  const list = shown === "all" ? all : all.filter((r) => kindOf(r.path) === shown);
   return (
     <div class="home">
       <div class="home-inner">
@@ -30,12 +54,25 @@ export function Home() {
             <Combine size={15} /> Merge files into one PDF…
           </button>
         </div>
-        {list.length > 0 && (
+        {all.length > 0 && (
           <div class="recent">
-            <h3>Recent</h3>
-            {list.slice(0, 12).map((r) => (
+            <div class="recent-head">
+              <h3>Recent</h3>
+              {kinds.length > 1 && (
+                <div class="recent-kinds" role="tablist" aria-label="Show">
+                  {[{ id: "all" as const, label: "All", n: all.length }, ...kinds.map((k) => ({ id: k.id, label: k.label, n: counts.get(k.id)! }))].map((k) => (
+                    <button key={k.id} role="tab" aria-selected={shown === k.id} class={shown === k.id ? "on" : ""} onClick={() => setWant(k.id)}>
+                      {k.label} <span class="n">{k.n}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {list.slice(0, 12).map((r) => {
+              const Icon = KINDS.find((k) => k.id === kindOf(r.path))!.Icon;
+              return (
               <button class="recent-row" key={r.path} onClick={() => openFiles([r.path])} title={r.path}>
-                <FileText size={18} style={{ color: "var(--tx3)" }} />
+                <Icon size={18} style={{ color: "var(--tx3)" }} />
                 <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
                   <span class="n">{r.name}</span>
                   <span class="p">{r.path}</span>
@@ -57,7 +94,8 @@ export function Home() {
                   <X size={14} />
                 </span>
               </button>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

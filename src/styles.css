@@ -333,6 +333,14 @@ kbd { font: 11px var(--font); padding: 2px 6px; border-radius: 5px; border: 1px 
 /* On a card: the desk colour behind it can be dark in a light theme (Steampunk's walnut, Blueprint's grid). */
 .recent { display: flex; flex-direction: column; gap: 2px; padding: 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--bd2); }
 .recent h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--tx3); }
+/* Recent narrowed by kind (only the kinds in the list; none when it's all one kind). */
+.recent-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.recent-head h3 { margin: 0; }
+.recent-kinds { display: flex; flex-wrap: wrap; gap: 4px; }
+.recent-kinds button { height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: 13px; background: transparent; color: var(--tx2); font-size: 12.5px; }
+.recent-kinds button:hover { background: var(--hover); }
+.recent-kinds button.on { background: var(--acc-soft); border-color: color-mix(in srgb, var(--acc) 35%, transparent); color: var(--tx); font-weight: 600; }
+.recent-kinds .n { margin-left: 2px; color: var(--tx3); font-variant-numeric: tabular-nums; }
 .recent-row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border: 0; border-radius: 9px; background: transparent; text-align: left; }
 .recent-row:hover { background: var(--hover); }
 .recent-row .n { font-weight: 600; }
