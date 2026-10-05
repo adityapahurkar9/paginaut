@@ -40,9 +40,16 @@
 }
 
 html, body { margin: 0; height: 100%; overflow: hidden; }
-html { touch-action: pan-x pan-y; }
+/* The app inside the safe area (status and navigation bars, camera cutout, keyboard; main.tsx sets
+   these). contain: layout makes it the box for everything fixed inside, so nothing goes under a bar. */
+#app {
+  position: fixed; contain: layout; background: var(--bg);
+  top: var(--safe-top, 0px); right: var(--safe-right, 0px); bottom: var(--safe-bottom, 0px); left: var(--safe-left, 0px);
+}
+/* Behind the system bars: the colour main.tsx gives <html>, so the body stays clear. */
+html { touch-action: pan-x pan-y; background: var(--bg); }
 body {
-  background: var(--bg);
+  background: transparent;
   color: var(--tx);
   font: 15px/1.4 Roboto, "Noto Sans", system-ui, sans-serif;
   -webkit-tap-highlight-color: transparent;
@@ -141,7 +148,7 @@ input { font: inherit; }
 /* Read and Book on a phone. Book turns pages with sideways swipes: the browser mustn't take them. */
 .rf-stage { touch-action: none; }
 .rf-host { --rf-desk: var(--canvas); }
-.rf-host .rf-col { padding-top: 64px; padding-bottom: 72px; }
+.rf-host .rf-col { margin: 0 auto; padding: 64px var(--rf-side, 22px) 72px; }
 .rf-host .rf { -webkit-user-select: text; user-select: text; }
 .rf-loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; color: var(--tx2); }
 
@@ -161,10 +168,15 @@ input { font: inherit; }
   padding: 6px 18px 22px; border-radius: 22px 22px 0 0; background: var(--panel); color: var(--tx);
   box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.2); animation: up 0.24s var(--ease);
 }
-.sheet-contents, .sheet-info { height: 84vh; }
+.sheet-contents, .sheet-info { min-height: 45vh; max-height: 75vh; }
+/* View settings: the page stays in sight above, to see each change as it's made. */
+.scrim-view { background: transparent; }
+.sheet-view { gap: 8px; box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.28); }
+.rows { display: flex; flex-direction: column; }
+.rows .row { min-height: 46px; }
 .sheet-grip { width: 40px; height: 4px; flex: none; margin: 4px auto 2px; border-radius: 2px; background: var(--bd2); }
 .sheet h3 { margin: 2px 0 0; font-size: 18px; }
-.sheet-scroll { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -18px; padding: 0 18px; }
+.sheet-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 -18px; padding: 0 18px; }
 .hint { margin: 0; font-size: 13.5px; color: var(--tx2); }
 
 .seg { display: flex; gap: 3px; padding: 3px; border-radius: 12px; background: var(--hover); }

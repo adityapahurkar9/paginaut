@@ -18,8 +18,6 @@ import android.provider.OpenableColumns
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.webkit.MimeTypeMap
-import android.graphics.Color
-import android.view.View
 import android.webkit.WebView
 import androidx.activity.result.ActivityResult
 import androidx.core.content.FileProvider
@@ -57,16 +55,33 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
   override fun load(webView: WebView) {
     this.webView = webView
     pending = docUri(activity.intent)
-    // Android 15 and later always draw the app behind the status and navigation bars: keep the
-    // page clear of them (and of the keyboard), whatever the version.
-    val root = (webView.parent as? View) ?: webView
-    ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+    // Android 15 and later always draw the app behind the status and navigation bars. The page keeps
+    // clear of them, the camera cutout and the keyboard itself, from the sizes passed here as CSS
+    // pixels. (Padding the WebView's parent didn't last: AppCompat resets it on rotation.)
+    ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
       val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
       val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-      v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
-      WindowInsetsCompat.CONSUMED
+      val d = v.resources.displayMetrics.density
+      safeArea = floatArrayOf(bars.top / d, bars.right / d, maxOf(bars.bottom, ime.bottom) / d, bars.left / d)
+      sendSafeArea()
+      insets
     }
-    ViewCompat.requestApplyInsets(root)
+    ViewCompat.requestApplyInsets(webView)
+  }
+
+  /** Top, right, bottom, left: what the page must keep clear of, in CSS pixels. */
+  @Volatile private var safeArea = floatArrayOf(0f, 0f, 0f, 0f)
+
+  private fun sendSafeArea() {
+    val (t, r, b, l) = safeArea.toList()
+    activity.runOnUiThread { webView?.evaluateJavascript("window.paginautSafeArea && window.paginautSafeArea($t, $r, $b, $l)", null) }
+  }
+
+  /** The current safe area, for the page as it starts (sizes sent before it was listening are lost). */
+  @Command
+  fun safeArea(invoke: Invoke) {
+    val (t, r, b, l) = safeArea.toList()
+    invoke.resolve(JSObject().put("top", t.toDouble()).put("right", r.toDouble()).put("bottom", b.toDouble()).put("left", l.toDouble()))
   }
 
   override fun onNewIntent(intent: Intent) {
@@ -365,24 +380,17 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
   // ------------------------------------------------------------ system bars
 
   /**
-   * The status and navigation bars: their background (the page's own colour, `#rrggbb`), light or
-   * dark icons, and hidden while reading (`immersive`; a swipe from the edge shows them for a moment).
+   * The status and navigation bars: light or dark icons, and hidden while reading (`immersive`; a
+   * swipe from the edge shows them for a moment). Their background is the page's own (it draws
+   * under them).
    */
   @Command
   fun setBars(invoke: Invoke) {
     val args = invoke.getArgs()
-    val color = args.getString("color", null)
     val dark = args.optBoolean("dark", false)
     val immersive = args.optBoolean("immersive", false)
     activity.runOnUiThread {
       val window = activity.window
-      val root = window.decorView.findViewById<View>(android.R.id.content)
-      if (color != null) {
-        try {
-          root.setBackgroundColor(Color.parseColor(color))
-        } catch (_: IllegalArgumentException) {
-        }
-      }
       val ctl = WindowCompat.getInsetsController(window, window.decorView)
       ctl.isAppearanceLightStatusBars = !dark
       ctl.isAppearanceLightNavigationBars = !dark

@@ -168,10 +168,11 @@ const FONTS = {
   serif: `"Noto Serif", "Droid Serif", Georgia, serif`,
   sans: `Roboto, "Noto Sans", system-ui, sans-serif`,
 };
-const MARGINS = { narrow: [32, 0.05], normal: [36, 0.08], wide: [40, 0.12] } as const;
+/** Line length (em) and Book's page margin (share of the page); on a phone the column fills the width, so its side margin (px). */
+const MARGINS = { narrow: [32, 0.05, 12], normal: [36, 0.08, 22], wide: [40, 0.12, 40] } as const;
 
 function textVars(t: TextSettings): Record<string, string> {
-  const [measure, pad] = MARGINS[t.margins];
+  const [measure, pad, side] = MARGINS[t.margins];
   return {
     "--rf-font": FONTS[t.font],
     "--rf-size": `${t.size}px`,
@@ -179,6 +180,7 @@ function textVars(t: TextSettings): Record<string, string> {
     "--rf-align": t.justify ? "justify" : "left",
     "--rf-measure": `${measure}em`,
     "--rf-padk": String(pad),
+    "--rf-side": `${side}px`,
   };
 }
 

@@ -1,6 +1,6 @@
 // Sheets that slide up over the reader or the library: view settings, contents and comments,
 // document info, the overflow menu, and the app's settings.
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import { getVersion } from "@tauri-apps/api/app";
 import { BookOpen, ChevronRight, FileText, Info, Minus, Plus, Printer, ScrollText, Share2, Volume2 } from "lucide-preact";
@@ -17,13 +17,72 @@ export function openSheet(s: Exclude<Sheet, null>) {
   sheet.value = s;
 }
 
+/**
+ * Pulling a sheet down closes it: from anywhere on it, once its list (if any) is scrolled to the
+ * top. Let go before it's a quarter of the way down (and not flicked) and it settles back.
+ */
+function useDragDown(open: Sheet) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let y0 = 0, t0 = 0, dy = 0, live = false, maybe = false;
+    const scrollerAt = (t: EventTarget | null) => (t as HTMLElement | null)?.closest?.<HTMLElement>(".sheet-scroll") ?? null;
+    const start = (e: TouchEvent) => {
+      const t = e.target as HTMLElement;
+      const sc = scrollerAt(t);
+      // A slider or a list partway down keeps the gesture.
+      maybe = e.touches.length === 1 && !t.closest("input") && !(sc && sc.scrollTop > 0);
+      live = false;
+      dy = 0;
+      y0 = e.touches[0].clientY;
+      t0 = e.timeStamp;
+    };
+    const move = (e: TouchEvent) => {
+      if (!maybe) return;
+      const d = e.touches[0].clientY - y0;
+      if (!live) {
+        if (d < -4) maybe = false; // scrolling the list up
+        if (d < 8) return;
+        live = true;
+        el.style.transition = "none";
+      }
+      dy = Math.max(0, d);
+      el.style.transform = `translateY(${dy}px)`;
+      e.preventDefault();
+    };
+    const end = (e: TouchEvent) => {
+      if (!live) return;
+      live = maybe = false;
+      const fast = dy / Math.max(1, e.timeStamp - t0) > 0.6;
+      el.style.transition = "transform 0.2s var(--ease)";
+      if (dy > el.offsetHeight / 4 || (fast && dy > 30)) {
+        el.style.transform = "translateY(100%)";
+        setTimeout(back, 180);
+      } else el.style.transform = "";
+    };
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchmove", move, { passive: false });
+    el.addEventListener("touchend", end);
+    el.addEventListener("touchcancel", end);
+    return () => {
+      el.removeEventListener("touchstart", start);
+      el.removeEventListener("touchmove", move);
+      el.removeEventListener("touchend", end);
+      el.removeEventListener("touchcancel", end);
+    };
+  }, [open]);
+  return ref;
+}
+
 export function Sheets() {
   const s = sheet.value;
+  const ref = useDragDown(s);
   if (!s) return null;
   const d = doc.value;
   return (
-    <div class="sheet-scrim" onClick={(e) => e.target === e.currentTarget && back()}>
-      <div class={`sheet sheet-${s}`} role="dialog">
+    <div class={`sheet-scrim scrim-${s}`} onClick={(e) => e.target === e.currentTarget && back()}>
+      <div class={`sheet sheet-${s}`} role="dialog" ref={ref}>
         <div class="sheet-grip" />
         {s === "view" && d && <ViewSheet />}
         {s === "contents" && d && <ContentsSheet docId={d.info.docId} />}
@@ -76,7 +135,6 @@ function ViewSheet() {
 
   return (
     <>
-      <h3>View</h3>
       <Seg<Mode>
         value={m}
         onChange={(v) => (mode.value = v)}
@@ -86,7 +144,7 @@ function ViewSheet() {
           ...(isTablet ? [["book", <><BookOpen size={17} /> Book</>] as [Mode, ComponentChildren]] : []),
         ]}
       />
-      <p class="hint">{m === "pages" ? "The document as it was laid out." : m === "read" ? "Just the text, sized for your screen, in one long scroll." : "Just the text, set as a book you turn the pages of."}</p>
+      <p class="hint">{m === "pages" ? "The document as it was laid out." : m === "read" ? "Just the text, sized for your screen." : "Just the text, as pages you turn."}</p>
       {m === "pages" ? (
         <Row label="Pages">
           <Seg<Layout>
@@ -96,7 +154,7 @@ function ViewSheet() {
           />
         </Row>
       ) : (
-        <>
+        <div class="rows">
           <Row label="Text size">
             <div class="stepper">
               <button class="ib" aria-label="Smaller text" onClick={() => updateText({ size: Math.max(12, t.size - 1) })}>
@@ -118,9 +176,8 @@ function ViewSheet() {
             <Seg value={t.paper} onChange={(v) => updateText({ paper: v })} options={[["auto", "Plain"], ["sepia", "Sepia"]]} />
           </Row>
           <Toggle label="Justify lines" on={t.justify} onChange={(v) => updateText({ justify: v })} />
-        </>
+        </div>
       )}
-      <Toggle label="Night mode" on={st.night} onChange={(v) => updateSettings({ night: v })} />
     </>
   );
 }
@@ -336,7 +393,6 @@ function SettingsSheet() {
           options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]}
         />
       </Row>
-      <Toggle label="Night mode for pages" on={settings.value.night} onChange={(v) => updateSettings({ night: v })} />
       <button class="row link-row" onClick={() => clearRecent()}>
         <span class="row-label">Clear the Recent list</span>
       </button>

@@ -62,7 +62,19 @@ function PasswordDialog() {
 
 render(<App />, document.getElementById("app")!);
 
-// The system bars take the colour of what's under them, and step aside while you read.
+// The app draws under the status and navigation bars (Android 15 and later always do this): it keeps
+// its content inside the safe area Android reports, and paints the bars' background itself.
+const setSafeArea = (t: number, r: number, b: number, l: number) => {
+  const s = document.documentElement.style;
+  s.setProperty("--safe-top", `${t}px`);
+  s.setProperty("--safe-right", `${r}px`);
+  s.setProperty("--safe-bottom", `${b}px`);
+  s.setProperty("--safe-left", `${l}px`);
+};
+(window as unknown as { paginautSafeArea: typeof setSafeArea }).paginautSafeArea = setSafeArea;
+native.safeArea().then((a) => setSafeArea(a.top, a.right, a.bottom, a.left), () => {});
+
+// The bars take the colour of what's under them, and step aside while you read.
 effect(() => {
   const reading = !!doc.value;
   const immersive = reading && !chrome.value && !sheet.value && !searching.value;
@@ -71,7 +83,8 @@ effect(() => {
   requestAnimationFrame(() => {
     const css = getComputedStyle(document.documentElement);
     const color = css.getPropertyValue(reading ? (settings.value.night ? "--night-bar" : "--bar") : "--bg").trim();
-    void native.setBars(color || (dark ? "#0e1220" : "#f5f6fa"), dark, immersive);
+    document.documentElement.style.background = color;
+    void native.setBars(dark, immersive);
   });
 });
 

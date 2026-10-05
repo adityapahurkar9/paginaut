@@ -46,6 +46,7 @@ pub fn run() {
             share,
             print,
             set_bars,
+            safe_area,
             speak,
             stop_speaking,
         ])
@@ -129,10 +130,16 @@ async fn print(native: State<'_, Native<Wry>>, state: State<'_, AppState>, doc: 
     call(&native, "print", json!({ "path": file, "title": title })).await.map(|_| ())
 }
 
-/// The status and navigation bars: colour behind them, dark icons or light, hidden while reading.
+/// The status and navigation bars: dark icons or light, hidden while reading.
 #[tauri::command]
-async fn set_bars(native: State<'_, Native<Wry>>, color: String, dark: bool, immersive: bool) -> Res<()> {
-    call(&native, "setBars", json!({ "color": color, "dark": dark, "immersive": immersive })).await.map(|_| ())
+async fn set_bars(native: State<'_, Native<Wry>>, dark: bool, immersive: bool) -> Res<()> {
+    call(&native, "setBars", json!({ "dark": dark, "immersive": immersive })).await.map(|_| ())
+}
+
+/// What the page must keep clear of (bars, camera cutout, keyboard): `{ top, right, bottom, left }` in CSS px.
+#[tauri::command]
+async fn safe_area(native: State<'_, Native<Wry>>) -> Res<Value> {
+    call(&native, "safeArea", json!({})).await
 }
 
 /// Reads `text` aloud with Android's text-to-speech; resolves once spoken: `{ stopped }`.

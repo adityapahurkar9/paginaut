@@ -17,5 +17,7 @@ export const native = {
   share: (path: string) => invoke<void>("share", { path }),
   /** Android's print dialog; documents other than PDFs are written as a PDF first. */
   print: (doc: number, path: string, title: string, pdf: boolean) => invoke<void>("print", { doc, path, title, pdf }),
-  setBars: (color: string, dark: boolean, immersive: boolean) => invoke<void>("set_bars", { color, dark, immersive }).catch(() => {}),
+  setBars: (dark: boolean, immersive: boolean) => invoke<void>("set_bars", { dark, immersive }).catch(() => {}),
+  /** What the page must keep clear of (bars, camera cutout, keyboard), in CSS px. */
+  safeArea: () => invoke<{ top: number; right: number; bottom: number; left: number }>("safe_area"),
 };
