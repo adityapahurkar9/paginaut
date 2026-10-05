@@ -7,7 +7,8 @@ import { BookOpen, ChevronRight, FileText, Info, Minus, Plus, Printer, ScrollTex
 import { api, type OutlineItem, type Properties, type Security } from "../api";
 import { native } from "./native";
 import { back, pushLayer } from "./nav";
-import { bookmarksOf, clearRecent, doc, errorText, isTablet, mode, page, say, settings, sheet, toggleBookmark, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
+import { bookmarksOf, toggleBookmark, unlistAll } from "./records";
+import { doc, errorText, isTablet, mode, page, say, settings, sheet, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
 import { startReading } from "./speech";
 import { goTo } from "./views";
 
@@ -85,7 +86,7 @@ export function Sheets() {
       <div class={`sheet sheet-${s}`} role="dialog" ref={ref}>
         <div class="sheet-grip" />
         {s === "view" && d && <ViewSheet />}
-        {s === "contents" && d && <ContentsSheet docId={d.info.docId} uri={d.uri} />}
+        {s === "contents" && d && <ContentsSheet docId={d.info.docId} rec={d.rec} />}
         {s === "info" && d && <InfoSheet />}
         {s === "more" && d && <MoreSheet />}
         {s === "settings" && <SettingsSheet />}
@@ -206,9 +207,9 @@ function sectionOf(items: OutlineItem[], p: number): string {
   return best;
 }
 
-function ContentsSheet({ docId, uri }: { docId: number; uri: string }) {
+function ContentsSheet({ docId, rec }: { docId: number; rec: string }) {
   const [tab, setTab] = useState<"outline" | "marks" | "comments">("outline");
-  const marks = bookmarksOf(uri);
+  const marks = bookmarksOf(rec);
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
   const [comments, setComments] = useState<Comment[] | null>(null);
   useEffect(() => {
@@ -257,7 +258,7 @@ function ContentsSheet({ docId, uri }: { docId: number; uri: string }) {
                       <strong>Page {b.page + 1}</strong>
                       {sec && <span class="c-text">{sec}</span>}
                     </button>
-                    <button class="ib sm" aria-label={`Remove the bookmark on page ${b.page + 1}`} onClick={() => toggleBookmark(uri, b.page)}>
+                    <button class="ib sm" aria-label={`Remove the bookmark on page ${b.page + 1}`} onClick={() => toggleBookmark(rec, b.page)}>
                       <X size={17} />
                     </button>
                   </li>
@@ -430,7 +431,7 @@ function SettingsSheet() {
           options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]}
         />
       </Row>
-      <button class="row link-row" onClick={() => clearRecent()}>
+      <button class="row link-row" onClick={() => unlistAll()}>
         <span class="row-label">Clear the Recent list</span>
       </button>
       <div class="about">

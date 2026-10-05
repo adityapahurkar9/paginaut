@@ -15,7 +15,8 @@ import { clearFind, find, found, next, prev } from "./search";
 import { openSheet } from "./Sheets";
 import { PageSelection, pressHolding, selTick, usePressSelect } from "./select";
 import { nextRate, pauseReading, reading, resumeReading, stopReading } from "./speech";
-import { bookmarksOf, chrome, doc, isDark, mode, page, say, searching, settings, sheet, toggleBookmark, updateSettings, type OpenDoc, type TextSettings } from "./state";
+import { bookmarksOf, toggleBookmark } from "./records";
+import { chrome, doc, isDark, mode, page, say, searching, settings, sheet, updateSettings, type OpenDoc, type TextSettings } from "./state";
 import { bookInfo, goTo, movedByApp, views } from "./views";
 
 export function Reader({ d }: { d: OpenDoc }) {
@@ -409,13 +410,13 @@ function TopBar({ d }: { d: OpenDoc }) {
 /** Marks the page you're on (filled while it is marked); the list is in the Contents sheet. */
 function BookmarkButton({ d }: { d: OpenDoc }) {
   const p = page.value;
-  const on = bookmarksOf(d.uri).some((b) => b.page === p);
+  const on = bookmarksOf(d.rec).some((b) => b.page === p);
   return (
     <button
       class={`ib ${on ? "marked" : ""}`}
       aria-label={on ? `Remove the bookmark on page ${p + 1}` : `Bookmark page ${p + 1}`}
       aria-pressed={on}
-      onClick={() => say(toggleBookmark(d.uri, p) ? `Bookmarked page ${p + 1}` : "Bookmark removed")}
+      onClick={() => say(toggleBookmark(d.rec, p) ? `Bookmarked page ${p + 1}` : "Bookmark removed")}
     >
       <Bookmark size={21} fill={on ? "currentColor" : "none"} />
     </button>

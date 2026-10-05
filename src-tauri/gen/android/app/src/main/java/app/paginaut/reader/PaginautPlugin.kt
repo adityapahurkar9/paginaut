@@ -1,19 +1,24 @@
 package app.paginaut.reader
 
+import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
+import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.print.PageRange
 import android.print.PrintAttributes
 import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.system.ErrnoException
 import android.system.Os
@@ -35,17 +40,22 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import java.io.File
+import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.Executors
+import org.json.JSONArray
 
 /**
  * Android's side of the viewer: picking files, files sent by other apps ("Open with", Share),
- * sharing and printing. The engine reads files by path, so documents are copied into the
- * app's cache (named by their source, so a file opened again reuses its copy when unchanged).
+ * sharing and printing. The engine reads files by path: files Paginaut can reach again (picked
+ * here, in a folder chosen for the shelf) are read where they are; files another app lends for one
+ * visit are copied into the app's cache (named by their source, so a file opened again reuses its
+ * copy when unchanged), and the page decides which copies to keep (records.ts).
  */
 @TauriPlugin
 class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
@@ -152,40 +162,31 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
   private fun copyThenResolve(invoke: Invoke, uri: Uri) {
     io.execute {
       try {
-        val (file, name, isDirect) = copyToCache(uri)
-        invoke.resolve(JSObject().apply {
-          put("path", file.absolutePath)
-          put("name", name)
-          put("uri", uri.toString())
-          // Read in place (a big file): not kept, so not for Recent.
-          put("direct", isDirect)
-        })
+        invoke.resolve(open(uri).json(uri))
       } catch (e: SecurityException) {
         // Lent by another app for one visit: the copy made then is what there is (counted as opened).
         val copy = cachedCopy(uri)
         if (copy != null) {
           copy.parentFile?.setLastModified(System.currentTimeMillis())
-          invoke.resolve(JSObject().apply {
-            put("path", copy.absolutePath)
-            put("name", copy.name)
-            put("uri", uri.toString())
-          })
+          invoke.resolve(Opened(copy, copy.name, inPlace = false, lasting = false, kept = true, fp = fingerprint(copy)).json(uri))
         } else invoke.reject("Paginaut can no longer open this file. Open it again from its app or Files.")
+      } catch (e: java.io.FileNotFoundException) {
+        invoke.reject("This file isn't there any more (moved or deleted).")
       } catch (e: Exception) {
         invoke.reject("Couldn't read the file: ${e.message ?: e.javaClass.simpleName}")
       }
     }
   }
 
-  /** Big files read in place (path to the link to the file), or copied for one visit (null). */
+  /** Files read in place (path of the link to the file), or copied for one visit (null). */
   private val direct = HashMap<String, ParcelFileDescriptor?>()
 
   /**
-   * A big file read where it is: Android's handle to it stays open, and a link named like the file
+   * A file read where it is: Android's handle to it stays open, and a link named like the file
    * (MuPDF tells formats by extension) points at it through /proc/self/fd. Null when the source
    * can't be read at random (a stream from a cloud app, say).
    */
-  private fun openDirect(uri: Uri, name: String, dir: File): File? {
+  private fun openDirect(uri: Uri, name: String, dir: File): Pair<File, ParcelFileDescriptor>? {
     val pfd = activity.contentResolver.openFileDescriptor(uri, "r") ?: return null
     try {
       Os.lseek(pfd.fileDescriptor, 0, OsConstants.SEEK_SET)
@@ -201,10 +202,10 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
       return null
     }
     synchronized(direct) { direct[link.absolutePath] = pfd }
-    return link
+    return link to pfd
   }
 
-  /** Lets go of a big file read in place, or deletes its one-visit copy (the document has closed). */
+  /** Lets go of a file read in place, or deletes its one-visit copy (the document has closed). */
   @Command
   fun release(invoke: Invoke) {
     val path = invoke.getArgs().getString("path", null) ?: return invoke.resolve()
@@ -216,57 +217,87 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     invoke.resolve()
   }
 
-  /** The copy kept for a source, if there is one (not a half-made one, nor a PDF made for printing). */
-  private fun cachedCopy(uri: Uri): File? =
-    File(activity.cacheDir, "docs/" + sha1(uri.toString()).take(16)).listFiles()
-      ?.firstOrNull { it.isFile && it.name != ".part" && !it.name.endsWith(".print.pdf") }
+  /** The copy kept for a source, if there is one. */
+  private fun cachedCopy(uri: Uri): File? = copyIn(File(activity.cacheDir, "docs/" + sha1(uri.toString()).take(16)))
 
-  /** A document for MuPDF: its file, its name, and whether it is read in place / for this visit only. */
-  private data class Opened(val file: File, val name: String, val direct: Boolean)
+  /** The copy in a cache folder (not a half-made one, nor a PDF made for printing). */
+  private fun copyIn(dir: File): File? =
+    dir.listFiles()?.firstOrNull { it.isFile && it.name != ".part" && !it.name.endsWith(".print.pdf") }
 
-  private fun copyToCache(uri: Uri): Opened {
+  /**
+   * A document for MuPDF: its file and name; whether it is read in place (let go when it closes),
+   * can be opened again from where it is (picked here, in a chosen folder, or a path with all-files
+   * access), or is a copy kept in the cache; and a fingerprint of its contents (to know it again
+   * whichever app sends it).
+   */
+  private data class Opened(val file: File, val name: String, val inPlace: Boolean, val lasting: Boolean, val kept: Boolean, val fp: String) {
+    fun json(uri: Uri) = JSObject().apply {
+      put("path", file.absolutePath)
+      put("name", name)
+      put("uri", uri.toString())
+      put("inPlace", inPlace)
+      put("lasting", lasting)
+      put("kept", kept)
+      put("fp", fp)
+    }
+  }
+
+  /** The file's name as its source tells it (with an extension: the engine tells formats by it), and its size (-1: unknown). */
+  private fun nameAndSize(uri: Uri): Pair<String, Long> {
     val cr = activity.contentResolver
     var name: String? = null
     var size = -1L
-    if (uri.scheme == "file") {
-      val f = File(uri.path ?: "")
-      name = f.name
-      size = f.length()
-    } else {
-      cr.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
-        if (c.moveToFirst()) {
-          val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-          val si = c.getColumnIndex(OpenableColumns.SIZE)
-          if (ni >= 0 && !c.isNull(ni)) name = c.getString(ni)
-          if (si >= 0 && !c.isNull(si)) size = c.getLong(si)
-        }
+    cr.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
+      if (c.moveToFirst()) {
+        val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        val si = c.getColumnIndex(OpenableColumns.SIZE)
+        if (ni >= 0 && !c.isNull(ni)) name = c.getString(ni)
+        if (si >= 0 && !c.isNull(si)) size = c.getLong(si)
       }
     }
-    // The engine tells formats apart by extension: give the copy one.
     var display = (name ?: uri.lastPathSegment?.substringAfterLast('/') ?: "document").replace('/', '_')
     if (!display.contains('.')) {
       val ext = cr.getType(uri)?.let { MimeTypeMap.getSingleton().getExtensionFromMimeType(it) }
       if (ext != null) display = "$display.$ext"
     }
-    // Big files (a quarter of the cache or more) aren't kept: read in place, or failing that copied
-    // for this visit only. Either way they stay out of Recent.
-    if (size > DIRECT_FROM) {
-      val dir = File(activity.cacheDir, "direct/" + sha1(uri.toString()).take(16))
-      dir.deleteRecursively()
-      dir.mkdirs()
-      openDirect(uri, display, dir)?.let { return Opened(it, display, true) }
+    return display to size
+  }
+
+  private fun open(uri: Uri): Opened {
+    val cr = activity.contentResolver
+    val lasting = canReach(uri)
+    if (uri.scheme == "file") {
+      // Only paths the shelf found with all-files access (other apps can't send these).
+      if (!lasting) throw SecurityException("no access")
+      val f = File(uri.path ?: "")
+      if (!f.isFile) throw java.io.FileNotFoundException(f.path)
+      return Opened(f, f.name, inPlace = false, lasting = true, kept = false, fp = fingerprint(f))
+    }
+    val (display, size) = nameAndSize(uri)
+    val dirFor = { root: String -> File(activity.cacheDir, root + "/" + sha1(uri.toString()).take(16)) }
+    // Files Paginaut can always reach again are read where they are: no copy.
+    if (lasting) {
+      val dir = dirFor("direct").apply { deleteRecursively(); mkdirs() }
+      openDirect(uri, display, dir)?.let { (link, pfd) -> return Opened(link, display, inPlace = true, lasting = true, kept = false, fp = fingerprint(pfd.fileDescriptor)) }
+      // Not readable at random (a cloud file): copied, as a file lent once is.
+    }
+    // Big files lent once (a quarter of the cache or more) aren't kept: read in place, or failing
+    // that copied for this visit only.
+    if (!lasting && size > DIRECT_FROM) {
+      val dir = dirFor("direct").apply { deleteRecursively(); mkdirs() }
+      openDirect(uri, display, dir)?.let { (link, pfd) -> return Opened(link, display, inPlace = true, lasting = false, kept = false, fp = fingerprint(pfd.fileDescriptor)) }
       val out = File(dir, display)
       val input = cr.openInputStream(uri) ?: throw IllegalStateException("the file is empty")
       input.use { i -> FileOutputStream(out).use { o -> i.copyTo(o, 1 shl 16) } }
       synchronized(direct) { direct[out.absolutePath] = null }
-      return Opened(out, display, true)
+      return Opened(out, display, inPlace = true, lasting = false, kept = false, fp = fingerprint(out))
     }
-    val dir = File(activity.cacheDir, "docs/" + sha1(uri.toString()).take(16))
+    val dir = dirFor("docs")
     val out = File(dir, display)
     if (size >= 0 && out.isFile && out.length() == size) {
-      // Opened again: the copy counts as recent (trimCache drops the least recently opened first).
+      // Opened again: the copy counts as recently opened.
       dir.setLastModified(System.currentTimeMillis())
-      return Opened(out, display, false)
+      return Opened(out, display, inPlace = false, lasting = lasting, kept = true, fp = fingerprint(out))
     }
     // Read the source before dropping the old copy: if it can't be read any more (a file another
     // app lent us for one visit), the copy is what Recent opens instead.
@@ -276,36 +307,112 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     input.use { i -> FileOutputStream(tmp).use { o -> i.copyTo(o, 1 shl 16) } }
     dir.listFiles()?.forEach { if (it != tmp) it.delete() }
     if (!tmp.renameTo(out)) throw IllegalStateException("couldn't store a copy")
-    trimCache(dir)
-    return Opened(out, display, false)
+    return Opened(out, display, inPlace = false, lasting = lasting, kept = true, fp = fingerprint(out))
   }
 
   /**
-   * Drops the copies of documents the app no longer lists (fallen off Recent, or Recent cleared):
-   * each copy is only there to reopen a file from Recent.
+   * Whether Paginaut can open `uri` again whenever it likes: picked here (Android keeps that
+   * access), inside a folder chosen for the shelf, or a path while it has all-files access.
+   */
+  private fun canReach(uri: Uri): Boolean = when (uri.scheme) {
+    "file" -> allFiles() && File(uri.path ?: "").canonicalPath.startsWith(Environment.getExternalStorageDirectory().canonicalPath + "/")
+    "content" -> {
+      val s = uri.toString()
+      activity.contentResolver.persistedUriPermissions.any { p ->
+        p.isReadPermission && (p.uri == uri || (DocumentsContract.isTreeUri(p.uri) && s.startsWith(p.uri.toString() + "/document/")))
+      }
+    }
+    else -> false
+  }
+
+  /** Paginaut may read every file on the phone (the user turned on "All files access"). */
+  private fun allFiles(): Boolean =
+    if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
+    else activity.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+  /**
+   * A file's contents in short: its size and its first and last 64 KB, hashed. The same file sent
+   * again (WhatsApp and mail apps give it a new link each time), moved or renamed gives the same;
+   * a changed one almost never does.
+   */
+  private fun fingerprint(fd: FileDescriptor): String = try {
+    val size = Os.fstat(fd).st_size
+    val md = MessageDigest.getInstance("SHA-1")
+    md.update(size.toString().toByteArray())
+    val buf = ByteArray(FP_PART)
+    fun part(at: Long) {
+      var got = 0
+      while (got < buf.size) {
+        val n = Os.pread(fd, buf, got, buf.size - got, at + got)
+        if (n <= 0) break
+        got += n
+      }
+      md.update(buf, 0, got)
+    }
+    part(0)
+    if (size > FP_PART) part(maxOf(FP_PART.toLong(), size - FP_PART))
+    md.digest().take(10).joinToString("") { "%02x".format(it) }
+  } catch (_: Exception) {
+    ""
+  }
+
+  private fun fingerprint(f: File): String = try {
+    RandomAccessFile(f, "r").use { fingerprint(it.fd) }
+  } catch (_: Exception) {
+    ""
+  }
+
+  /**
+   * What the app keeps and can reach: the copies in the cache (path, name, size, when last opened),
+   * the files picked here, the folders chosen for the shelf, and whether it has all-files access.
    */
   @Command
-  fun pruneCache(invoke: Invoke) {
-    val arr = invoke.getArgs().optJSONArray("keep")
-    val keep = (0 until (arr?.length() ?: 0)).map { File(arr!!.getString(it)).parentFile?.absolutePath ?: "" }.toSet()
+  fun storage(invoke: Invoke) {
     io.execute {
-      // Not one touched in the last minute: it may be a copy still being made for a file just sent.
-      val recent = System.currentTimeMillis() - 60_000
-      File(activity.cacheDir, "docs").listFiles()
-        ?.filter { it.isDirectory && it.absolutePath !in keep && it.lastModified() < recent }
-        ?.forEach { it.deleteRecursively() }
-      invoke.resolve()
+      val copies = JSONArray()
+      val stale = System.currentTimeMillis() - 600_000
+      File(activity.cacheDir, "docs").listFiles()?.filter { it.isDirectory }?.forEach { d ->
+        // A folder with no copy (one that failed half-way, long ago) goes.
+        val f = copyIn(d) ?: return@forEach run { if (d.lastModified() < stale) d.deleteRecursively() }
+        copies.put(JSObject().put("path", f.absolutePath).put("name", f.name).put("size", f.length()).put("at", d.lastModified()))
+      }
+      val picked = JSONArray()
+      val folders = JSONArray()
+      for (p in activity.contentResolver.persistedUriPermissions) {
+        if (!p.isReadPermission) continue
+        if (DocumentsContract.isTreeUri(p.uri)) folders.put(JSObject().put("uri", p.uri.toString()).put("name", folderName(p.uri)))
+        else picked.put(p.uri.toString())
+      }
+      invoke.resolve(JSObject().apply {
+        put("copies", copies)
+        put("picked", picked)
+        put("folders", folders)
+        put("allFiles", allFiles())
+      })
     }
   }
 
-  /** Keeps the copies under 512 MB, dropping the least recently opened (never the one just made). */
-  private fun trimCache(keep: File) {
-    val dirs = File(activity.cacheDir, "docs").listFiles()?.filter { it.isDirectory && it != keep } ?: return
-    var total = dirs.sumOf { d -> d.listFiles()?.sumOf { it.length() } ?: 0L }
-    for (d in dirs.sortedBy { it.lastModified() }) {
-      if (total < CACHE_LIMIT) break
-      total -= d.listFiles()?.sumOf { it.length() } ?: 0L
-      d.deleteRecursively()
+  /** A chosen folder's name as the Files app shows it. */
+  private fun folderName(tree: Uri): String {
+    val id = DocumentsContract.getTreeDocumentId(tree)
+    return try {
+      activity.contentResolver.query(DocumentsContract.buildDocumentUriUsingTree(tree, id), arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
+        if (c.moveToFirst()) c.getString(0) else null
+      }
+    } catch (_: Exception) {
+      null
+    } ?: id.substringAfterLast(':').ifEmpty { "Folder" }
+  }
+
+  /** Deletes these copies from the cache (the page decides which: records.ts). */
+  @Command
+  fun dropCopies(invoke: Invoke) {
+    val arr = invoke.getArgs().optJSONArray("paths")
+    val docs = File(activity.cacheDir, "docs").absolutePath + "/"
+    val dirs = (0 until (arr?.length() ?: 0)).mapNotNull { File(arr!!.getString(it)).parentFile }.filter { it.absolutePath.startsWith(docs) }
+    io.execute {
+      dirs.forEach { it.deleteRecursively() }
+      invoke.resolve()
     }
   }
 
@@ -533,6 +640,8 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     private const val CACHE_LIMIT = 512L shl 20
     /** Files this big are read in place rather than copied into the cache. */
     private const val DIRECT_FROM = CACHE_LIMIT / 4
+    /** How much of each end of a file its fingerprint reads. */
+    private const val FP_PART = 64 * 1024
 
     /** What the picker offers: PDF, XPS, e-books, comics, Markdown, pictures (and unnamed files, as many comics are). */
     val MIME_TYPES = arrayOf(

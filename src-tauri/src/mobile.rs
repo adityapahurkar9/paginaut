@@ -53,7 +53,8 @@ pub fn run() {
             safe_area,
             speak,
             stop_speaking,
-            prune_cache,
+            storage,
+            drop_copies,
             share_text,
             release,
         ])
@@ -103,8 +104,8 @@ async fn call(native: &Native<Wry>, cmd: &'static str, args: Value) -> Res<Value
     blocking(move || handle.run_mobile_plugin::<Value>(cmd, args).map_err(|e| e.to_string())).await
 }
 
-/// A document copied into the cache from where Android gave it: `{ path, name, uri }`,
-/// or `{}` when nothing was picked or sent.
+/// A document ready for the engine, from where Android gave it: `{ path, name, uri, inPlace,
+/// lasting, kept, fp }`, or `{}` when nothing was picked or sent.
 #[tauri::command]
 async fn pick_file(native: State<'_, Native<Wry>>) -> Res<Value> {
     call(&native, "pickFile", json!({})).await
@@ -175,8 +176,14 @@ async fn stop_speaking(native: State<'_, Native<Wry>>) -> Res<()> {
     call(&native, "stopSpeaking", json!({})).await.map(|_| ())
 }
 
-/// Drops the copies of documents no longer listed (Recent, and the one open).
+/// What the app keeps and can reach: `{ copies, picked, folders, allFiles }`.
 #[tauri::command]
-async fn prune_cache(native: State<'_, Native<Wry>>, keep: Vec<String>) -> Res<()> {
-    call(&native, "pruneCache", json!({ "keep": keep })).await.map(|_| ())
+async fn storage(native: State<'_, Native<Wry>>) -> Res<Value> {
+    call(&native, "storage", json!({})).await
+}
+
+/// Deletes these copies from the cache (the page decides which).
+#[tauri::command]
+async fn drop_copies(native: State<'_, Native<Wry>>, paths: Vec<String>) -> Res<()> {
+    call(&native, "dropCopies", json!({ "paths": paths })).await.map(|_| ())
 }

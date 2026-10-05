@@ -5,7 +5,8 @@ import { releaseAnalysis } from "./flow";
 import { native, type Picked } from "./native";
 import { stopReading } from "./speech";
 import { back, pushLayer } from "./nav";
-import { busy, chrome, doc, errorText, isTablet, mode, page, recent, remember, say, searching, sheet, type Recent } from "./state";
+import { findRecord, openedRecord, recordById, tidyCache, unlist, updateRecord, type ReadRecord } from "./records";
+import { busy, chrome, doc, errorText, isTablet, mode, page, say, searching, sheet } from "./state";
 
 /** A password asked for: the file's name, and how to answer (null: cancelled). */
 export const passwordAsk = signal<{ name: string; wrong: boolean; answer: (pw: string | null) => void } | null>(null);
@@ -31,7 +32,7 @@ export function setPositionSource(f: () => { page: number; frac: number }) {
 
 const kind = (info: DocInfo, name: string) => (info.isPdf ? "PDF" : (name.split(".").pop() ?? info.format).toUpperCase());
 
-/** Opens a file Android handed over (picked, sent, or from Recent). False if it couldn't be opened
+/** Opens a file Android handed over (picked, sent, from Recent or the shelf). False if it couldn't be opened
  *  (`quiet`: without saying so). */
 export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
   if (!p.path) return false;
@@ -65,18 +66,34 @@ export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
   }
   const wasOpen = !!doc.value;
   closeCurrent();
-  const prev = recent.value.find((r) => r.uri === uri);
-  const at = prev && prev.pages === info.pageCount ? prev : null;
+  // Known by its contents, wherever it came from this time (or as an edited copy of one read before).
+  const at = findRecord({ fp: p.fp ?? "", uri, name, pages: info.pageCount, title: info.title });
   page.value = at ? Math.min(at.page, info.pageCount - 1) : 0;
   // E-books and Markdown are laid out on book-sized pages, too small to read on a phone: they open
   // in Read mode. Everything else (PDFs, comics, XPS) opens as pages.
   const saved = at?.mode === "book" && !isTablet ? "read" : at?.mode;
   mode.value = saved ?? (info.reflowable ? "read" : "pages");
   chrome.value = true;
-  doc.value = { info, name, uri, path: p.path, direct: p.direct };
   startPosition = at ? { page: page.value, frac: at.frac } : { page: 0, frac: 0 };
-  // Big files read in place aren't kept, so Recent couldn't open them again.
-  if (!p.direct) remember({ uri, name, path: p.path, format: kind(info, name), pages: info.pageCount, page: page.value, frac: startPosition.frac, mode: mode.value, at: Date.now() });
+  // Remembered even when it can't be opened from Recent (a big file lent once): where you were
+  // comes back when it's sent again.
+  const rec = openedRecord(at, {
+    uri,
+    fp: p.fp ?? "",
+    copy: p.kept ? p.path : "",
+    lasting: !!p.lasting,
+    name,
+    title: info.title,
+    format: kind(info, name),
+    pages: info.pageCount,
+    page: page.value,
+    frac: startPosition.frac,
+    mode: mode.value,
+    at: Date.now(),
+  });
+  doc.value = { info, name, uri, path: p.path, rec, inPlace: p.inPlace };
+  // A new copy may take the cache over its size.
+  if (p.kept) void tidyCache(p.path);
   // One history entry for the reader, replaced (not stacked) when another file opens from it.
   if (!wasOpen) pushLayer(closeCurrent);
   return true;
@@ -88,20 +105,9 @@ export let startPosition = { page: 0, frac: 0 };
 /** Saves where you are in the open document (on page turns, leaving, and when the app goes to the background). */
 export function savePosition() {
   const d = doc.value;
-  if (!d || d.direct) return;
+  if (!d) return;
   const pos = positionOf();
-  const prev = recent.value.find((r) => r.uri === d.uri);
-  remember({
-    uri: d.uri,
-    name: d.name,
-    path: d.path,
-    format: prev?.format ?? kind(d.info, d.name),
-    pages: d.info.pageCount,
-    page: pos.page,
-    frac: pos.frac,
-    mode: mode.value,
-    at: Date.now(),
-  });
+  updateRecord(d.rec, { page: pos.page, frac: pos.frac, mode: mode.value, at: Date.now() });
 }
 
 /** Closes the open document (the reader's history entry is taken off by whoever asked). */
@@ -118,7 +124,7 @@ export function closeCurrent() {
     .close(d.info.docId)
     .catch(() => {})
     .then(() => {
-      if (d.direct) void native.release(d.path);
+      if (d.inPlace) void native.release(d.path);
     });
 }
 
@@ -136,16 +142,21 @@ export async function pickAndOpen() {
   }
 }
 
-export async function openRecent(r: Recent) {
+export async function openRecent(r: ReadRecord) {
   busy.value = "Opening…";
   try {
-    const p = await native.reopen(r.uri);
+    const p = await native.reopen(r.uris[0]);
     busy.value = null;
     await openPicked(p);
   } catch (e) {
     busy.value = null;
     // The source is gone or no longer readable: the cached copy may still be there.
-    if (!(await openPicked({ path: r.path, name: r.name, uri: r.uri }, true))) say(errorText(e));
+    if (r.copy && (await openPicked({ path: r.copy, name: r.name, uri: r.uris[0], kept: true, fp: r.fp }, true))) return;
+    const msg = errorText(e);
+    say(msg);
+    // Gone, or no longer Paginaut's to open (PaginautPlugin.copyThenResolve): off Recent. Where you
+    // were is kept, for when the file comes back.
+    if (/isn't there any more|can no longer open/.test(msg) && recordById(r.id)) unlist(r.id);
   }
 }
 

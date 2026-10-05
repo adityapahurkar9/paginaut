@@ -4,7 +4,7 @@ import { FolderOpen, Settings, X } from "lucide-preact";
 import { Logo } from "../ui/Logo";
 import { openRecent, pickAndOpen } from "./open";
 import { openSheet } from "./Sheets";
-import { forget, recent, type Recent } from "./state";
+import { progressOf, recent, unlist, type ReadRecord } from "./records";
 
 const FORMAT_COLORS: Record<string, string> = {
   PDF: "#2f5bd3",
@@ -57,7 +57,7 @@ export function Library() {
           <h2>Recent</h2>
           <ul>
             {list.map((r) => (
-              <RecentRow key={r.uri} r={r} removing={removing === r.uri} onHold={() => setRemoving(r.uri)} onDone={() => setRemoving(null)} />
+              <RecentRow key={r.id} r={r} removing={removing === r.id} onHold={() => setRemoving(r.id)} onDone={() => setRemoving(null)} />
             ))}
           </ul>
         </section>
@@ -71,8 +71,8 @@ export function Library() {
   );
 }
 
-function RecentRow({ r, removing, onHold, onDone }: { r: Recent; removing: boolean; onHold: () => void; onDone: () => void }) {
-  const progress = r.pages > 1 ? (r.page + 1) / r.pages : 1;
+function RecentRow({ r, removing, onHold, onDone }: { r: ReadRecord; removing: boolean; onHold: () => void; onDone: () => void }) {
+  const progress = r.pages > 1 ? progressOf(r) : 1;
   const color = FORMAT_COLORS[r.format] ?? "#5b6475";
   const title = r.name.replace(/\.[^.]+$/, "");
   return (
@@ -102,7 +102,7 @@ function RecentRow({ r, removing, onHold, onDone }: { r: Recent; removing: boole
         <button
           class="rec-remove"
           onClick={() => {
-            forget(r.uri);
+            unlist(r.id);
             onDone();
           }}
         >

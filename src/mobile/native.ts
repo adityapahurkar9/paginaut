@@ -1,14 +1,31 @@
 // Android's side (PaginautPlugin.kt, through src-tauri/src/mobile.rs): files, sharing, printing, system bars.
 import { invoke } from "@tauri-apps/api/core";
 
-/** A document copied into the app's cache; empty when nothing was picked or sent. */
+/** A document ready for the engine; empty when nothing was picked or sent. */
 export interface Picked {
   path?: string;
   name?: string;
-  /** Where it came from (content://…), to open it again from Recent. */
+  /** Where it came from (content://…, or a path the shelf found), to open it again. */
   uri?: string;
-  /** A big file read in place (or copied for this visit): not kept, so not listed in Recent. */
-  direct?: boolean;
+  /** Read in place (or copied for this visit): let go once it closes. */
+  inPlace?: boolean;
+  /** Its source can be opened again whenever (picked here, in a shelf folder, a path with all-files access). */
+  lasting?: boolean;
+  /** `path` is a copy kept in the cache. */
+  kept?: boolean;
+  /** Its contents' fingerprint ("" if it couldn't be read). */
+  fp?: string;
+}
+
+/** What the app keeps and can reach. */
+export interface Storage {
+  /** Copies of files lent by other apps: when each was last opened (ms). */
+  copies: { path: string; name: string; size: number; at: number }[];
+  /** Files picked in Paginaut (it can open them again). */
+  picked: string[];
+  /** Folders chosen for the shelf. */
+  folders: { uri: string; name: string }[];
+  allFiles: boolean;
 }
 
 export const native = {
@@ -18,14 +35,15 @@ export const native = {
   reopen: (uri: string) => invoke<Picked>("reopen", { uri }),
   /** `source`: where it came from, shared instead when the file is read in place. */
   share: (path: string, source?: string) => invoke<void>("share", { path, source }),
-  /** Lets go of a big file read in place once its document has closed. */
+  /** Lets go of a file read in place once its document has closed. */
   release: (path: string) => invoke<void>("release", { path }).catch(() => {}),
   shareText: (text: string) => invoke<void>("share_text", { text }),
   /** Android's print dialog; documents other than PDFs are written as a PDF first. */
   print: (doc: number, path: string, title: string, pdf: boolean) => invoke<void>("print", { doc, path, title, pdf }),
   setBars: (dark: boolean, immersive: boolean) => invoke<void>("set_bars", { dark, immersive }).catch(() => {}),
-  /** Drops cached copies of documents not in `keep` (paths of Recent's copies and the open one). */
-  pruneCache: (keep: string[]) => invoke<void>("prune_cache", { keep }).catch(() => {}),
+  storage: () => invoke<Storage>("storage"),
+  /** Deletes these copies from the cache. */
+  dropCopies: (paths: string[]) => invoke<void>("drop_copies", { paths }).catch(() => {}),
   /** What the page must keep clear of (bars, camera cutout, keyboard), in CSS px. */
   safeArea: () => invoke<{ top: number; right: number; bottom: number; left: number }>("safe_area"),
 };

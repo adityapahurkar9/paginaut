@@ -9,7 +9,8 @@ import { native } from "./native";
 import { checkIntent, passwordAsk, savePosition } from "./open";
 import { Reader } from "./Reader";
 import { Sheets } from "./Sheets";
-import { busy, chrome, doc, isDark, recent, searching, settings, sheet, toast } from "./state";
+import { tidyCache } from "./records";
+import { busy, chrome, doc, isDark, searching, settings, sheet, toast } from "./state";
 
 function App() {
   const d = doc.value;
@@ -88,12 +89,11 @@ effect(() => {
   });
 });
 
-// Copies of documents no longer in Recent go (each is only there to reopen one from Recent):
-// checked from the library, so never under a document being opened.
+// Copies the app no longer needs go (records.ts tidyCache), and Recent drops files that can't be
+// opened any more: checked from the library, so never under a document being opened.
 effect(() => {
-  const list = recent.value;
   if (doc.value || busy.value) return;
-  void native.pruneCache(list.map((r) => r.path));
+  void tidyCache();
 });
 
 // Files from other apps ("Open with", Share): at start, whenever the app comes back, and when
@@ -101,6 +101,10 @@ effect(() => {
 void checkIntent();
 (window as unknown as { paginautIntent: () => void }).paginautIntent = () => void checkIntent();
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") void checkIntent();
+  if (document.visibilityState === "visible") {
+    void checkIntent();
+    // Access may have changed meanwhile (all-files access turned off, say).
+    if (!doc.value) void tidyCache();
+  }
   else savePosition();
 });

@@ -1,4 +1,4 @@
-// The Android viewer's state: settings, recent files, the open document and what's shown over it.
+// The Android viewer's state: settings, the open document and what's shown over it.
 import { computed, effect, signal } from "@preact/signals";
 import type { DocInfo } from "../api";
 
@@ -41,7 +41,7 @@ const DEFAULTS: Settings = {
   text: { size: 18, font: "serif", justify: false, spacing: 1.55, margins: "normal", paper: "auto" },
 };
 
-function load<T>(key: string, fallback: T): T {
+export function load<T>(key: string, fallback: T): T {
   try {
     const v = localStorage.getItem(key);
     return v ? (JSON.parse(v) as T) : fallback;
@@ -50,7 +50,7 @@ function load<T>(key: string, fallback: T): T {
   }
 }
 
-function save(key: string, v: unknown) {
+export function save(key: string, v: unknown) {
   try {
     localStorage.setItem(key, JSON.stringify(v));
   } catch {
@@ -80,63 +80,6 @@ effect(() => {
   document.documentElement.dataset.theme = isDark.value ? "dark" : "light";
 });
 
-// ---------------------------------------------------------------- recent files
-
-export interface Recent {
-  /** Where the file came from (content://…); the key. */
-  uri: string;
-  name: string;
-  /** Its copy in the cache (may have been cleared by Android). */
-  path: string;
-  format: string;
-  pages: number;
-  /** Where you were: page, fraction of it scrolled past, and the way you read it. */
-  page: number;
-  frac: number;
-  mode: Mode;
-  at: number;
-}
-
-const MAX_RECENT = 60;
-export const recent = signal<Recent[]>(load<Recent[]>("paginaut.m.recent", []));
-
-export function remember(r: Recent) {
-  recent.value = [r, ...recent.value.filter((x) => x.uri !== r.uri)].slice(0, MAX_RECENT);
-  save("paginaut.m.recent", recent.value);
-}
-
-export function forget(uri: string) {
-  recent.value = recent.value.filter((x) => x.uri !== uri);
-  save("paginaut.m.recent", recent.value);
-}
-
-export function clearRecent() {
-  recent.value = [];
-  save("paginaut.m.recent", []);
-}
-
-/** Pages you marked to come back to, by document (its source, as Recent keys it). Kept in the app, not the file. */
-export interface Bookmark {
-  page: number;
-  at: number;
-}
-export const bookmarks = signal<Record<string, Bookmark[]>>(load<Record<string, Bookmark[]>>("paginaut.m.bookmarks", {}));
-
-export const bookmarksOf = (uri: string) => bookmarks.value[uri] ?? [];
-
-/** Marks the page, or unmarks it if it was. Returns whether it is marked now. */
-export function toggleBookmark(uri: string, page: number): boolean {
-  const list = bookmarksOf(uri);
-  const on = !list.some((b) => b.page === page);
-  const next = on ? [...list, { page, at: Date.now() }].sort((a, b) => a.page - b.page) : list.filter((b) => b.page !== page);
-  const all = { ...bookmarks.value };
-  if (next.length) all[uri] = next;
-  else delete all[uri];
-  bookmarks.value = all;
-  save("paginaut.m.bookmarks", all);
-  return on;
-}
-
 // ---------------------------------------------------------------- the open document
 
 export interface OpenDoc {
@@ -144,8 +87,10 @@ export interface OpenDoc {
   name: string;
   uri: string;
   path: string;
-  /** A big file read in place: not kept, not in Recent, let go when it closes. */
-  direct?: boolean;
+  /** Its record (where you are, bookmarks: records.ts). */
+  rec: string;
+  /** Read in place (or copied for this visit): let go when it closes. */
+  inPlace?: boolean;
 }
 
 export const doc = signal<OpenDoc | null>(null);
