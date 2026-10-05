@@ -54,7 +54,11 @@ export async function installUpdate() {
   persistPositions();
   updateState.value = { phase: "downloading", done: 0, total: 0 };
   try {
-    await api.updateInstall((e) => (updateState.value = { phase: "downloading", done: e.done, total: e.total }));
+    const quitting = await api.updateInstall((e) => (updateState.value = { phase: "downloading", done: e.done, total: e.total }));
+    if (!quitting) {
+      updateState.value = s;
+      showToast("The new version opened in your software installer: install it there, then start Paginaut again.", 9000);
+    }
   } catch (e) {
     updateState.value = String(e) === "stopped" ? s : { phase: "error", message: String(e) };
   }

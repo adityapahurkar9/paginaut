@@ -1224,9 +1224,10 @@ pub async fn update_check(app: tauri::AppHandle) -> Res<crate::update::Checked> 
     .await
 }
 
-/// Downloads the newer version found by the check, checks its signature, starts its installer and quits.
+/// Downloads the newer version found by the check, checks its signature, starts its installer and quits. False
+/// when Paginaut stays open (Linux's .deb: the software installer takes over).
 #[tauri::command]
-pub async fn update_install(app: tauri::AppHandle, on_event: Channel<DownloadEvent>) -> Res<()> {
+pub async fn update_install(app: tauri::AppHandle, on_event: Channel<DownloadEvent>) -> Res<bool> {
     let dir = std::env::temp_dir().join("Paginaut update");
     // Installers from earlier updates (and a stopped download) go first: only the new one is kept.
     let _ = std::fs::remove_dir_all(&dir);
@@ -1241,9 +1242,11 @@ pub async fn update_install(app: tauri::AppHandle, on_event: Channel<DownloadEve
         })
     })
     .await?;
-    crate::update::run_installer(&installer)?;
-    app.exit(0);
-    Ok(())
+    if crate::update::run_installer(&installer)? {
+        app.exit(0);
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 #[tauri::command]
