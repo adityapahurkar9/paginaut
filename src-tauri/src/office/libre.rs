@@ -263,6 +263,7 @@ fn free_space(dir: &Path) -> Option<u64> {
 /// Document Foundation publishes and its code signature, and unpacks it into `dir` without installing
 /// anything. Parts a converter doesn't need (help, other languages' menus and dictionaries, icon themes)
 /// are left out: about 600 MB instead of 1.6 GB. `work` holds the download meanwhile.
+#[cfg_attr(not(windows), allow(unreachable_code))]
 pub fn install(dir: &Path, work: &Path, profile: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(Stage, u64, u64)) -> Result<Lo, String> {
     // Linux: programs come from the distribution, which keeps them up to date.
     #[cfg(not(windows))]
@@ -343,6 +344,7 @@ pub fn set_up(msi: &Path, version: &str, sha256: &str, dir: &Path, profile: &Pat
 
 /// An administrative install: Windows Installer copies the files out of the package into `to`, and
 /// installs nothing.
+#[cfg_attr(not(windows), allow(unused_variables))]
 fn unpack(msi: &Path, to: &Path) -> Result<(), String> {
     let full = |p: &Path| std::path::absolute(p).map_err(|e| e.to_string());
     let (msi, to) = (full(msi)?, full(to)?);

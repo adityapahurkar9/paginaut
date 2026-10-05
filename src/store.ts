@@ -138,6 +138,11 @@ export function forgetFile(path: string) {
 
 export const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
 
+/** Running on Linux (the desktop app's other system): words and choices that name Windows change with it. */
+export const onLinux = /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);
+/** "Match Windows" / "Match system": following the system's light or dark setting. */
+export const MATCH_SYSTEM = onLinux ? "Match system" : "Match Windows";
+
 // ---------------------------------------------------------------- tabs
 
 export type TabStatus = "loading" | "password" | "ready" | "error";

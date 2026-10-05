@@ -94,6 +94,7 @@ pub fn speak(text: &str, voice: &str, rate: f64) -> Result<(Vec<u8>, Vec<Word>),
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 pub fn speak(_: &str, _: &str, _: f64) -> Result<(Vec<u8>, Vec<Word>), String> {
     Err("Get a voice first: Settings › Voices.".into())
 }

@@ -9,6 +9,9 @@
 //! uninstall leaves a note of what was offered, and the install that follows offers it again and recreates any
 //! ProgID a default still names.
 
+// Most of this is Windows' registry; Linux uses the kinds and `linux` below.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 use serde::Serialize;
 
 /// A kind of file Paginaut can be offered for: one ProgID ("Paginaut.<id>") for all its extensions.
@@ -20,24 +23,28 @@ pub struct Kind {
     pub core: bool,
     /// Files other apps own (Office files, pictures): shown apart, and offered only when picked.
     pub others: bool,
+    /// Their MIME types, which Linux goes by (xdg-mime, the .desktop file's MimeType).
+    #[cfg_attr(windows, allow(dead_code))]
+    pub mimes: &'static [&'static str],
 }
 
 pub const KINDS: &[Kind] = &[
-    Kind { id: "pdf", name: "PDF document", exts: &["pdf"], core: true, others: false },
-    Kind { id: "xps", name: "XPS document", exts: &["xps", "oxps"], core: true, others: false },
-    Kind { id: "ebook", name: "E-book", exts: &["epub", "mobi", "fb2", "fbz"], core: true, others: false },
-    Kind { id: "comic", name: "Comic book", exts: &["cbz", "cbr"], core: true, others: false },
-    Kind { id: "markdown", name: "Markdown document", exts: &["md", "markdown"], core: false, others: false },
+    Kind { id: "pdf", name: "PDF document", exts: &["pdf"], core: true, others: false, mimes: &["application/pdf"] },
+    Kind { id: "xps", name: "XPS document", exts: &["xps", "oxps"], core: true, others: false, mimes: &["application/oxps", "application/vnd.ms-xpsdocument"] },
+    Kind { id: "ebook", name: "E-book", exts: &["epub", "mobi", "fb2", "fbz"], core: true, others: false, mimes: &["application/epub+zip", "application/x-mobipocket-ebook", "application/x-fictionbook+xml", "application/x-zip-compressed-fb2"] },
+    Kind { id: "comic", name: "Comic book", exts: &["cbz", "cbr", "cbt"], core: true, others: false, mimes: &["application/vnd.comicbook+zip", "application/x-cbz", "application/vnd.comicbook-rar", "application/x-cbr", "application/x-cbt"] },
+    Kind { id: "markdown", name: "Markdown document", exts: &["md", "markdown"], core: false, others: false, mimes: &["text/markdown"] },
     Kind {
         id: "picture",
         name: "Picture",
         exts: &["png", "jpg", "jpeg", "jfif", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "pnm", "pbm", "pgm", "ppm", "pam", "jxr"],
         core: false,
         others: true,
+        mimes: &["image/png", "image/jpeg", "image/tiff", "image/bmp", "image/gif", "image/jp2", "image/jpx", "image/vnd.adobe.photoshop", "image/x-portable-anymap", "image/x-portable-bitmap", "image/x-portable-graymap", "image/x-portable-pixmap", "image/jxr"],
     },
-    Kind { id: "word", name: "Word document", exts: &["docx", "doc", "docm", "dotx", "dot", "dotm", "rtf", "odt", "ott"], core: false, others: true },
-    Kind { id: "excel", name: "Spreadsheet", exts: &["xlsx", "xls", "xlsm", "xlsb", "xltx", "xlt", "ods", "ots"], core: false, others: true },
-    Kind { id: "powerpoint", name: "Presentation", exts: &["pptx", "ppt", "pptm", "ppsx", "pps", "potx", "pot", "odp", "otp"], core: false, others: true },
+    Kind { id: "word", name: "Word document", exts: &["docx", "doc", "docm", "dotx", "dot", "dotm", "rtf", "odt", "ott"], core: false, others: true, mimes: &["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword", "application/vnd.ms-word.document.macroEnabled.12", "application/vnd.openxmlformats-officedocument.wordprocessingml.template", "application/rtf", "application/vnd.oasis.opendocument.text", "application/vnd.oasis.opendocument.text-template"] },
+    Kind { id: "excel", name: "Spreadsheet", exts: &["xlsx", "xls", "xlsm", "xlsb", "xltx", "xlt", "ods", "ots"], core: false, others: true, mimes: &["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel", "application/vnd.ms-excel.sheet.macroEnabled.12", "application/vnd.ms-excel.sheet.binary.macroEnabled.12", "application/vnd.openxmlformats-officedocument.spreadsheetml.template", "application/vnd.oasis.opendocument.spreadsheet", "application/vnd.oasis.opendocument.spreadsheet-template"] },
+    Kind { id: "powerpoint", name: "Presentation", exts: &["pptx", "ppt", "pptm", "ppsx", "pps", "potx", "pot", "odp", "otp"], core: false, others: true, mimes: &["application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/vnd.ms-powerpoint", "application/vnd.ms-powerpoint.presentation.macroEnabled.12", "application/vnd.openxmlformats-officedocument.presentationml.slideshow", "application/vnd.openxmlformats-officedocument.presentationml.template", "application/vnd.oasis.opendocument.presentation", "application/vnd.oasis.opendocument.presentation-template"] },
 ];
 
 /// ProgIDs the installers of 0.7 and earlier made (Tauri's own associations), cleaned up on the way.
@@ -58,6 +65,7 @@ pub struct KindStatus {
 }
 
 /// This copy was installed (the installer puts its uninstaller next to it), so it may offer itself in Windows.
+#[cfg(windows)]
 pub fn installed(exe: &std::path::Path) -> bool {
     exe.parent().is_some_and(|d| d.join("uninstall.exe").is_file())
 }
@@ -409,8 +417,128 @@ pub fn open_settings(n: &Names) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-pub fn open_settings(_: &Names) -> Result<(), String> {
-    Err("Only on Windows.".into())
+pub use linux::{installed, open_settings, register, status};
+
+/// Linux: the desktop entry (paginaut.desktop from the .deb, or one written for an AppImage) lists every type
+/// Paginaut opens, so it's offered for all of them in "Open with"; making it the default is `xdg-mime default`,
+/// which Linux leaves to apps. Giving a type back is done in the file manager (Open with › Set as default):
+/// there's no earlier choice to return to.
+#[cfg(not(windows))]
+mod linux {
+    use super::{KindStatus, Names, KINDS};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    /// Every copy can: the .deb's has its desktop entry, an AppImage writes one for this user.
+    pub fn installed(_: &Path) -> bool {
+        true
+    }
+
+    fn data_dirs() -> Vec<PathBuf> {
+        let home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+        let sys = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+        home.into_iter().chain(sys.split(':').filter(|d| !d.is_empty()).map(PathBuf::from)).collect()
+    }
+
+    /// The desktop entry that starts this copy: an AppImage's own (written here when missing), or the
+    /// installed one whose Exec runs this program.
+    fn desktop_id(exe: &Path) -> Option<String> {
+        if let Some(appimage) = std::env::var_os("APPIMAGE") {
+            return appimage_entry(Path::new(&appimage)).ok();
+        }
+        let name = exe.file_name()?.to_string_lossy().into_owned();
+        for dir in data_dirs() {
+            let Ok(list) = std::fs::read_dir(dir.join("applications")) else { continue };
+            for e in list.flatten() {
+                let file = e.file_name().to_string_lossy().into_owned();
+                if !file.ends_with(".desktop") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+                let runs_us = text.lines().filter_map(|l| l.strip_prefix("Exec=")).any(|cmd| {
+                    let prog = cmd.split_whitespace().next().unwrap_or("").trim_matches('"');
+                    Path::new(prog) == exe || prog == name
+                });
+                if runs_us {
+                    return Some(file);
+                }
+            }
+        }
+        None
+    }
+
+    /// ~/.local/share/applications/paginaut-appimage.desktop, running the AppImage wherever it is now.
+    fn appimage_entry(appimage: &Path) -> Result<String, String> {
+        let id = "paginaut-appimage.desktop";
+        let dir = data_dirs().into_iter().next().ok_or("no home folder")?.join("applications");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let mimes: Vec<&str> = KINDS.iter().flat_map(|k| k.mimes.iter().copied()).collect();
+        let entry = format!(
+            "[Desktop Entry]
+Type=Application
+Name=Paginaut
+Comment=Read, edit and sign PDFs, e-books and comics
+Exec=\"{}\" %F
+Icon=paginaut
+Terminal=false
+Categories=Office;Viewer;
+MimeType={};
+",
+            appimage.display(),
+            mimes.join(";")
+        );
+        let path = dir.join(id);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(entry.as_str()) {
+            std::fs::write(&path, entry).map_err(|e| e.to_string())?;
+            let _ = Command::new("update-desktop-database").arg(&dir).status();
+        }
+        Ok(id.to_string())
+    }
+
+    fn default_for(mime: &str) -> Option<String> {
+        let out = Command::new("xdg-mime").args(["query", "default", mime]).output().ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    pub fn status(_: &Names, exe: &Path) -> Vec<KindStatus> {
+        let me = desktop_id(exe);
+        KINDS
+            .iter()
+            .map(|k| {
+                let ours = k.mimes.iter().filter(|m| me.is_some() && default_for(m) == me).count();
+                KindStatus {
+                    id: k.id,
+                    name: k.name,
+                    exts: k.exts,
+                    core: k.core,
+                    others: k.others,
+                    offered: me.is_some(),
+                    // Counted in extensions, as on Windows: all of them when every MIME type opens here.
+                    default_for: if ours == k.mimes.len() { k.exts.len() } else { ours.min(k.exts.len().saturating_sub(1)) },
+                }
+            })
+            .collect()
+    }
+
+    /// Makes Paginaut the default for the kinds `ids`.
+    pub fn register(_: &Names, exe: &Path, ids: &[&str]) -> Result<(), String> {
+        let me = desktop_id(exe).ok_or("Paginaut's desktop entry wasn't found: install it from its .deb, or run the AppImage once.")?;
+        let mimes: Vec<&str> = KINDS.iter().filter(|k| ids.contains(&k.id)).flat_map(|k| k.mimes.iter().copied()).collect();
+        if mimes.is_empty() {
+            return Ok(());
+        }
+        let ok = Command::new("xdg-mime").arg("default").arg(&me).args(&mimes).status().map_err(|e| format!("Couldn't run xdg-mime: {e}"))?;
+        if ok.success() {
+            Ok(())
+        } else {
+            Err("xdg-mime couldn't set the default app.".into())
+        }
+    }
+
+    /// No system page to open: `register` sets the default itself.
+    pub fn open_settings(_: &Names) -> Result<(), String> {
+        Err("On Linux, Paginaut sets itself as the default directly: tick the types above.".into())
+    }
 }
 
 /// The installer's `--register-types`: the kinds offered before (still registered, or noted by the uninstall of an
@@ -433,15 +561,6 @@ pub fn register_for_install(n: &Names, exe: &std::path::Path) -> Result<(), Stri
     register(n, exe, &ids)
 }
 
-#[cfg(not(windows))]
-pub fn status(_: &Names, _: &std::path::Path) -> Vec<KindStatus> {
-    Vec::new()
-}
-
-#[cfg(not(windows))]
-pub fn register(_: &Names, _: &std::path::Path, _: &[&str]) -> Result<(), String> {
-    Err("Only on Windows.".into())
-}
 
 #[cfg(test)]
 mod tests {

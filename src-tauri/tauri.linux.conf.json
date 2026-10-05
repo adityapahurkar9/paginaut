@@ -1,0 +1,32 @@
+{
+  "bundle": {
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Read, edit and sign PDFs, e-books and comics",
+    "longDescription": "Paginaut reads PDFs, e-books (EPUB, MOBI, FB2), comics (CBZ, CBR, CBT), XPS, Markdown and pictures, and edits, comments on, fills, signs, compresses, converts and reads aloud PDFs. Office files open through LibreOffice when it's installed. Everything happens on this computer.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "xdg-utils"
+        ],
+        "section": "text",
+        "desktopTemplate": "./linux/paginaut.desktop"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
+  }
+}

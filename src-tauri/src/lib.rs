@@ -19,6 +19,8 @@ mod defaults;
 mod snap;
 #[cfg(windows)]
 mod print;
+#[cfg(target_os = "linux")]
+mod print_linux;
 #[cfg(desktop)]
 mod tts;
 #[cfg(desktop)]

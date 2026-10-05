@@ -1356,7 +1356,8 @@ fn app_memory() -> u64 {
         }
         false
     };
-    let pids: Vec<Pid> = procs.keys().copied().filter(|p| mine(*p)).collect();
+    // (On Linux sysinfo lists each thread as a process too: those share their process's memory.)
+    let pids: Vec<Pid> = procs.iter().filter(|(p, x)| x.thread_kind().is_none() && mine(**p)).map(|(p, _)| *p).collect();
     // (sysinfo's figure is the commit charge on Windows, but the whole address space on Linux.)
     let total = pids.iter().filter_map(|p| if cfg!(windows) { procs.get(p).map(|x| x.virtual_memory()) } else { private_bytes(p.as_u32()) }).sum();
     *guard = Some((pids, std::time::Instant::now()));
@@ -1436,6 +1437,14 @@ pub async fn tts_speak(piper: State<'_, crate::piper::Voices>, text: String, voi
     blocking(move || {
         let (wav, words) = match voice.strip_prefix(crate::piper::PREFIX) {
             Some(id) => piper.speak(id, &text, rate)?,
+            // Linux has only Piper's voices: "automatic" is the first one installed (the page picks one for
+            // the text's language when there is one).
+            #[cfg(not(windows))]
+            None => {
+                let first = piper.installed().into_iter().next().ok_or("Get a voice first: Settings › Read aloud.")?;
+                piper.speak(first.id.strip_prefix(crate::piper::PREFIX).unwrap_or(&first.id), &text, rate)?
+            }
+            #[cfg(windows)]
             None => crate::tts::speak(&text, &voice, rate)?,
         };
         let json = serde_json::to_vec(&words).map_err(|e| e.to_string())?;
@@ -1557,10 +1566,42 @@ pub async fn print_doc(
         PRINTING.store(false, Ordering::Release);
         r
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
-        let _ = (window, state, doc, name, pages, current, on_event);
-        Err("Printing isn't available here.".into())
+        use std::sync::atomic::Ordering;
+        let pages: Vec<crate::print_linux::Shown> = pages.into_iter().map(serde_json::from_value).collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+        if PRINTING.swap(true, Ordering::AcqRel) {
+            return Err("Something is already printing.".into());
+        }
+        let engine = state.engine.clone();
+        let r = async {
+            let (tx, mut rx) = tauri::async_runtime::channel(1);
+            let (w, count) = (window.clone(), pages.len());
+            window.run_on_main_thread(move || {
+                let _ = tx.try_send(crate::print_linux::ask(&w, count, current));
+            })
+            .map_err(|e| e.to_string())?;
+            let Some(chosen) = rx.recv().await.ok_or("The print dialog closed unexpectedly.")? else { return Ok(None) };
+            let total = chosen.len();
+            let _ = on_event.send(PrintEvent::Started { total });
+            let file = std::env::temp_dir().join(format!("paginaut-print-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+            let f = file.clone();
+            blocking(move || crate::print_linux::write(&engine, doc, &pages, &chosen, &f)).await?;
+            let (tx, mut rx) = tauri::async_runtime::channel(1);
+            window
+                .run_on_main_thread(move || {
+                    crate::print_linux::send(&name, file, move |r| {
+                        let _ = tx.try_send(r);
+                    })
+                })
+                .map_err(|e| e.to_string())?;
+            rx.recv().await.ok_or("The printer stopped answering.")??;
+            let _ = on_event.send(PrintEvent::Page { done: total });
+            Ok(Some(total))
+        }
+        .await;
+        PRINTING.store(false, Ordering::Release);
+        r
     }
 }
 
@@ -1575,5 +1616,8 @@ pub fn snap_button(x: i32, y: i32, w: i32, h: i32, shown: bool) -> Res<()> {
     #[cfg(windows)]
     return crate::snap::place(x, y, w, h, shown);
     #[cfg(not(windows))]
-    Ok(())
+    {
+        let _ = (x, y, w, h, shown);
+        Ok(())
+    }
 }

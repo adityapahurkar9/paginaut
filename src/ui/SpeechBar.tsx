@@ -3,7 +3,7 @@
 import { useEffect } from "preact/hooks";
 import { Pause, Play, SkipBack, SkipForward, Square } from "lucide-preact";
 import { loadVoices, pauseOrResume, RATES, setSpeech, skipParagraph, speaking, speechPrefs, stopReading, voices } from "../speech";
-import { activeTab } from "../store";
+import { activeTab, onLinux } from "../store";
 
 const voiceName = (n: string) => n.replace(/^Microsoft\s+/, "").replace(/\s+Desktop$/, "");
 
@@ -14,8 +14,16 @@ export function VoiceChoices() {
   const chosen = list.some((v) => v.id === voice) ? voice : "";
   return (
     <>
-      <select class="inp sm" aria-label="Voice" title="Voice. Windows' voice switches to one for the text's language when there is one (download natural voices in Settings › Read aloud)" value={chosen} onChange={(e) => setSpeech({ voice: e.currentTarget.value })}>
-        <option value="">{`Windows' voice${list.find((v) => v.default) ? ` (${voiceName(list.find((v) => v.default)!.name)})` : ""}`}</option>
+      <select
+        class="inp sm"
+        aria-label="Voice"
+        title={onLinux ? "Voice: download natural voices in Settings › Read aloud" : "Voice. Windows' voice switches to one for the text's language when there is one (download natural voices in Settings › Read aloud)"}
+        value={chosen}
+        onChange={(e) => setSpeech({ voice: e.currentTarget.value })}
+      >
+        <option value="">
+          {onLinux ? (list.length ? "Automatic (a downloaded voice)" : "No voice yet: get one in Settings") : `Windows' voice${list.find((v) => v.default) ? ` (${voiceName(list.find((v) => v.default)!.name)})` : ""}`}
+        </option>
         {list.map((v) => (
           <option key={v.id} value={v.id}>
             {voiceName(v.name)} · {v.lang}

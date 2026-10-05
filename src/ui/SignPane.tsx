@@ -7,7 +7,7 @@ import { annotTool, selectedAnnot, type AnnotTool } from "../annots";
 import { bookScreen } from "../modes";
 import * as P from "../pages";
 import { creating, deleteSig, loadSigs, paneFocus, pickSig, sigs, sigsOf, type SigEntry, type SigKind } from "../sign";
-import { activeTab, ask, showToast, type Tab } from "../store";
+import { activeTab, ask, onLinux, showToast, type Tab } from "../store";
 import { CertSection } from "./CertSection";
 import { Maker } from "./SignMaker";
 import { DocSigs } from "./SigPanel";
@@ -43,7 +43,7 @@ export function SignPane() {
         <Section id="mine" title="My signatures">
           <Library kind="signature" tab={ready} />
           <Library kind="initials" tab={ready} />
-          <p class="muted small">Kept on this PC, encrypted for your Windows account.</p>
+          <p class="muted small">{onLinux ? "Kept on this computer, encrypted with a key in your desktop's keyring." : "Kept on this PC, encrypted for your Windows account."}</p>
         </Section>
         <Section id="marks" title="Fill & Sign">
           <Marks tab={ready} />

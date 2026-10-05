@@ -39,7 +39,7 @@ import { checkFromMenu } from "../update";
 import { isMarkdown, toggleMdPane } from "../markdown";
 import { pickAndConvert } from "./OfficeUI";
 import { openCompareSetup } from "../compare";
-import { activeTab, isDark, openFiles, openSettings, recent, settings, updateSettings, type Settings, type Tab } from "../store";
+import { activeTab, isDark, MATCH_SYSTEM, onLinux, openFiles, openSettings, recent, settings, updateSettings, type Settings, type Tab } from "../store";
 import { tool } from "./App";
 import { Menu, type MenuItem } from "./Overlays";
 
@@ -306,7 +306,7 @@ function ViewTools({ tab }: { tab: Tab | null }) {
     openMenu(e, [
       { label: "Light", check: s.theme === "light", run: () => updateSettings({ theme: "light" }) },
       { label: "Dark", check: s.theme === "dark", run: () => updateSettings({ theme: "dark" }) },
-      { label: "Match Windows", check: s.theme === "system", run: () => updateSettings({ theme: "system" }) },
+      { label: MATCH_SYSTEM, check: s.theme === "system", run: () => updateSettings({ theme: "system" }) },
       { sep: true },
       { head: currentTheme().name },
       ...(s.skin ? [{ label: "Show the skin", check: !s.skin.off, run: () => setSkin({ off: !s.skin!.off }) }] : []),
@@ -338,7 +338,7 @@ function ViewTools({ tab }: { tab: Tab | null }) {
       <TB
         icon={I(AudioLines, 17)}
         label={speaking.value ? "Stop reading" : "Read aloud"}
-        title="Read the text aloud with a Windows or downloaded voice, from where you are or the text you selected (Ctrl+Shift+U)"
+        title={`Read the text aloud with a ${onLinux ? "" : "Windows or "}downloaded voice, from where you are or the text you selected (Ctrl+Shift+U)`}
         on={!!speaking.value}
         disabled={!tab && !speaking.value}
         onClick={() => toggleReadAloud(tab)}

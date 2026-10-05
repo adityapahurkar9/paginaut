@@ -8,7 +8,7 @@ import { deleteModel, downloadModel, downloads, loadLangs, ocrLangs, rememberCho
 import { moveOnRail, onRail, openPane, railOrder, railShown, resetRail, setOnRail, setRailShown } from "../panes";
 import { downloadVoice, loadPiperVoices, piperVoices, playSample, removeVoice, samplePlaying, stopVoiceDownload, voiceDownloads, type PiperVoice } from "../speech";
 import { VoiceChoices } from "./SpeechBar";
-import { settings, settingsOpen, updateSettings, type Settings, type SettingsTab } from "../store";
+import { onLinux, settings, settingsOpen, updateSettings, type Settings, type SettingsTab } from "../store";
 import { About, Shortcuts } from "./HelpDialogs";
 import { OfficeSettings } from "./OfficeUI";
 import { PANES } from "./Rail";
@@ -366,7 +366,14 @@ function ReadAloud() {
     <>
       <h3>Read aloud</h3>
       <span class="hint">View › Read aloud (Ctrl+Shift+U) reads the document's text, as Read mode shows it.</span>
-      <Field label="Voice and speed" hint="Windows' voice switches to one for the text's language when there is one: a downloaded voice below first, else one installed in Windows (Settings › Time & language › Speech).">
+      <Field
+        label="Voice and speed"
+        hint={
+          onLinux
+            ? "Download a natural voice below (about 60 MB each): Automatic then reads with one for the text's language."
+            : "Windows' voice switches to one for the text's language when there is one: a downloaded voice below first, else one installed in Windows (Settings › Time & language › Speech)."
+        }
+      >
         <div class="set-row">
           <VoiceChoices />
         </div>

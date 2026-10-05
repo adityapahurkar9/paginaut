@@ -4,7 +4,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
-import { isDark, settings, showToast, updateSettings } from "../store";
+import { isDark, MATCH_SYSTEM, onLinux, settings, showToast, updateSettings } from "../store";
 import {
   allThemes, chooseTheme, contrastNotes, currentTheme, deleteCustom, fitAdjust, fitProblems, installedFonts, loadFontLists, lookFor, paperNote, PRESETS, previewTheme,
   saveCustom, themeFromPicture, userFonts, type Look, type Palette, type Theme,
@@ -65,7 +65,7 @@ export function ThemesTab() {
       <div class="tool-field">
         <label>Light or dark</label>
         <div class="seg">
-          {([["light", "Light"], ["dark", "Dark"], ["system", "Match Windows"]] as const).map(([v, label]) => (
+          {([["light", "Light"], ["dark", "Dark"], ["system", MATCH_SYSTEM]] as const).map(([v, label]) => (
             <button key={v} class={`segb ${s.theme === v ? "on" : ""}`} onClick={() => updateSettings({ theme: v })}>
               {label}
             </button>
@@ -327,7 +327,7 @@ function Editor({ start, picture, setPicture, onDone }: { start: Theme; picture:
                 ))}
               </optgroup>
             )}
-            <optgroup label="Installed in Windows">
+            <optgroup label={onLinux ? "Installed fonts" : "Installed in Windows"}>
               {installedFonts.value.map((f) => (
                 <option key={f} value={`"${f}"`}>
                   {f}

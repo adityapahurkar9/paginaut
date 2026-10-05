@@ -4,7 +4,7 @@
 // offers itself (a development build or a copied folder shows what's set, read-only).
 import { useEffect, useState } from "preact/hooks";
 import { api, type DefaultApps, type DefaultKind } from "../api";
-import { showToast } from "../store";
+import { onLinux, showToast } from "../store";
 
 export function DefaultAppTab() {
   const [state, setState] = useState<DefaultApps | null>(null);
@@ -17,6 +17,7 @@ export function DefaultAppTab() {
     return () => window.removeEventListener("focus", load);
   }, []);
   if (!state) return <h3>Default app</h3>;
+  if (onLinux) return <LinuxDefaults state={state} setState={setState} />;
   const { installed, kinds } = state;
   const offer = async (id: string, on: boolean) => {
     setBusy(true);
@@ -63,6 +64,53 @@ export function DefaultAppTab() {
         </button>
         {offered.length > 0 && offered.every((k) => k.defaultFor === k.exts.length) && <span class="hint">Paginaut opens every ticked type.</span>}
       </div>
+    </>
+  );
+}
+
+/** Linux lets apps set the default themselves (xdg-mime): ticking a type makes Paginaut open it, straight away. */
+function LinuxDefaults({ state, setState }: { state: DefaultApps; setState: (s: DefaultApps) => void }) {
+  const [busy, setBusy] = useState(false);
+  const take = async (id: string) => {
+    setBusy(true);
+    try {
+      setState(await api.defaultAppsSet([id]));
+    } catch (e) {
+      showToast(String(e), 6000);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const row = (k: DefaultKind) => {
+    const all = k.defaultFor === k.exts.length;
+    return (
+      <label
+        key={k.id}
+        class={`set-rail-row def-row ${all ? "" : "off"}`}
+        title={all ? "Paginaut opens these. To give them to another app, choose it in your file manager (Open with › Set as default)." : undefined}
+      >
+        <input type="checkbox" checked={all} disabled={busy || all || !k.offered} onChange={() => void take(k.id)} />
+        <span>
+          {k.name}
+          <small> {k.exts.map((e) => `.${e}`).join(" ")}</small>
+        </span>
+        {k.defaultFor > 0 && !all && <b class="def-badge">{`Default for ${k.defaultFor} of ${k.exts.length}`}</b>}
+      </label>
+    );
+  };
+  return (
+    <>
+      <h3>Default app</h3>
+      <span class="hint">
+        Tick the files Paginaut should open when you double-click them. It's set straight away; to give a type back to another app, choose that app in your
+        file manager (Open with › Set as default).
+      </span>
+      {!state.kinds.some((k) => k.offered) && (
+        <span class="theme-warn">Paginaut's desktop entry wasn't found. Install Paginaut from its .deb package, or start the AppImage once, then come back here.</span>
+      )}
+      <div class="set-rail">{state.kinds.filter((k) => !k.others).map(row)}</div>
+      <span class="hint">Office files and pictures stay with their own apps unless you tick them here.</span>
+      <div class="set-rail">{state.kinds.filter((k) => k.others).map(row)}</div>
     </>
   );
 }
