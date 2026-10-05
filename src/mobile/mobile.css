@@ -323,11 +323,12 @@ button.row { width: 100%; padding: 0; border: 0; background: transparent; text-a
 .shelf-sort button { height: 28px; padding: 0 10px; font-size: 12.5px; }
 .shelf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 16px 12px; }
 .tile { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--tx); text-align: left; }
-.cover { position: relative; display: flex; align-items: flex-end; aspect-ratio: 2 / 3; border-radius: 6px; overflow: hidden; background: var(--hover); box-shadow: 0 1px 3px rgba(10, 16, 40, 0.18); }
-.cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.cover-t { padding: 8px; font-size: 12.5px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+/* 2:3 by padding (WebView 83, on Android 11 tablets, has no aspect-ratio). */
+.cover { position: relative; display: block; width: 100%; height: 0; padding-top: 150%; border-radius: 6px; overflow: hidden; background: var(--hover); box-shadow: 0 1px 3px rgba(10, 16, 40, 0.18); }
+.cover img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+.cover-t { position: absolute; left: 0; right: 0; bottom: 0; padding: 8px; font-size: 12.5px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
 .tile:active .cover { filter: brightness(0.92); }
-.tile-bar { height: 3px; margin-top: 2px; border-radius: 2px; background: var(--hover); overflow: hidden; }
+.tile-bar { display: block; width: 100%; height: 3px; margin-top: 2px; border-radius: 2px; background: var(--hover); overflow: hidden; }
 .tile-bar span { display: block; height: 100%; background: var(--acc); }
 .tile-t { font-size: 13px; font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .tile-a { font-size: 11.5px; color: var(--tx2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -350,3 +351,14 @@ button.row { width: 100%; padding: 0; border: 0; background: transparent; text-a
 .lib-find input { flex: 1; min-width: 0; height: 44px; padding: 0 14px; border: 0; border-radius: 12px; background: var(--panel); color: var(--tx); font-size: 16px; outline: none; }
 .lib-find input::-webkit-search-cancel-button { display: none; }
 .find-none { margin: 18px 4px; }
+
+/* WebView before 84 (Android 11 tablets that never updated it) has no gap in flex layouts. */
+@supports not (aspect-ratio: 1 / 1) {
+  .lib-tabs button { margin-right: 6px; }
+  .lib-tabs .n, .row-value svg { margin-left: 6px; }
+  .tile > * + * { margin-top: 4px; }
+  .shelf-where > * + *, .store-list li > * + *, .lib-find > * + * { margin-left: 10px; }
+  .store-badge { margin-left: 6px; }
+  .shelf-setup > * + * { margin-top: 12px; }
+  .shelf-setup .btn svg { margin-right: 8px; }
+}
