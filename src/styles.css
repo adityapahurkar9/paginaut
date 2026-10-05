@@ -446,7 +446,9 @@ kbd { font: 11px var(--font); padding: 2px 6px; border-radius: 5px; border: 1px 
   max-width: var(--rf-measure); box-sizing: content-box; margin: 26px auto 60px; padding: 52px 64px 80px;
   background: var(--rf-paper); box-shadow: var(--page-shadow); border-radius: 3px; min-height: calc(100% - 200px);
 }
-.rf-sec { content-visibility: auto; contain-intrinsic-size: auto 900px; }
+/* Read mode's chunks: only those near the view hold text (ReadView). A paragraph's next part sits right under it. */
+.rf-sec { overflow-anchor: auto; }
+.rf-sec > .cont, .rf-sec.cont { margin-top: 0 !important; }
 .rf-empty { color: var(--rf-ink-soft); text-align: center; }
 @media (max-width: 760px) { .rf-col { padding: 28px 22px 60px; margin: 0 auto; } }
 

@@ -5,7 +5,7 @@ import { releaseAnalysis } from "./flow";
 import { native, type Picked } from "./native";
 import { stopReading } from "./speech";
 import { back, pushLayer } from "./nav";
-import { busy, chrome, doc, errorText, mode, page, recent, remember, say, searching, sheet, type Recent } from "./state";
+import { busy, chrome, doc, errorText, isTablet, mode, page, recent, remember, say, searching, sheet, type Recent } from "./state";
 
 /** A password asked for: the file's name, and how to answer (null: cancelled). */
 export const passwordAsk = signal<{ name: string; wrong: boolean; answer: (pw: string | null) => void } | null>(null);
@@ -70,7 +70,8 @@ export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
   page.value = at ? Math.min(at.page, info.pageCount - 1) : 0;
   // E-books and Markdown are laid out on book-sized pages, too small to read on a phone: they open
   // in Read mode. Everything else (PDFs, comics, XPS) opens as pages.
-  mode.value = at?.mode ?? (info.reflowable ? "read" : "pages");
+  const saved = at?.mode === "book" && !isTablet ? "read" : at?.mode;
+  mode.value = saved ?? (info.reflowable ? "read" : "pages");
   chrome.value = true;
   doc.value = { info, name, uri, path: p.path };
   startPosition = at ? { page: page.value, frac: at.frac } : { page: 0, frac: 0 };

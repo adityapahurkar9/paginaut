@@ -10,6 +10,12 @@ export type Layout = "scroll" | "paged" | "double";
 /** How a document is read: its pages, or its text reflowed (Read: a scroll; Book: turned pages). */
 export type Mode = "pages" | "read" | "book";
 
+/**
+ * A tablet: the screen's shorter side is at least 600 dp, Android's own line. Book mode and two pages
+ * side by side are for tablets; on a phone they'd only be one more choice for too little room.
+ */
+export const isTablet = Math.min(screen.width, screen.height) >= 600;
+
 export interface TextSettings {
   size: number;
   font: "serif" | "sans";

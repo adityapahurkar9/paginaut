@@ -7,7 +7,7 @@ import { BookOpen, ChevronRight, FileText, Info, Minus, Plus, Printer, ScrollTex
 import { api, type OutlineItem, type Properties, type Security } from "../api";
 import { native } from "./native";
 import { back, pushLayer } from "./nav";
-import { clearRecent, doc, errorText, mode, page, say, settings, sheet, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
+import { clearRecent, doc, errorText, isTablet, mode, page, say, settings, sheet, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
 import { startReading } from "./speech";
 import { goTo } from "./views";
 
@@ -73,7 +73,7 @@ function ViewSheet() {
   const st = settings.value;
   const m = mode.value;
   const t = st.text;
-  const wide = window.innerWidth >= 600;
+
   return (
     <>
       <h3>View</h3>
@@ -83,16 +83,16 @@ function ViewSheet() {
         options={[
           ["pages", <><FileText size={17} /> Pages</>],
           ["read", <><ScrollText size={17} /> Read</>],
-          ["book", <><BookOpen size={17} /> Book</>],
+          ...(isTablet ? [["book", <><BookOpen size={17} /> Book</>] as [Mode, ComponentChildren]] : []),
         ]}
       />
       <p class="hint">{m === "pages" ? "The document as it was laid out." : m === "read" ? "Just the text, sized for your screen, in one long scroll." : "Just the text, set as a book you turn the pages of."}</p>
       {m === "pages" ? (
         <Row label="Pages">
           <Seg<Layout>
-            value={st.layout === "double" && !wide ? "scroll" : st.layout}
+            value={st.layout === "double" && !isTablet ? "scroll" : st.layout}
             onChange={(v) => updateSettings({ layout: v })}
-            options={[["scroll", "Scroll"], ["paged", "One by one"], ...(wide ? [["double", "Two"] as [Layout, string]] : [])]}
+            options={[["scroll", "Scroll"], ["paged", "One by one"], ...(isTablet ? [["double", "Two"] as [Layout, string]] : [])]}
           />
         </Row>
       ) : (
