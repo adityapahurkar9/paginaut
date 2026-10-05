@@ -7,7 +7,8 @@ import { BookOpen, ChevronRight, FileText, Info, Minus, Plus, Printer, ScrollTex
 import { api, type OutlineItem, type Properties, type Security } from "../api";
 import { native } from "./native";
 import { back, pushLayer } from "./nav";
-import { bookmarksOf, toggleBookmark, unlistAll } from "./records";
+import { bookmarksOf, refreshStorage, storage, toggleBookmark, unlistAll } from "./records";
+import { sizeText, StorageSheet } from "./Storage";
 import { doc, errorText, isTablet, mode, page, say, settings, sheet, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
 import { startReading } from "./speech";
 import { goTo } from "./views";
@@ -90,6 +91,7 @@ export function Sheets() {
         {s === "info" && d && <InfoSheet />}
         {s === "more" && d && <MoreSheet />}
         {s === "settings" && <SettingsSheet />}
+        {s === "storage" && <StorageSheet />}
       </div>
     </div>
   );
@@ -420,7 +422,11 @@ function MoreSheet() {
 
 function SettingsSheet() {
   const [version, setVersion] = useState("");
-  useEffect(() => void getVersion().then(setVersion, () => {}), []);
+  useEffect(() => {
+    void getVersion().then(setVersion, () => {});
+    void refreshStorage();
+  }, []);
+  const kept = storage.value?.copies.reduce((n, c) => n + c.size, 0) ?? 0;
   return (
     <>
       <h3>Settings</h3>
@@ -431,6 +437,19 @@ function SettingsSheet() {
           options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]}
         />
       </Row>
+      <button
+        class="row"
+        onClick={() => {
+          // Back returns here.
+          pushLayer(() => (sheet.value = "settings"));
+          sheet.value = "storage";
+        }}
+      >
+        <span class="row-label">Storage</span>
+        <span class="row-value">
+          {sizeText(kept)} of copies <ChevronRight size={18} />
+        </span>
+      </button>
       <button class="row link-row" onClick={() => unlistAll()}>
         <span class="row-label">Clear the Recent list</span>
       </button>
