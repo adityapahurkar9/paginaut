@@ -1,49 +1,88 @@
 pub mod engine;
 mod app;
+#[cfg(mobile)]
+mod mobile;
+
+// The desktop app: editing, OCR, Office files, conversion, signing and Windows' own services.
+// The Android viewer is built from the engine and app.rs alone (see mobile.rs).
+#[cfg(desktop)]
+mod desk;
+#[cfg(desktop)]
 mod base64;
+#[cfg(desktop)]
 pub mod addons;
+#[cfg(desktop)]
 mod update;
+#[cfg(desktop)]
 mod defaults;
 #[cfg(windows)]
 mod snap;
 #[cfg(windows)]
 mod print;
+#[cfg(desktop)]
 mod tts;
+#[cfg(desktop)]
 mod piper;
+#[cfg(desktop)]
 mod piper_voices;
+#[cfg(desktop)]
 pub mod compare;
+#[cfg(desktop)]
 pub mod convert;
+#[cfg(desktop)]
 mod docx;
+#[cfg(desktop)]
 mod flow;
+#[cfg(desktop)]
 mod fonts;
+#[cfg(desktop)]
 mod markdown;
+#[cfg(desktop)]
 mod net;
+#[cfg(desktop)]
 mod ocr;
+#[cfg(desktop)]
 pub mod office;
+#[cfg(desktop)]
 mod ocr_langs;
+#[cfg(desktop)]
 pub mod officetext;
+#[cfg(desktop)]
 mod sigstore;
+#[cfg(desktop)]
 mod tiff;
+#[cfg(desktop)]
 pub mod xml;
+#[cfg(desktop)]
 pub mod dsc;
 
+#[cfg(desktop)]
 use app::AppState;
+#[cfg(desktop)]
 use parking_lot::Mutex;
+#[cfg(desktop)]
 use tauri::Manager;
 
-/// Worker threads: leave two cores for the UI and the OS, cap at 16.
-fn worker_count() -> usize {
+/// Worker threads: leave two cores for the UI and the OS, cap at 16 (4 on phones, whose
+/// many cores are mostly small ones, and each worker holds its own page in memory).
+pub(crate) fn worker_count() -> usize {
     let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
-    cpus.saturating_sub(2).clamp(2, 16)
+    let cap = if cfg!(mobile) { 4 } else { 16 };
+    cpus.saturating_sub(2).clamp(2, cap)
 }
 
-/// MuPDF's shared cache for decoded images and fonts: 1/128 of RAM, 64–128 MB.
-/// Rendered pages are cached by the UI, so this mostly serves re-renders at a new zoom.
-fn store_bytes() -> usize {
+/// MuPDF's shared cache for decoded images and fonts: 1/128 of RAM, 64–128 MB (on phones
+/// 1/96, 24–64 MB). Rendered pages are cached by the UI, so this mostly serves re-renders
+/// at a new zoom.
+pub(crate) fn store_bytes() -> usize {
     let mut sys = sysinfo::System::new();
     sys.refresh_memory();
     let total = sys.total_memory() as usize;
-    (total / 128).clamp(64 << 20, 128 << 20)
+    if cfg!(mobile) {
+        (total / 96).clamp(24 << 20, 64 << 20)
+    } else {
+        (total / 128).clamp(64 << 20, 128 << 20)
+    }
 }
 
 /// Tauri turns WebView2 pinch-zoom off together with its zoom shortcuts, and
@@ -66,6 +105,7 @@ fn enable_touchpad_pinch(win: &tauri::WebviewWindow) {
 /// Low asks WebView2 to give memory back: it collects garbage and frees the
 /// GPU process's leftovers from pages drawn earlier (several hundred MB after a
 /// long scroll). Used while minimized and briefly after a tab closes.
+#[cfg(desktop)]
 #[tauri::command]
 fn memory_level(win: tauri::WebviewWindow, low: bool) {
     #[cfg(windows)]
@@ -123,6 +163,7 @@ fn migrate_from_folio() {
 /// The installer's switches: `--register-types` after installing, `--unregister-types` before uninstalling
 /// (Paginaut offered for its file types in Windows, or withdrawn). Handled before anything else starts, so they
 /// never reach a running Paginaut. Returns the exit code, or None to start as usual.
+#[cfg(desktop)]
 pub fn installer_switch() -> Option<i32> {
     let arg = std::env::args().nth(1)?;
     #[cfg(windows)]
@@ -141,7 +182,16 @@ pub fn installer_switch() -> Option<i32> {
     None
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(desktop)]
+    run_desktop();
+    #[cfg(mobile)]
+    mobile::run();
+}
+
+#[cfg(desktop)]
+fn run_desktop() {
     #[cfg(windows)]
     migrate_from_folio();
     let engine = engine::Engine::new(worker_count(), store_bytes()).expect("MuPDF failed to start");
@@ -163,52 +213,52 @@ pub fn run() {
             app::unlock_document,
             app::close_document,
             app::trim_document,
-            app::save_document,
-            app::insert_pages,
-            app::insert_blank,
-            app::peek_file,
-            app::merge_files,
-            app::insert_from_open,
-            app::save_parts,
-            app::split_by_size,
-            app::existing_files,
-            app::page_size,
-            app::content_box,
-            app::page_sizes_of,
-            app::stamp_pages,
-            app::remove_stamps,
-            app::first_page_size,
-            app::set_outline,
-            app::page_label_ranges,
-            app::set_page_labels,
+            desk::save_document,
+            desk::insert_pages,
+            desk::insert_blank,
+            desk::peek_file,
+            desk::merge_files,
+            desk::insert_from_open,
+            desk::save_parts,
+            desk::split_by_size,
+            desk::existing_files,
+            desk::page_size,
+            desk::content_box,
+            desk::page_sizes_of,
+            desk::stamp_pages,
+            desk::remove_stamps,
+            desk::first_page_size,
+            desk::set_outline,
+            desk::page_label_ranges,
+            desk::set_page_labels,
             app::properties,
-            app::set_properties,
-            app::save_with,
+            desk::set_properties,
+            desk::save_with,
             app::security,
-            app::check_owner,
-            app::pictures,
-            app::picture_bytes,
-            app::picture_save,
-            app::save_pictures,
-            app::area_bytes,
-            app::area_save,
-            app::area_text,
-            app::attachments,
-            app::redact_mark,
-            app::redaction_pages,
-            app::redact_apply,
-            app::redact_clear,
-            app::sanitize,
-            app::attachment_add,
-            app::attachment_remove,
-            app::tables,
-            app::paragraphs,
-            app::picture_edit,
-            app::edit_text,
-            app::table_in,
-            app::table_save,
-            app::attachment_save,
-            app::attachment_open,
+            desk::check_owner,
+            desk::pictures,
+            desk::picture_bytes,
+            desk::picture_save,
+            desk::save_pictures,
+            desk::area_bytes,
+            desk::area_save,
+            desk::area_text,
+            desk::attachments,
+            desk::redact_mark,
+            desk::redaction_pages,
+            desk::redact_apply,
+            desk::redact_clear,
+            desk::sanitize,
+            desk::attachment_add,
+            desk::attachment_remove,
+            desk::tables,
+            desk::paragraphs,
+            desk::picture_edit,
+            desk::edit_text,
+            desk::table_in,
+            desk::table_save,
+            desk::attachment_save,
+            desk::attachment_open,
             app::page_sizes,
             app::page_label,
             app::page_labels,
@@ -221,76 +271,76 @@ pub fn run() {
             app::page_text_stats,
             app::search,
             app::reflow,
-            app::forms_init,
-            app::widgets,
-            app::widget_set,
-            app::widget_toggle,
-            app::doc_undo,
-            app::form_reset,
-            app::save_flattened,
+            desk::forms_init,
+            desk::widgets,
+            desk::widget_set,
+            desk::widget_toggle,
+            desk::doc_undo,
+            desk::form_reset,
+            desk::save_flattened,
             app::annots,
             app::doc_annots,
-            app::annot_edit,
+            desk::annot_edit,
             app::user_name,
-            app::sig_list,
-            app::read_picture,
-            app::certs,
-            app::sign_document,
-            app::signatures,
-            app::signed_version,
-            app::sig_add,
-            app::sig_delete,
-            app::ocr_languages,
-            app::ocr_download,
-            app::ocr_download_stop,
-            app::ocr_delete,
-            app::ocr_check,
-            app::ocr_run,
-            app::ocr_remove,
-            app::ocr_layers,
-            app::office_engines,
-            app::office_set_preference,
-            app::office_install,
-            app::office_install_stop,
-            app::office_remove,
-            app::office_convert,
-            app::convert_options,
-            app::convert_from_pdf,
-            app::convert_stop,
-            app::compare_run,
-            app::compare_stop,
-            app::fonts_installed,
-            app::fonts_user,
-            app::font_add,
-            app::font_bytes,
-            app::font_remove,
-            app::skin_set,
-            app::skin_bytes,
-            app::skin_clear,
-            app::default_apps_status,
-            app::default_apps_set,
-            app::default_apps_open,
-            app::tts_voices,
-            app::snap_button,
-            app::tts_speak,
-            app::piper_voices,
-            app::piper_download,
-            app::piper_download_stop,
-            app::piper_delete,
-            app::piper_sample,
-            app::print_doc,
-            app::print_stop,
-            app::pfx_summary,
-            app::signature_revocation,
-            app::update_check,
-            app::update_install,
-            app::update_stop,
-            app::open_path,
-            app::markdown_read,
-            app::markdown_preview,
-            app::markdown_save,
+            desk::sig_list,
+            desk::read_picture,
+            desk::certs,
+            desk::sign_document,
+            desk::signatures,
+            desk::signed_version,
+            desk::sig_add,
+            desk::sig_delete,
+            desk::ocr_languages,
+            desk::ocr_download,
+            desk::ocr_download_stop,
+            desk::ocr_delete,
+            desk::ocr_check,
+            desk::ocr_run,
+            desk::ocr_remove,
+            desk::ocr_layers,
+            desk::office_engines,
+            desk::office_set_preference,
+            desk::office_install,
+            desk::office_install_stop,
+            desk::office_remove,
+            desk::office_convert,
+            desk::convert_options,
+            desk::convert_from_pdf,
+            desk::convert_stop,
+            desk::compare_run,
+            desk::compare_stop,
+            desk::fonts_installed,
+            desk::fonts_user,
+            desk::font_add,
+            desk::font_bytes,
+            desk::font_remove,
+            desk::skin_set,
+            desk::skin_bytes,
+            desk::skin_clear,
+            desk::default_apps_status,
+            desk::default_apps_set,
+            desk::default_apps_open,
+            desk::tts_voices,
+            desk::snap_button,
+            desk::tts_speak,
+            desk::piper_voices,
+            desk::piper_download,
+            desk::piper_download_stop,
+            desk::piper_delete,
+            desk::piper_sample,
+            desk::print_doc,
+            desk::print_stop,
+            desk::pfx_summary,
+            desk::signature_revocation,
+            desk::update_check,
+            desk::update_install,
+            desk::update_stop,
+            desk::open_path,
+            desk::markdown_read,
+            desk::markdown_preview,
+            desk::markdown_save,
             app::cancel,
-            app::system_info,
+            desk::system_info,
             app::take_launch_files,
             memory_level,
         ])

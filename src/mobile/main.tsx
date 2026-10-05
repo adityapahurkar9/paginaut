@@ -1,0 +1,85 @@
+// The Android viewer: a library of recent files, and a reader. No editing, no accounts, no network.
+import "./polyfills";
+import { render } from "preact";
+import { effect } from "@preact/signals";
+import { useEffect, useRef, useState } from "preact/hooks";
+import { Lock } from "lucide-preact";
+import { Library } from "./Library";
+import { native } from "./native";
+import { checkIntent, passwordAsk, savePosition } from "./open";
+import { Reader } from "./Reader";
+import { Sheets } from "./Sheets";
+import { busy, chrome, doc, isDark, searching, settings, sheet, toast } from "./state";
+
+function App() {
+  const d = doc.value;
+  return (
+    <>
+      {d ? <Reader d={d} key={d.info.docId} /> : <Library />}
+      <Sheets />
+      {passwordAsk.value && <PasswordDialog />}
+      {busy.value && (
+        <div class="busy">
+          <span class="spin" />
+          {busy.value}
+        </div>
+      )}
+      {toast.value && <div class="toast">{toast.value}</div>}
+    </>
+  );
+}
+
+function PasswordDialog() {
+  const ask = passwordAsk.value!;
+  const [pw, setPw] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => input.current?.focus(), [ask]);
+  return (
+    <div class="sheet-scrim center">
+      <form
+        class="dialog"
+        onSubmit={(e) => {
+          e.preventDefault();
+          ask.answer(pw);
+        }}
+      >
+        <Lock size={26} />
+        <h3>This file is protected</h3>
+        <p>{ask.wrong ? "That password isn't right. Try again." : `Enter the password to open ${ask.name}.`}</p>
+        <input ref={input} type="password" autocomplete="off" value={pw} onInput={(e) => setPw((e.target as HTMLInputElement).value)} />
+        <div class="dialog-btns">
+          <button type="button" class="btn" onClick={() => ask.answer(null)}>
+            Cancel
+          </button>
+          <button type="submit" class="btn pri" disabled={!pw}>
+            Open
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+render(<App />, document.getElementById("app")!);
+
+// The system bars take the colour of what's under them, and step aside while you read.
+effect(() => {
+  const reading = !!doc.value;
+  const immersive = reading && !chrome.value && !sheet.value && !searching.value;
+  const dark = isDark.value || (reading && settings.value.night);
+  // Read after the theme's colours apply.
+  requestAnimationFrame(() => {
+    const css = getComputedStyle(document.documentElement);
+    const color = css.getPropertyValue(reading ? (settings.value.night ? "--night-bar" : "--bar") : "--bg").trim();
+    void native.setBars(color || (dark ? "#0e1220" : "#f5f6fa"), dark, immersive);
+  });
+});
+
+// Files from other apps ("Open with", Share): at start, whenever the app comes back, and when
+// Android hands one over while it's open (PaginautPlugin.onNewIntent calls this).
+void checkIntent();
+(window as unknown as { paginautIntent: () => void }).paginautIntent = () => void checkIntent();
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void checkIntent();
+  else savePosition();
+});

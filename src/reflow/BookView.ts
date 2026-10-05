@@ -1,5 +1,7 @@
 // Book mode: the reflowed text laid out as a two-page book filling the
 // screen, turned with a 3D page flip (click, keys, wheel, or drag a corner).
+// On a screen taller than it is wide (a phone held upright) it's one page,
+// turned over at its left edge, and a swipe anywhere turns it.
 //
 // Pages are made by our own paginator: blocks are poured into an invisible
 // page of the real size and style; a paragraph that doesn't fit is split at
@@ -37,6 +39,8 @@ export class BookView implements ReflowView {
   private pageW = 0;
   private pageH = 0;
   private turning: { cancel(): void; finish(): void } | null = null;
+  /** One page at a time (narrow screens) rather than a spread. */
+  private single = false;
   private bg = 0;
   private ro: ResizeObserver;
   private wheelAcc = 0;
@@ -340,7 +344,7 @@ export class BookView implements ReflowView {
 
   // ------------------------------------------------------------ drawing
 
-  private pageEl(a: At | null, side: "left" | "right"): HTMLDivElement {
+  private pageEl(a: At | null, side: "left" | "right" | "single"): HTMLDivElement {
     const page = document.createElement("div");
     page.className = `rf-page ${side}`;
     const content = document.createElement("div");
@@ -375,9 +379,14 @@ export class BookView implements ReflowView {
   }
 
   private show() {
-    const right = this.nextAt(this.cur);
-    this.slots[0].replaceChildren(this.pageEl(this.cur, "left"));
-    this.slots[1].replaceChildren(this.pageEl(right, "right"));
+    if (this.single) {
+      this.slots[0].replaceChildren(this.pageEl(this.cur, "single"));
+      this.slots[1].replaceChildren();
+    } else {
+      const right = this.nextAt(this.cur);
+      this.slots[0].replaceChildren(this.pageEl(this.cur, "left"));
+      this.slots[1].replaceChildren(this.pageEl(right, "right"));
+    }
     for (const s of this.slots) loadPictures(s, this.pics);
     if (this.hits.length) paintHits(this.book, this.hits, this.active);
     this.anchor = this.startOf(this.cur);
@@ -391,8 +400,11 @@ export class BookView implements ReflowView {
     const W = this.el.clientWidth, H = this.el.clientHeight;
     if (!W || !H) return;
     const pageH = Math.floor(H - MARGIN * 2);
-    const pageW = Math.floor(Math.min((W - MARGIN * 2) / 2, pageH * 1.05));
-    if (pageW === this.pageW && pageH === this.pageH) return;
+    const single = W < H * 0.9;
+    const pageW = Math.floor(Math.min((W - MARGIN * 2) / (single ? 1 : 2), pageH * (single ? 0.8 : 1.05)));
+    if (pageW === this.pageW && pageH === this.pageH && single === this.single) return;
+    this.single = single;
+    this.book.classList.toggle("single", single);
     this.pageW = pageW;
     this.pageH = pageH;
     this.el.style.setProperty("--page-w", `${pageW}px`);
@@ -419,28 +431,39 @@ export class BookView implements ReflowView {
    */
   private beginTurn(dir: 1 | -1) {
     const cur = this.cur;
-    const right = this.nextAt(cur);
+    const fwd = dir > 0;
+    const right = this.single ? null : this.nextAt(cur);
     let target: At | null;
-    if (dir > 0) target = right && this.nextAt(right);
+    if (this.single) target = fwd ? this.nextAt(cur) : this.prevAt(cur);
+    else if (fwd) target = right && this.nextAt(right);
     else {
       const p = this.prevAt(cur);
       target = p && (this.prevAt(p) ?? p);
     }
     if (!target) return null;
-    const tRight = this.nextAt(target);
-    const fwd = dir > 0;
-    // Under the leaf: the page that stays, and the one being revealed.
-    const stay = fwd ? this.pageEl(cur, "left") : this.pageEl(right, "right");
-    const reveal = fwd ? this.pageEl(tRight, "right") : this.pageEl(target, "left");
-    this.slots[fwd ? 0 : 1].replaceChildren(stay);
-    this.slots[fwd ? 1 : 0].replaceChildren(reveal);
+    const tRight = this.single ? null : this.nextAt(target);
     const cast = document.createElement("div");
     cast.className = "rf-cast";
-    reveal.append(cast);
     const leaf = document.createElement("div");
-    leaf.className = `rf-leaf ${fwd ? "fwd" : "back"}`;
-    const front = fwd ? this.pageEl(right, "right") : this.pageEl(cur, "left");
-    const back = fwd ? this.pageEl(target, "left") : this.pageEl(tRight, "right");
+    let front: HTMLDivElement, back: HTMLDivElement, reveal: HTMLDivElement;
+    if (this.single) {
+      // One page: forward, it lifts off to the left showing the next; backward, the previous comes back over it.
+      reveal = this.pageEl(fwd ? target : cur, "single");
+      this.slots[0].replaceChildren(reveal);
+      leaf.className = "rf-leaf single";
+      front = this.pageEl(fwd ? cur : target, "single");
+      back = this.pageEl(null, "single");
+    } else {
+      // Under the leaf: the page that stays, and the one being revealed.
+      const stay = fwd ? this.pageEl(cur, "left") : this.pageEl(right, "right");
+      reveal = fwd ? this.pageEl(tRight, "right") : this.pageEl(target, "left");
+      this.slots[fwd ? 0 : 1].replaceChildren(stay);
+      this.slots[fwd ? 1 : 0].replaceChildren(reveal);
+      leaf.className = `rf-leaf ${fwd ? "fwd" : "back"}`;
+      front = fwd ? this.pageEl(right, "right") : this.pageEl(cur, "left");
+      back = fwd ? this.pageEl(target, "left") : this.pageEl(tRight, "right");
+    }
+    reveal.append(cast);
     front.classList.add("face", "front");
     back.classList.add("face", "back");
     const shadeF = document.createElement("div"), shadeB = document.createElement("div");
@@ -454,11 +477,13 @@ export class BookView implements ReflowView {
     let progress = 0, raf = 0;
     const set = (p: number) => {
       progress = Math.max(0, Math.min(1, p));
-      const deg = (fwd ? -180 : 180) * progress;
+      // A single page turned back starts lying over to the left and comes down onto the book.
+      const shown = this.single && !fwd ? 1 - progress : progress;
+      const deg = this.single ? -180 * shown : (fwd ? -180 : 180) * progress;
       leaf.style.transform = `rotateY(${deg}deg)`;
-      shadeF.style.opacity = String(0.5 * progress);
-      shadeB.style.opacity = String(0.5 * (1 - progress));
-      cast.style.opacity = String(0.55 * (1 - progress));
+      shadeF.style.opacity = String(0.5 * shown);
+      shadeB.style.opacity = String(0.5 * (1 - shown));
+      cast.style.opacity = String(0.55 * (1 - shown));
     };
     const cleanup = () => {
       cancelAnimationFrame(raf);
@@ -497,7 +522,9 @@ export class BookView implements ReflowView {
   private turn(dir: 1 | -1) {
     this.turning?.finish();
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      const t = dir > 0 ? this.nextAt(this.cur) && this.nextAt(this.nextAt(this.cur)!) : this.prevAt(this.cur) && (this.prevAt(this.prevAt(this.cur)!) ?? this.prevAt(this.cur));
+      const t = this.single
+        ? dir > 0 ? this.nextAt(this.cur) : this.prevAt(this.cur)
+        : dir > 0 ? this.nextAt(this.cur) && this.nextAt(this.nextAt(this.cur)!) : this.prevAt(this.cur) && (this.prevAt(this.prevAt(this.cur)!) ?? this.prevAt(this.cur));
       if (t) {
         this.cur = t;
         this.show();
@@ -539,7 +566,10 @@ export class BookView implements ReflowView {
     const w = r.width;
     const edge = w * 0.09, zone = w * 0.14;
     const dir: 1 | -1 | 0 = x > w - zone ? 1 : x < zone ? -1 : 0;
-    if (!dir) return;
+    if (!dir) {
+      if (e.pointerType === "touch") this.swipe(e, w);
+      return;
+    }
     const onEdge = dir > 0 ? x > w - edge : x < edge;
     e.preventDefault();
     this.focus();
@@ -567,6 +597,41 @@ export class BookView implements ReflowView {
     window.addEventListener("pointerup", up);
   }
 
+  /** Touch: a sideways swipe anywhere turns the page, following the finger. */
+  private swipe(e: PointerEvent, w: number) {
+    const startX = e.clientX, startY = e.clientY;
+    let ctl: ReturnType<BookView["beginTurn"]> | null = null;
+    let dir: 1 | -1 = 1;
+    let gone = false;
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!ctl) {
+        if (gone || Math.abs(dx) < 12) return;
+        // Mostly up or down: not a page turn.
+        if (Math.abs(dy) > Math.abs(dx)) {
+          gone = true;
+          return;
+        }
+        dir = dx < 0 ? 1 : -1;
+        this.turning?.finish();
+        ctl = this.beginTurn(dir);
+        if (!ctl) gone = true;
+      }
+      ctl?.set((dx * -dir) / (w * 0.75));
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (!ctl) return;
+      const dx = (ev.clientX - startX) * -dir;
+      ctl.animate(ev.type === "pointerup" && dx / (w * 0.75) > 0.15 ? 1 : 0);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
   // ------------------------------------------------------------ ReflowView
 
   setHits(hits: FlowHit[], active: FlowHit | null) {
@@ -584,7 +649,7 @@ export class BookView implements ReflowView {
   reveal(b: number, off: number) {
     this.turning?.finish();
     const at = this.atOf({ b, o: off });
-    const right = this.nextAt(this.cur);
+    const right = this.single ? null : this.nextAt(this.cur);
     const same = (a: At | null) => !!a && a.s === at.s && a.p === at.p;
     if (!same(this.cur) && !same(right)) {
       this.cur = at;

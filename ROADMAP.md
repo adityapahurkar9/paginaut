@@ -659,6 +659,32 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       script match; voice/speed changes while paused stay paused; the Recognize dialog counts recognized pages
       from the page objects (no page loads under the document lock); Excel keeps "12.0%"'s decimals
 
+## Android viewer (first build)
+A quiet reader for phones and tablets from the same engine: no editing, no accounts, no ads, and no
+internet permission at all (release builds). Kept clearly apart from Adobe's reader in looks and words
+(no "Liquid Mode": the reflowed text is Read and Book, as on Windows).
+- [x] Toolchain: NDK 29, all four ABIs (arm64, armv7, x86, x86_64), Android 7.0 (API 24) and later.
+      MuPDF built for Android by native/build-mupdf-android.sh (no OCR, barcodes or .docx writer);
+      native/ocr_none.c stands in for the Tesseract bridge
+- [x] Rust split: app.rs holds the viewing commands both apps use, desk.rs the desktop's; everything
+      Windows-only is cfg(desktop). mobile.rs is the Android entry point and the bridge to the Kotlin plugin
+      (gen/android/.../PaginautPlugin.kt)
+- [x] Opens PDF, XPS, EPUB, MOBI, FB2, CBZ, Markdown and pictures: the file picker, "Open with" and Share
+      from other apps (copied into the cache; Recent reopens from the source, or the copy). E-books open in Read
+- [x] Reader: continuous, one by one (snapping) or two pages (wide screens); pinch and double-tap zoom
+      (Viewer.ts touch pinch); Read and Book (one page on narrow screens, turned with a swipe); night mode;
+      search (pages or reflowed text); contents, comments list, document info; password prompt
+- [x] Share (Android's sheet), Print (Android's print service; e-books and XPS written as a PDF first),
+      read aloud with Android's own installed voices (by the paragraph's script), with pause and speed
+- [x] Bars a tap shows or hides, system bars hidden while reading; the back button closes sheets, search,
+      then the document; positions saved as you read
+- [x] Works back to WebView 79 (CSS and JS lowered by esbuild, replaceChildren polyfilled); a WebView older
+      than that gets a message to update it. Tauri's Jackson pinned to 2.13 (2.15 crashed Android 7)
+- [x] Logo #4 redrawn as assets/icon.svg (also the Windows icon); Android adaptive and themed icons
+      (assets/android-icons.py)
+- [ ] Release signing key (the user's), store listing, AAB upload; source made public first (AGPL)
+- [ ] CBR comics (needs libarchive in MuPDF)
+
 ### 0.8.6: natural voices and printing
 - [x] Natural offline voices (Piper) for read aloud, downloaded in Settings › Read aloud (Phase 2's list)
 - [x] Print (File › Print, Home, Ctrl+P; the command palette moved to Ctrl+K only): Windows' own print dialog

@@ -611,8 +611,8 @@ let nextId = 1;
 /** Ids for cancellable requests (renders, searches). Never 0 (reserved for "anonymous"). */
 export const newId = () => nextId++;
 
-/** Base URL of the custom pixel protocol (Windows serves custom schemes over http://<scheme>.localhost). */
-const RENDER_BASE = navigator.userAgent.includes("Windows") ? "http://paginaut.localhost/render" : "paginaut://localhost/render";
+/** Base URL of the custom pixel protocol (Windows and Android serve custom schemes over http://<scheme>.localhost). */
+const RENDER_BASE = /Windows|Android/.test(navigator.userAgent) ? "http://paginaut.localhost/render" : "paginaut://localhost/render";
 
 export interface RenderParams {
   doc: number;

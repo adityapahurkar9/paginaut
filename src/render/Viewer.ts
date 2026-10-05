@@ -274,6 +274,10 @@ export class Viewer {
     );
     this.el.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     this.el.addEventListener("pointerdown", (e) => this.onPointerDown(e));
+    this.el.addEventListener("touchstart", (e) => this.onTouch(e), { passive: true });
+    this.el.addEventListener("touchmove", (e) => this.onTouch(e), { passive: false });
+    this.el.addEventListener("touchend", (e) => this.onTouch(e));
+    this.el.addEventListener("touchcancel", (e) => this.onTouch(e));
     this.ro = new ResizeObserver(() => this.onResize());
     this.ro.observe(this.el);
     this.indexPages();
@@ -773,6 +777,45 @@ export class Viewer {
     }, 130);
   }
 
+  /**
+   * Two-finger pinch on a touch screen: like a trackpad pinch, the pages are scaled (and moved
+   * with the fingers) on the GPU while it runs, then laid out once at the new zoom. One finger
+   * scrolls natively.
+   */
+  private touchPinch: { zoom: number; d0: number; cx: number; cy: number; dx: number; dy: number } | null = null;
+  private onTouch(e: TouchEvent) {
+    const rect = this.el.getBoundingClientRect();
+    const two = e.touches.length === 2 ? [e.touches[0], e.touches[1]] : null;
+    const p = this.touchPinch;
+    if (two && !p) {
+      if (this.pinch) return;
+      const [a, b] = two;
+      const cx = (a.clientX + b.clientX) / 2 - rect.left, cy = (a.clientY + b.clientY) / 2 - rect.top;
+      this.touchPinch = { zoom: this.zoom, d0: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1, cx, cy, dx: 0, dy: 0 };
+      this.sizer.style.transition = "";
+      this.sizer.style.transformOrigin = `${this.el.scrollLeft + cx}px ${this.el.scrollTop + cy}px`;
+      return;
+    }
+    if (!p) return;
+    if (two && e.type === "touchmove") {
+      e.preventDefault();
+      const [a, b] = two;
+      const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      p.zoom = clampZoom((this.zoom * d) / p.d0);
+      p.dx = (a.clientX + b.clientX) / 2 - rect.left - p.cx;
+      p.dy = (a.clientY + b.clientY) / 2 - rect.top - p.cy;
+      this.sizer.style.transform = `translate(${p.dx}px, ${p.dy}px) scale(${p.zoom / this.zoom})`;
+      return;
+    }
+    if (two) return;
+    // A finger lifted: settle at the new zoom, the pinched point where the fingers left it.
+    this.touchPinch = null;
+    this.sizer.style.transform = "";
+    if (Math.abs(p.zoom - this.zoom) > 1e-3) this.setZoom(p.zoom, p.cx, p.cy);
+    this.el.scrollLeft -= p.dx;
+    this.el.scrollTop -= p.dy;
+  }
+
   /** Screen point → unrotated page points on displayed page `view` (null if it isn't in view). */
   clientToPage(view: number, clientX: number, clientY: number): [number, number] | null {
     const pv = this.mounted.get(view);
@@ -789,6 +832,8 @@ export class Viewer {
   }
 
   private onPointerDown(e: PointerEvent) {
+    // Touch scrolls and pinches (see onTouch); it doesn't select.
+    if (e.pointerType === "touch") return;
     if (e.button === 1 || (e.button === 0 && this.tool === "hand")) return this.startPan(e);
     if (e.button !== 0) return;
     const t = e.target as HTMLElement;

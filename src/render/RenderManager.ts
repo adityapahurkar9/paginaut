@@ -191,7 +191,9 @@ export class RenderManager {
 }
 
 /** One manager for the whole app. Sharp pages re-render in ~50–100 ms, so their pool stays small. */
-export const renderer = new RenderManager(48 * 1024 * 1024, 64 * 1024 * 1024);
+// Phones have far less memory to spare than desktops.
+const phone = /Android/.test(navigator.userAgent);
+export const renderer = phone ? new RenderManager(20 * 1024 * 1024, 36 * 1024 * 1024) : new RenderManager(48 * 1024 * 1024, 64 * 1024 * 1024);
 
 /** Cache key for a rendered bitmap. Shared by the viewer and thumbnails so they reuse each other's work. */
 /** Content revision per document: bumped when fields or annotations change, so old renders miss. */

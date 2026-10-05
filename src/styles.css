@@ -468,19 +468,22 @@ kbd { font: 11px var(--font); padding: 2px 6px; border-radius: 5px; border: 1px 
 .rf-head { top: calc(var(--rf-pad-y) * 0.42); letter-spacing: 0.08em; text-transform: uppercase; font-size: 10.5px; }
 .rf-foot { bottom: calc(var(--rf-pad-y) * 0.42); font-variant-numeric: oldstyle-nums; font-size: 12.5px; }
 /* The spine: pages darken towards the fold. */
-.rf-page.left::after, .rf-page.right::after { content: ""; position: absolute; top: 0; bottom: 0; width: 9%; pointer-events: none; }
+.rf-page.left::after, .rf-page.right::after, .rf-page.single::after { content: ""; position: absolute; top: 0; bottom: 0; width: 9%; pointer-events: none; }
 .rf-page.left::after { right: 0; background: linear-gradient(to left, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.04) 35%, transparent); }
-.rf-page.right::after { left: 0; background: linear-gradient(to right, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.04) 35%, transparent); }
+.rf-page.right::after, .rf-page.single::after { left: 0; background: linear-gradient(to right, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.04) 35%, transparent); }
 .paper-dark .rf-page.left::after { background: linear-gradient(to left, rgba(0, 0, 0, 0.5), transparent); }
 .paper-dark .rf-page.right::after { background: linear-gradient(to right, rgba(0, 0, 0, 0.5), transparent); }
 /* A turning leaf. */
 .rf-leaf { position: absolute; top: 0; width: var(--page-w); height: var(--page-h); transform-style: preserve-3d; z-index: 3; will-change: transform; }
 .rf-leaf.fwd { left: var(--page-w); transform-origin: left center; }
 .rf-leaf.back { left: 0; transform-origin: right center; }
+/* One page at a time (a window or screen taller than wide). */
+.rf-book.single .rf-slot.right { display: none; }
+.rf-leaf.single { left: 0; transform-origin: left center; }
 .rf-leaf .face { backface-visibility: hidden; }
 .rf-leaf .face.back { transform: rotateY(180deg); }
 .rf-shade, .rf-cast { position: absolute; inset: 0; pointer-events: none; opacity: 0; }
-.rf-page.right .rf-shade, .rf-page.right .rf-cast { background: linear-gradient(to right, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.08) 55%, transparent); }
+.rf-page.right .rf-shade, .rf-page.right .rf-cast, .rf-page.single .rf-shade, .rf-page.single .rf-cast { background: linear-gradient(to right, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.08) 55%, transparent); }
 .rf-page.left .rf-shade, .rf-page.left .rf-cast { background: linear-gradient(to left, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.08) 55%, transparent); }
 .rf-host .readbar { z-index: 10; }
 

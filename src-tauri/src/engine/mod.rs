@@ -2072,6 +2072,15 @@ impl Engine {
         res
     }
 
+    /// Writes every page as a new PDF, leaving the open document as it is (printing
+    /// an e-book or XPS file on Android, where the print service takes PDFs).
+    pub fn export_pdf(&self, id: DocId, out: &str) -> Result<(), String> {
+        let d = self.doc(id)?;
+        let n = d.page_count();
+        let res = d.inner.lock().doc.convert_to_pdf(out, &(0..n).collect::<Vec<_>>(), &vec![0; n]);
+        res
+    }
+
     /// The document's own page labels ("iv", "A-3"…), or None when they are
     /// just 1, 2, 3… (most files).
     pub fn page_labels(&self, id: DocId) -> Result<Option<Vec<String>>, String> {
