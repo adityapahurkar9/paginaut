@@ -52,16 +52,23 @@ AppImage (one file that runs without installing).**
 | Memory figure | Process commit | Private memory from `/proc/<pid>/smaps_rollup` | RSS (counts shared libraries) |
 | Snap Layouts on the maximize button | snap.rs | Not needed: window managers have their own | — |
 | Window | Hidden until the first frame | Shown after the first frame or 300 ms, whichever first (WebKitGTK paints nothing for a hidden window) | — |
+| Signing with certificates | Windows' certificate store (DSC drivers put certificates there), CryptoAPI | OpenSSL (libssl3). Certificate files (.pfx/.p12), and DSC tokens and smart cards through their PKCS#11 drivers: p11-kit (every registered driver, OpenSC's included), the paths the usual DSC tokens' Linux drivers use, or one chosen with *Token driver…*. The token signs; Paginaut assembles the same CMS as on Windows. The PIN is typed into Paginaut (Windows' drivers show their own window) and used for that signature only | Using libp11's OpenSSL engine (not installed everywhere); NSS's database (what Firefox uses; DSC users rarely load tokens there) |
+| Updates | The installer, downloaded and checked | AppImage: the new one replaces it and starts. .deb: downloaded, checked, and opened in the software installer, which asks for the password itself | An apt repository (the system updates Paginaut with everything else; needs hosting and a signing key) |
 | Rendering | GPU | WebKitGTK's DMA-BUF renderer off unless `WEBKIT_DISABLE_DMABUF_RENDERER` is set (blank windows in VMs, WSL and with some NVIDIA drivers) | Leaving it on (faster on some machines, blank on others) |
+
+## Release builds
+
+`tools/linux-setup.sh` prepares a build machine; in WSL an Ubuntu 22.04 distribution is used just for this
+(`wsl --install Ubuntu-22.04`). Build the page on Windows first (`npm run build`), then
+`wsl -d Ubuntu-22.04 -u root -- bash /mnt/e/Projects/PDF-Reader-Editor/tools/linux.sh release`: it copies
+the sources over, builds MuPDF once, and makes the .deb and AppImage with Tauri's CLI from cargo (22.04's
+Node is too old for the page's tools, and the page is the same anywhere).
 
 ## Still to do
 
-- Signing with certificates (digital signatures, DSC tokens): Windows uses its certificate store. Linux:
-  `.p12`/`.pfx` files, and PKCS#11 for tokens and smart cards (OpenSC); verification against the system's CA
-  certificates.
-- Updates: the AppImage can replace itself (download, check the signature, swap); the `.deb` shows that a new
-  version is out and opens its page. An apt repository would make the system update it.
-- Testing on real Debian 12 / Ubuntu 22.04 machines (GNOME, KDE, Xfce).
+- Testing on real Debian 12 / Ubuntu 22.04+ machines (GNOME, KDE, Xfce), with real printers and DSC tokens
+  (tested here with CUPS's Print to File and SoftHSM).
+- arm64 packages (the same steps on an arm64 machine).
 
 ## Testing in WSL
 
