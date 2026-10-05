@@ -124,10 +124,9 @@ input { font: inherit; }
 .pg { cursor: default; }
 /* The desktop's rotate/delete buttons on hover: no page editing here. */
 .pg-ctl { display: none !important; }
-/* One page at a time: pages snap into place (until you zoom in); sideways swipes are the app's, to turn pages. */
+/* One page (or spread) per screen, turned a page per swipe either way by Reader.tsx (until you zoom in). */
 .viewer.slots .viewer-sizer { margin: 0; }
-.viewer.snap { scroll-snap-type: y mandatory; touch-action: pan-y; }
-.viewer.snap .pg { scroll-snap-align: center; scroll-snap-stop: always; }
+.viewer.turn { touch-action: none; }
 
 .bar {
   position: absolute; left: 0; right: 0; z-index: 20; display: flex; align-items: center; gap: 2px; padding: 0 6px; box-sizing: border-box;

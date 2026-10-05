@@ -211,6 +211,12 @@ export class Viewer {
   private layoutMode: LayoutMode = "single";
   /** One page (or spread) per screen: each row is at least the view's height, its pages centred in it. */
   private slots = false;
+  /**
+   * With slots: the page being read, kept rather than worked out from the scroll position, which
+   * means nothing while the view is resized through in-between sizes (a tablet turning).
+   */
+  private here = -1;
+  private layoutAt = 0;
   // Per page: position in CSS px at the current zoom. Rows hold 1 or 2 pages.
   private px = new Float64Array(0);
   private py = new Float64Array(0);
@@ -269,6 +275,8 @@ export class Viewer {
     this.el.addEventListener(
       "scroll",
       () => {
+        // Moved by the reader (not by a re-layout settling): the page now in the middle.
+        if (this.slots && performance.now() - this.layoutAt > 400) this.here = this.pageAtY(this.el.scrollTop + this.el.clientHeight / 2);
         this.schedule();
         this.cb.onScroll?.();
       },
@@ -302,6 +310,7 @@ export class Viewer {
   }
 
   private layout() {
+    this.layoutAt = performance.now();
     const s = this.cssScale;
     const n = this.pages.length;
     this.px = new Float64Array(n);
@@ -465,13 +474,28 @@ export class Viewer {
     if (on === this.slots) return;
     const st = this.viewState();
     this.slots = on;
+    this.here = on ? st.page : -1;
     this.el.classList.toggle("slots", on);
     this.layout();
     this.restore(st);
   }
 
+  /**
+   * With slots: shows the screen `dir` screens on from the one holding `page` (0: back to it),
+   * scrolling there smoothly or at once.
+   */
+  turnFrom(page: number, dir: -1 | 0 | 1, smooth: boolean) {
+    if (!this.pages.length) return;
+    const rows = this.rowFirst.length;
+    const r = Math.min(Math.max(0, this.rowOf[Math.min(Math.max(0, page), this.pages.length - 1)] + dir), rows - 1);
+    this.here = this.rowFirst[r];
+    this.el.scrollTo({ top: this.rowY[r], behavior: smooth ? "smooth" : "auto" });
+    this.schedule(true);
+  }
+
   viewState(): ViewState {
     if (!this.pages.length) return { page: 0, frac: 0, zoom: this.zoom, fit: this.fit };
+    if (this.slots && this.here >= 0 && this.fit !== "none") return { page: Math.min(this.here, this.pages.length - 1), frac: 0, zoom: this.zoom, fit: this.fit };
     const top = this.el.scrollTop;
     const page = this.pageAtY(top + Math.min(this.el.clientHeight * 0.1, 40));
     const r = this.pageRect(page);
@@ -490,7 +514,9 @@ export class Viewer {
     if (this.pages.length) {
       const p = Math.min(Math.max(0, st.page), this.pages.length - 1);
       const r = this.pageRect(p);
-      this.el.scrollTop = r.y + st.frac * r.h;
+      // A page per screen: back to the page's own screen (the page's size has changed with the view).
+      this.el.scrollTop = this.slots && this.fit !== "none" ? this.rowY[this.rowOf[p]] : r.y + st.frac * r.h;
+      if (this.slots) this.here = p;
       this.updateWidth();
       this.el.scrollLeft = (this.contentW - this.el.clientWidth) / 2;
     }
@@ -504,6 +530,7 @@ export class Viewer {
     const r = this.pageRect(p);
     const y = yPt !== undefined && yPt > 0 ? r.y + yPt * this.cssScale - 16 : this.slots ? this.rowY[this.rowOf[p]] : r.y - GAP / 2;
     this.el.scrollTop = Math.max(0, y);
+    if (this.slots) this.here = p;
     this.schedule(true);
   }
 
@@ -529,7 +556,8 @@ export class Viewer {
       }
     }
     const y0 = this.rowY[r], h = this.rowY[r + 1] - GAP - y0;
-    this.el.scrollTop = Math.max(0, h <= vh ? y0 + h / 2 - vh / 2 : y0 - GAP / 2);
+    this.el.scrollTop = Math.max(0, this.slots ? y0 : h <= vh ? y0 + h / 2 - vh / 2 : y0 - GAP / 2);
+    if (this.slots) this.here = this.rowFirst[r];
     this.schedule(true);
   }
 
@@ -846,8 +874,9 @@ export class Viewer {
   }
 
   private onPointerDown(e: PointerEvent) {
-    // Touch scrolls and pinches (see onTouch); it doesn't select.
-    if (e.pointerType === "touch") return;
+    // Touch scrolls and pinches (see onTouch); it doesn't select. Older Android WebViews (83)
+    // report touches with an empty pointerType, so only a mouse or pen selects.
+    if (e.pointerType !== "mouse" && e.pointerType !== "pen") return;
     if (e.button === 1 || (e.button === 0 && this.tool === "hand")) return this.startPan(e);
     if (e.button !== 0) return;
     const t = e.target as HTMLElement;

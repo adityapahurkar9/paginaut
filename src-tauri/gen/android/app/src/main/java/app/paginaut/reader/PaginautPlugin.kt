@@ -188,11 +188,13 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     val dir = File(activity.cacheDir, "docs/" + sha1(uri.toString()).take(16))
     val out = File(dir, display)
     if (size >= 0 && out.isFile && out.length() == size) return Pair(out, display)
-    dir.mkdirs()
-    dir.listFiles()?.forEach { it.delete() }
-    val tmp = File(dir, ".part")
+    // Read the source before dropping the old copy: if it can't be read any more (a file another
+    // app lent us for one visit), the copy is what Recent opens instead.
     val input = cr.openInputStream(uri) ?: throw IllegalStateException("the file is empty")
+    dir.mkdirs()
+    val tmp = File(dir, ".part")
     input.use { i -> FileOutputStream(tmp).use { o -> i.copyTo(o, 1 shl 16) } }
+    dir.listFiles()?.forEach { if (it != tmp) it.delete() }
     if (!tmp.renameTo(out)) throw IllegalStateException("couldn't store a copy")
     trimCache(dir)
     return Pair(out, display)

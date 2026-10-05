@@ -81,11 +81,27 @@ function fitFor(layout: string): FitMode {
   return layout === "scroll" ? "width" : "page";
 }
 
+/** Two pages side by side only while the screen is wider than tall; one at a time when upright. */
+function spreadFor(layout: string, wide: boolean) {
+  return layout === "double" && wide ? "spread" : "single";
+}
+
+function useWide() {
+  const [wide, setWide] = useState(innerWidth > innerHeight);
+  useEffect(() => {
+    const on = () => setWide(innerWidth > innerHeight);
+    addEventListener("resize", on);
+    return () => removeEventListener("resize", on);
+  }, []);
+  return wide;
+}
+
 function Pages({ d }: { d: OpenDoc }) {
   const host = useRef<HTMLDivElement>(null);
   const [v, setV] = useState<Viewer | null>(null);
   const layout = settings.value.layout;
   const night = settings.value.night;
+  const wide = useWide();
 
   useEffect(() => {
     let shownAt = performance.now();
@@ -94,8 +110,8 @@ function Pages({ d }: { d: OpenDoc }) {
         if (mode.value === "pages") page.value = p;
       },
       onZoom: (_z, fit) => {
-        // Zoomed in by hand: pages no longer snap one at a time.
-        viewer.el.classList.toggle("snap", settings.value.layout !== "scroll" && fit === "page");
+        // Zoomed in by hand: pages are no longer turned one at a time.
+        viewer.el.classList.toggle("turn", settings.value.layout !== "scroll" && fit === "page");
       },
       onSelection() {},
       onPageAction() {},
@@ -108,7 +124,7 @@ function Pages({ d }: { d: OpenDoc }) {
     const unwatch = chrome.subscribe((c) => c && (shownAt = performance.now()));
     views.viewer = viewer;
     const L = settings.value.layout;
-    viewer.setLayoutMode(L === "double" ? "spread" : "single");
+    viewer.setLayoutMode(spreadFor(L, innerWidth > innerHeight));
     viewer.setSlots(L !== "scroll");
     viewer.restore({ page: startPosition.page, frac: startPosition.frac, zoom: 1, fit: fitFor(L) });
     api
@@ -137,11 +153,11 @@ function Pages({ d }: { d: OpenDoc }) {
   useEffect(() => v?.setNight(night), [v, night]);
   useEffect(() => {
     if (!v) return;
-    v.setLayoutMode(layout === "double" ? "spread" : "single");
+    v.setLayoutMode(spreadFor(layout, wide));
     v.setSlots(layout !== "scroll");
     v.setFit(fitFor(layout));
-    v.el.classList.toggle("snap", layout !== "scroll");
-  }, [v, layout]);
+    v.el.classList.toggle("turn", layout !== "scroll");
+  }, [v, layout, wide]);
 
   // Coming back from Read or Book: the page they were on.
   useEffect(() => {
@@ -151,61 +167,70 @@ function Pages({ d }: { d: OpenDoc }) {
     }
   }, [v, mode.value]);
 
-  // One by one: a sideways swipe turns the page too, sliding it out and the next one in.
+  // One by one and Two turn a page per swipe, up and down or sideways, whichever comes naturally.
+  // The app moves the page with the finger itself (the browser's scroll snapping skips pages or
+  // stalls on older WebViews); zoomed in, the finger pans as usual.
   useEffect(() => {
     if (!v || layout === "scroll") return;
     const el = v.el;
     const sizer = el.querySelector<HTMLElement>(".viewer-sizer")!;
-    let x0 = 0, y0 = 0, t0 = 0, dx = 0, state: "" | "maybe" | "side" | "no" = "", busy = false;
+    let x0 = 0, y0 = 0, t0 = 0, top0 = 0, from = 0, dx = 0, dy = 0, busy = false;
+    let state: "" | "maybe" | "side" | "down" | "no" = "";
     const slide = (x: number, ms: number) => {
       sizer.style.transition = ms ? `transform ${ms}ms cubic-bezier(0.2, 0.8, 0.2, 1)` : "";
       sizer.style.transform = x ? `translateX(${x}px)` : "";
     };
+    const last = () => d.info.pageCount - 1;
     const start = (e: TouchEvent) => {
-      // Zoomed in, the finger pans the page instead.
-      state = e.touches.length === 1 && !busy && v.viewState().fit !== "none" ? "maybe" : "no";
+      state = e.touches.length === 1 && !busy && el.classList.contains("turn") ? "maybe" : "no";
       x0 = e.touches[0].clientX;
       y0 = e.touches[0].clientY;
       t0 = e.timeStamp;
-      dx = 0;
+      top0 = el.scrollTop;
+      from = v.viewState().page;
+      dx = dy = 0;
     };
     const move = (e: TouchEvent) => {
       if (state === "no" || !state) return;
       if (e.touches.length > 1) {
-        if (state === "side") slide(0, 160);
+        // A second finger: the pinch is the viewer's (it takes over the page's transform too).
         state = "no";
         return;
       }
-      const ddx = e.touches[0].clientX - x0, ddy = e.touches[0].clientY - y0;
+      dx = e.touches[0].clientX - x0;
+      dy = e.touches[0].clientY - y0;
       if (state === "maybe") {
-        if (Math.hypot(ddx, ddy) < 10) return;
-        state = Math.abs(ddx) > Math.abs(ddy) ? "side" : "no";
-        if (state === "no") return;
+        if (Math.hypot(dx, dy) < 10) return;
+        state = Math.abs(dx) > Math.abs(dy) ? "side" : "down";
       }
-      dx = ddx;
-      // At the first or last page it gives a little, then stops.
-      const p = v.viewState().page, last = d.info.pageCount - 1;
-      const edge = (dx > 0 && p <= 0) || (dx < 0 && p >= last);
-      slide(edge ? dx / 4 : dx, 0);
       if (e.cancelable) e.preventDefault();
+      if (state === "down") {
+        el.scrollTop = top0 - dy;
+        return;
+      }
+      // At the first or last page it gives a little, then stops.
+      const edge = (dx > 0 && from <= 0) || (dx < 0 && from >= last());
+      slide(edge ? dx / 4 : dx, 0);
     };
     const end = (e: TouchEvent) => {
-      if (state !== "side") return;
+      const was = state;
       state = "";
-      const w = el.clientWidth;
-      const p = v.viewState().page, last = d.info.pageCount - 1;
-      const dir = dx < 0 ? 1 : -1;
-      const far = Math.abs(dx) > w * 0.25 || (Math.abs(dx) > 40 && Math.abs(dx) / Math.max(1, e.timeStamp - t0) > 0.4);
-      if (!far || (dir < 0 && p <= 0) || (dir > 0 && p >= last)) return slide(0, 180);
+      if (was !== "side" && was !== "down") return;
+      const delta = was === "side" ? dx : dy;
+      const size = was === "side" ? el.clientWidth : el.clientHeight;
+      const far = Math.abs(delta) > size * 0.2 || (Math.abs(delta) > 30 && Math.abs(delta) / Math.max(1, e.timeStamp - t0) > 0.35);
+      let dir: -1 | 0 | 1 = !far ? 0 : delta < 0 ? 1 : -1;
+      if ((dir < 0 && from <= 0) || (dir > 0 && from >= last())) dir = 0;
+      if (was === "down") return v.turnFrom(from, dir, true);
+      if (!dir) return slide(0, 180);
+      // Sideways: the page slides out, and the next one in from the other side.
       busy = true;
+      const w = el.clientWidth;
       slide(-dir * w, 160);
       setTimeout(() => {
-        // The next page, brought in from the other side.
-        el.classList.remove("snap");
-        v.stepRow(dir as 1 | -1);
+        v.turnFrom(from, dir, false);
         slide(dir * w, 0);
         void sizer.offsetWidth;
-        el.classList.add("snap");
         slide(0, 200);
         setTimeout(() => {
           slide(0, 0);
