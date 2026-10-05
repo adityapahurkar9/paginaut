@@ -11,7 +11,7 @@ import {
   reconvert, reconverting, removeLibreOffice, runConvert, setPreference, startConvert, stopInstall, type ConvertItem,
 } from "../office";
 import * as P from "../pages";
-import { baseName, openFiles, openSettings, settings, type Tab } from "../store";
+import { baseName, onLinux, openFiles, openSettings, settings, showToast, type Tab } from "../store";
 import { startMergePictures, testHook } from "./PagesUI";
 
 const mb = (bytes: number) => `${Math.round(bytes / (1 << 20)).toLocaleString()} MB`;
@@ -166,6 +166,32 @@ const STAGES: Record<string, string> = {
 };
 
 /** Settings › Office files: the suites here (and getting LibreOffice), and which one opens Office files. */
+/** Linux: LibreOffice comes from the distribution (which keeps it up to date), not from Paginaut. */
+function LinuxLibreOffice() {
+  const cmd = "sudo apt install libreoffice";
+  return (
+    <div class="ps-line">
+      <span class="hint">
+        Install it from your software centre, or in a terminal: <code>{cmd}</code>
+      </span>
+      <button
+        class="btn sm"
+        onClick={() =>
+          void navigator.clipboard
+            .writeText(cmd)
+            .then(() => showToast("Copied: paste it into a terminal."))
+            .catch(() => showToast(cmd, 6000))
+        }
+      >
+        Copy the command
+      </button>
+      <button class="btn ghost sm" onClick={() => void loadEngines(true)}>
+        Look again
+      </button>
+    </div>
+  );
+}
+
 export function OfficeSettings() {
   useEffect(() => {
     void loadEngines(true);
@@ -197,11 +223,13 @@ export function OfficeSettings() {
         <span class="hint">Looking…</span>
       ) : (
         <div class="office-engines">
-          <div class="office-engine">
-            <Suite name="Microsoft Office" on={!!ms} />
-            {ms && <span>{`${ms.version} · ${apps}`}</span>}
-            <small>{ms ? "Documents look exactly as their authors saw them." : "When it's installed, Paginaut uses it."}</small>
-          </div>
+          {!onLinux && (
+            <div class="office-engine">
+              <Suite name="Microsoft Office" on={!!ms} />
+              {ms && <span>{`${ms.version} · ${apps}`}</span>}
+              <small>{ms ? "Documents look exactly as their authors saw them." : "When it's installed, Paginaut uses it."}</small>
+            </div>
+          )}
           <div class="office-engine">
             <Suite name="LibreOffice" on={!!(e.pack || e.installed)} />
             {e.pack ? (
@@ -215,7 +243,8 @@ export function OfficeSettings() {
               e.installed && <span>Installed{e.installed.version ? `, version ${e.installed.version}` : ""} · {e.installed.path}</span>
             )}
             <small>Free. Very close to Office in our tests; spreadsheets may break pages in other places.</small>
-            {!e.pack && !inst && (
+            {onLinux && !e.installed && <LinuxLibreOffice />}
+            {!onLinux && !e.pack && !inst && (
               <div class="ps-line">
                 <button class="btn sm" onClick={() => void installLibreOffice()}>
                   {e.installed ? "Get Paginaut's own copy (~360 MB)" : "Download LibreOffice (~360 MB)"}
@@ -251,8 +280,8 @@ export function OfficeSettings() {
 
     <div class="tool-field">
       <label>Open Office files with</label>
-      {choice("auto", "The best one here", "Microsoft Office, else LibreOffice, else the text preview")}
-      {choice("msoffice", "Microsoft Office", "Word, Excel or PowerPoint", !!e && !ms)}
+      {choice("auto", "The best one here", onLinux ? "LibreOffice, else the text preview" : "Microsoft Office, else LibreOffice, else the text preview")}
+      {!onLinux && choice("msoffice", "Microsoft Office", "Word, Excel or PowerPoint", !!e && !ms)}
       {choice("libreoffice", "LibreOffice", "", !!e && !e.pack && !e.installed)}
       {choice("builtin", "Text preview", "Quickest, but only the words")}
       <span class="hint">Any file can be converted again with another program from the bar above it.</span>
@@ -351,7 +380,7 @@ export function FilesToPdf() {
       )}
       {engines.value && !engines.value.msoffice && !engines.value.pack && !engines.value.installed && d.items.some((i) => isOffice(i.path)) && (
         <span class="secure-warn">
-          Office files need Microsoft Office or LibreOffice.{" "}
+          {onLinux ? "Office files need LibreOffice." : "Office files need Microsoft Office or LibreOffice."}{" "}
           <button class="linkish" onClick={() => openSettings("office")}>
             Get LibreOffice (free)…
           </button>
