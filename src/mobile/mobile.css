@@ -111,7 +111,11 @@ input { font: inherit; }
 
 /* ---------------------------------------------------------------- reader */
 .reader { position: fixed; inset: 0; background: var(--canvas); overflow: hidden; }
-.reader.night { --canvas: #07090e; --panel: #12151f; --tx: #e2e4ea; --tx2: #9aa0ae; --bd: rgba(255, 255, 255, 0.07); --hover: rgba(255, 255, 255, 0.07); --acc: #5b8cff; color-scheme: dark; }
+/* Night mode: the reader and the sheets over it. */
+.reader.night, .sheet-scrim.night {
+  --canvas: #07090e; --panel: #12151f; --tx: #e2e4ea; --tx2: #9aa0ae; --tx3: #737a8c; --bd: rgba(255, 255, 255, 0.07); --bd2: rgba(255, 255, 255, 0.18);
+  --hover: rgba(255, 255, 255, 0.07); --acc: #5b8cff; --acc-soft: rgba(91, 140, 255, 0.16); color-scheme: dark;
+}
 .stage { position: absolute; inset: 0; }
 .reader:not(.mode-pages) .stage { visibility: hidden; }
 .viewer { touch-action: pan-x pan-y; }
@@ -121,6 +125,7 @@ input { font: inherit; }
 /* The desktop's rotate/delete buttons on hover: no page editing here. */
 .pg-ctl { display: none !important; }
 /* One page at a time: pages snap into place (until you zoom in). */
+.viewer.slots .viewer-sizer { margin: 0; }
 .viewer.snap { scroll-snap-type: y mandatory; }
 .viewer.snap .pg { scroll-snap-align: center; scroll-snap-stop: always; }
 

@@ -209,6 +209,8 @@ export class Viewer {
   private pages: PageSpec[];
   private srcToView = new Map<number, number>();
   private layoutMode: LayoutMode = "single";
+  /** One page (or spread) per screen: each row is at least the view's height, its pages centred in it. */
+  private slots = false;
   // Per page: position in CSS px at the current zoom. Rows hold 1 or 2 pages.
   private px = new Float64Array(0);
   private py = new Float64Array(0);
@@ -306,7 +308,8 @@ export class Viewer {
     this.py = new Float64Array(n);
     this.rowOf = new Int32Array(n);
     const rowsY: number[] = [], rowsFirst: number[] = [], rowsW: number[] = [];
-    let y = PAD_Y;
+    const slot = this.slots ? this.el.clientHeight : 0;
+    let y = slot ? 0 : PAD_Y;
     let i = 0;
     while (i < n) {
       const pair = this.layoutMode !== "single" && !(this.layoutMode === "spread-cover" && i === 0) && i + 1 < n;
@@ -321,18 +324,19 @@ export class Viewer {
       rowsY.push(y);
       rowsFirst.push(i);
       rowsW.push(w);
+      const rowH = Math.max(h + GAP, slot);
       for (let k = 0; k < count; k++) {
         this.rowOf[i + k] = r;
-        // Pages in a row are bottom-aligned to the row's centre line.
-        this.py[i + k] = y + (h - this.pages[i + k].h * s) / 2;
+        // Pages in a row are centred on the row's centre line.
+        this.py[i + k] = y + (slot ? (rowH - this.pages[i + k].h * s) / 2 : (h - this.pages[i + k].h * s) / 2);
       }
-      y += h + GAP;
+      y += rowH;
       i += count;
     }
     this.rowY = Float64Array.from([...rowsY, y]);
     this.rowFirst = Int32Array.from(rowsFirst);
     this.rowW = Float64Array.from(rowsW);
-    this.contentH = y - GAP + PAD_Y;
+    this.contentH = slot ? y : y - GAP + PAD_Y;
     this.contentW = this.localWidth();
     this.positionColumns();
     this.sizer.style.width = `${this.contentW}px`;
@@ -456,6 +460,16 @@ export class Viewer {
     this.restore(st);
   }
 
+  /** One page per screen (a page turner) or the usual column of pages. */
+  setSlots(on: boolean) {
+    if (on === this.slots) return;
+    const st = this.viewState();
+    this.slots = on;
+    this.el.classList.toggle("slots", on);
+    this.layout();
+    this.restore(st);
+  }
+
   viewState(): ViewState {
     if (!this.pages.length) return { page: 0, frac: 0, zoom: this.zoom, fit: this.fit };
     const top = this.el.scrollTop;
@@ -488,7 +502,7 @@ export class Viewer {
     if (!this.pages.length) return;
     const p = Math.min(Math.max(0, page), this.pages.length - 1);
     const r = this.pageRect(p);
-    const y = yPt !== undefined && yPt > 0 ? r.y + yPt * this.cssScale - 16 : r.y - GAP / 2;
+    const y = yPt !== undefined && yPt > 0 ? r.y + yPt * this.cssScale - 16 : this.slots ? this.rowY[this.rowOf[p]] : r.y - GAP / 2;
     this.el.scrollTop = Math.max(0, y);
     this.schedule(true);
   }

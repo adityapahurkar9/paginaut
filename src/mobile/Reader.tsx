@@ -78,7 +78,7 @@ function useTaps(el: () => HTMLElement | null, onDouble?: (x: number, y: number)
 // ---------------------------------------------------------------- pages
 
 function fitFor(layout: string): FitMode {
-  return layout === "paged" ? "page" : "width";
+  return layout === "scroll" ? "width" : "page";
 }
 
 function Pages({ d }: { d: OpenDoc }) {
@@ -95,7 +95,7 @@ function Pages({ d }: { d: OpenDoc }) {
       },
       onZoom: (_z, fit) => {
         // Zoomed in by hand: pages no longer snap one at a time.
-        viewer.el.classList.toggle("snap", settings.value.layout === "paged" && fit === "page");
+        viewer.el.classList.toggle("snap", settings.value.layout !== "scroll" && fit === "page");
       },
       onSelection() {},
       onPageAction() {},
@@ -109,6 +109,7 @@ function Pages({ d }: { d: OpenDoc }) {
     views.viewer = viewer;
     const L = settings.value.layout;
     viewer.setLayoutMode(L === "double" ? "spread" : "single");
+    viewer.setSlots(L !== "scroll");
     viewer.restore({ page: startPosition.page, frac: startPosition.frac, zoom: 1, fit: fitFor(L) });
     api
       .pageSizes(d.info.docId)
@@ -137,8 +138,9 @@ function Pages({ d }: { d: OpenDoc }) {
   useEffect(() => {
     if (!v) return;
     v.setLayoutMode(layout === "double" ? "spread" : "single");
+    v.setSlots(layout !== "scroll");
     v.setFit(fitFor(layout));
-    v.el.classList.toggle("snap", layout === "paged");
+    v.el.classList.toggle("snap", layout !== "scroll");
   }, [v, layout]);
 
   // Coming back from Read or Book: the page they were on.

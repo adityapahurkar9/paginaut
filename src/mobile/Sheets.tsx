@@ -81,7 +81,7 @@ export function Sheets() {
   if (!s) return null;
   const d = doc.value;
   return (
-    <div class={`sheet-scrim scrim-${s}`} onClick={(e) => e.target === e.currentTarget && back()}>
+    <div class={`sheet-scrim scrim-${s} ${d && settings.value.night ? "night" : ""}`} onClick={(e) => e.target === e.currentTarget && back()}>
       <div class={`sheet sheet-${s}`} role="dialog" ref={ref}>
         <div class="sheet-grip" />
         {s === "view" && d && <ViewSheet />}
