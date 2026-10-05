@@ -496,8 +496,8 @@ function BottomBar({ d }: { d: OpenDoc }) {
   const [drag, setDrag] = useState<number | null>(null);
   const shown = drag ?? page.value;
   const night = settings.value.night;
-  // Book mode numbers its own pages; the slider still moves through the document's.
-  const label = book && drag === null ? `${book.page + 1}${book.approx ? "+" : ""} / ${book.total}` : `${shown + 1} / ${total}`;
+  // Book mode numbers its own pages (from 1); the slider still moves through the document's.
+  const label = book && drag === null ? `${book.page}${book.approx ? "+" : ""} / ${book.total}` : `${shown + 1} / ${total}`;
   return (
     <footer class="bar bottom">
       <button class="ib" aria-label="View" onClick={() => openSheet("view")}>
