@@ -53,6 +53,13 @@ pub async fn security(state: State<'_, AppState>, doc: DocId) -> Res<crate::engi
     blocking(move || engine.security(doc)).await
 }
 
+/// Saves a repaired e-book (an EPUB made from a PDF, shown rebuilt) as an EPUB of its own at `target`.
+#[tauri::command]
+pub async fn save_repaired(state: State<'_, AppState>, doc: DocId, target: String) -> Res<()> {
+    let engine = state.engine.clone();
+    blocking(move || engine.save_repaired(doc, &target)).await
+}
+
 #[tauri::command]
 pub async fn properties(state: State<'_, AppState>, doc: DocId) -> Res<crate::engine::Properties> {
     let engine = state.engine.clone();

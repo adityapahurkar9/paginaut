@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import { getVersion } from "@tauri-apps/api/app";
-import { BookOpen, ChevronRight, FileText, Info, Minus, Plus, Printer, ScrollText, Share2, Volume2, X } from "lucide-preact";
+import { appCacheDir } from "@tauri-apps/api/path";
+import { BookOpen, ChevronRight, FileText, Info, Minus, Plus, Printer, ScrollText, Share2, Volume2, Wrench, X } from "lucide-preact";
 import { api, type OutlineItem, type Properties, type Security } from "../api";
 import { native } from "./native";
 import { back, pushLayer } from "./nav";
@@ -404,6 +405,20 @@ function MoreSheet() {
           <Share2 size={20} /> Share
         </button>
       </li>
+      {d.info.repaired && (
+        <li>
+          <button
+            onClick={act(async () => {
+              // Handed on through the share sheet ("Save to Files", Drive…); the copy is tidied away with the cache.
+              const out = `${await appCacheDir()}/docs/repaired-${Date.now()}/${d.name.replace(/\.[^.]+$/, "")} (repaired).epub`;
+              await api.saveRepaired(d.info.docId, out);
+              await native.share(out);
+            })}
+          >
+            <Wrench size={20} /> Save repaired copy
+          </button>
+        </li>
+      )}
       <li>
         <button onClick={act(() => native.print(d.info.docId, d.path, title, d.info.isPdf))}>
           <Printer size={20} /> Print

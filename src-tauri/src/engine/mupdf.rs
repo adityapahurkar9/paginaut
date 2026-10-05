@@ -1282,10 +1282,14 @@ pub fn allow_scripts(on: bool) {
     unsafe { po_allow_scripts(on as c_int) };
 }
 
-/// Where comic books packed as solid RAR archives are unpacked while open (native/cbr.c). Copies left
-/// by an earlier run that didn't close them are removed.
+static TEMP_DIR: parking_lot::RwLock<Option<std::path::PathBuf>> = parking_lot::RwLock::new(None);
+
+/// Where comic books packed as solid RAR archives are unpacked while open (native/cbr.c), and EPUBs
+/// made from PDFs are rebuilt (pdfhtml.rs). Copies left by an earlier run are removed.
 pub fn set_temp_dir(dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(dir);
+    *TEMP_DIR.write() = Some(dir.to_path_buf());
+    super::pdfhtml::clear(dir);
     if let Ok(list) = std::fs::read_dir(dir) {
         for e in list.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
@@ -1297,6 +1301,11 @@ pub fn set_temp_dir(dir: &std::path::Path) {
     if let Ok(c) = CString::new(dir.to_string_lossy().as_bytes()) {
         unsafe { po_set_temp_dir(c.as_ptr()) };
     }
+}
+
+/// The folder set with `set_temp_dir` (the system's until then).
+pub fn temp_dir() -> std::path::PathBuf {
+    TEMP_DIR.read().clone().unwrap_or_else(std::env::temp_dir)
 }
 
 // ---------------------------------------------------------------- Structured text

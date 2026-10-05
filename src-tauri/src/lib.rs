@@ -361,6 +361,7 @@ fn run_desktop() {
             desk::update_stop,
             desk::open_path,
             app::book_cover,
+            app::save_repaired,
             shelf::scan_books,
             desk::markdown_read,
             desk::markdown_preview,

@@ -100,6 +100,7 @@ export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
     at: Date.now(),
   });
   doc.value = { info, name, uri, path: p.path, rec, inPlace: p.inPlace };
+  if (info.repaired) say("This e-book was made from a PDF and its text was in pieces: Paginaut repaired it for reading (Save repaired copy in the menu keeps it).");
   // A new copy may take the cache over its size.
   if (p.kept) void tidyCache(p.path);
   // One history entry for the reader, replaced (not stacked) when another file opens from it.

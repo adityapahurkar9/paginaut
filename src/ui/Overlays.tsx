@@ -279,6 +279,7 @@ function commands(): Item[] {
     c("Redo", withTab((t) => P.redo(t)), "Ctrl+Y", () => !!activeTab.value?.history.canRedo),
     c("Save", withTab((t) => P.save(t)), "Ctrl+S", () => !!activeTab.value?.dirty.value),
     c("Save as…", withTab((t) => P.save(t, true)), "Ctrl+Shift+S", hasDoc),
+    c("Save repaired e-book (EPUB)…", withTab((t) => void P.saveRepaired(t)), "", () => !!activeTab.value?.info.value?.repaired),
     c("Print…", withTab((t) => printTab(t)), "Ctrl+P", hasDoc),
     c("Single page", withTab((t) => void setViewMode(t, "single")), "", hasDoc),
     c("Double page (two side by side)", withTab((t) => void setViewMode(t, "double")), "", hasDoc),

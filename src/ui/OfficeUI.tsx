@@ -4,7 +4,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { FileText, X } from "lucide-preact";
+import { FileText, Wrench, X } from "lucide-preact";
 import type { OfficeEngine } from "../api";
 import {
   available, convertDialog, convertible, engineName, engines, install, installError, installLibreOffice, isOffice, likelyEngine, loadEngines, OFFICE_EXT, WEB_EXT,
@@ -29,6 +29,34 @@ export function openingText(tab: Tab) {
 // ---------------------------------------------------------------- bar
 
 const dismissed = new Set<string>();
+
+/** An EPUB made from a PDF, shown repaired (pdfhtml.rs): what happened, and saving it so. */
+export function RepairBar({ tab }: { tab: Tab }) {
+  const info = tab.info.value;
+  const [, redraw] = useState(0);
+  if (!info?.repaired || dismissed.has(tab.key)) return null;
+  return (
+    <div class="formbar officebar">
+      <Wrench size={16} />
+      <span title="This e-book is a PDF converted page by page, with every line pinned in place and its words cut into pieces. Paginaut rebuilt its text as paragraphs; the file itself is unchanged.">
+        Repaired for reading: this e-book was made from a PDF and its text was in pieces
+      </span>
+      <button class="btn ghost" onClick={() => void P.saveRepaired(tab)}>
+        Save repaired copy…
+      </button>
+      <button
+        class="ib sm"
+        aria-label="Dismiss"
+        onClick={() => {
+          dismissed.add(tab.key);
+          redraw((n) => n + 1);
+        }}
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
 
 export function OfficeBar({ tab }: { tab: Tab }) {
   const info = tab.info.value;

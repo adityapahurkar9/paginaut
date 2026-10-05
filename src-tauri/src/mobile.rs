@@ -60,6 +60,7 @@ pub fn run() {
             all_files_access,
             scan_books,
             app::book_cover,
+            app::save_repaired,
             share_text,
             release,
         ])

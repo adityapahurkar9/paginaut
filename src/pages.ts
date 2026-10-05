@@ -324,6 +324,25 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
   }
 }
 
+/** Saves a repaired e-book (an EPUB made from a PDF, shown rebuilt) as an EPUB that reads properly anywhere. */
+export async function saveRepaired(tab: Tab) {
+  const info = tab.info.value;
+  if (!info?.repaired) return;
+  const stem = baseName(tab.path).replace(/\.[^.]+$/, "");
+  const target = await saveDialog({
+    title: "Save the repaired e-book",
+    defaultPath: tab.path.replace(/[^\\/]+$/, `${stem} (repaired).epub`),
+    filters: [{ name: "EPUB e-book", extensions: ["epub"] }],
+  });
+  if (!target) return;
+  try {
+    await api.saveRepaired(info.docId, target);
+    showToast(`Saved ${baseName(target)}: it reads properly in any e-book reader now.`, 5000);
+  } catch (err) {
+    showToast(`Couldn't save: ${err}`, 5000);
+  }
+}
+
 /**
  * Saves with new protection, compression or a clean rewrite: to `target`, or in place when null.
  * The tab follows the saved file, as with Save as. Returns the saved file, or null (message shown).

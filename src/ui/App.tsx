@@ -29,7 +29,7 @@ import { Home } from "./Home";
 import { SignPane } from "./SignPane";
 import { SigBar } from "./SigPanel";
 import { OcrBar, OcrDialog } from "./OcrUI";
-import { OfficeBar, openingText } from "./OfficeUI";
+import { OfficeBar, openingText, RepairBar } from "./OfficeUI";
 import { ConvertPane } from "./ConvertPane";
 import { MarkdownPane } from "./MarkdownPane";
 import { OrganizePane } from "./OrganizePane";
@@ -78,6 +78,7 @@ export function App() {
               <div class="topbars">
                 <SigBar tab={tab} />
                 <OfficeBar tab={tab} />
+                <RepairBar tab={tab} />
                 <OcrBar tab={tab} />
                 <FormBar tab={tab} />
               </div>

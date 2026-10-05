@@ -3,6 +3,7 @@
 pub mod ffi;
 pub mod mupdf;
 pub mod ocr;
+mod pdfhtml;
 pub mod pool;
 pub mod table;
 
@@ -209,6 +210,8 @@ pub struct DocInfo {
     pub first_size: [f32; 2],
     /// Set for an Office file shown through a PDF made from it (`path` is that PDF).
     pub converted: Option<Converted>,
+    /// An EPUB made from a PDF, shown rebuilt as an ordinary e-book (pdfhtml.rs); `save_repaired` keeps it.
+    pub repaired: bool,
 }
 
 /// A file to take pages from (all of them unless `pages` lists some, 0-based).
@@ -1388,6 +1391,7 @@ impl Doc {
         let needs_password = doc.needs_password();
         let path = self.path();
         let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let repaired = pdfhtml::is_rebuilt(&path);
         let mut info = DocInfo {
             doc_id: self.id,
             path,
@@ -1401,6 +1405,7 @@ impl Doc {
             file_size,
             first_size: [612.0, 792.0],
             converted: self.converted.read().clone(),
+            repaired,
         };
         if needs_password {
             return info;
@@ -1460,7 +1465,8 @@ impl Engine {
         let convert = self.converter.read().clone();
         match convert.map(|f| f(path, engine)).transpose()?.flatten() {
             Some(c) => Ok((c.pdf.clone(), Some(c))),
-            None => Ok((path.to_string(), None)),
+            // EPUBs that are PDFs in disguise open rebuilt as ordinary e-books (pdfhtml.rs).
+            None => Ok((pdfhtml::rebuilt(path, &mupdf::temp_dir()).unwrap_or_else(|| path.to_string()), None)),
         }
     }
 
@@ -1568,6 +1574,23 @@ impl Engine {
         }
         self.docs.write().insert(id, d.clone());
         Ok(d.info())
+    }
+
+    /// Saves a repaired e-book (see `DocInfo::repaired`) as an EPUB file of its own.
+    pub fn save_repaired(&self, id: DocId, target: &str) -> Result<(), String> {
+        let path = self.doc(id)?.path();
+        if !pdfhtml::is_rebuilt(&path) {
+            return Err("This e-book didn't need repairing.".into());
+        }
+        if let Some(dir) = std::path::Path::new(target).parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let part = format!("{target}.part");
+        std::fs::copy(&path, &part).map_err(|e| e.to_string())?;
+        std::fs::rename(&part, target).map_err(|e| {
+            let _ = std::fs::remove_file(&part);
+            e.to_string()
+        })
     }
 
     pub fn unlock(&self, id: DocId, password: &str) -> Result<Option<DocInfo>, String> {

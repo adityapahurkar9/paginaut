@@ -367,6 +367,8 @@ function ready(tab: Tab, info: DocInfo) {
     tab.status.value = "ready";
   });
   rememberFile(tab.path, { pages: info.pageCount });
+  // Said once on opening too: the bar offering to save it isn't shown in Read and Book mode.
+  if (info.repaired) showToast(`${baseName(tab.path)} was made from a PDF and its text was in pieces. Paginaut repaired it for reading; it can be saved repaired.`, 7000);
   api.pageSizes(info.docId).then((s) => (tab.sizes.value = s)).catch(() => {});
   api.pageLabels(info.docId).then((l) => (tab.labels.value = l)).catch(() => {});
   api.outline(info.docId).then((o) => (tab.outline.value = o)).catch(() => (tab.outline.value = []));
