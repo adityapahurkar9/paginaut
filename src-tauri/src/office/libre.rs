@@ -36,7 +36,31 @@ pub fn pack(dir: &Path) -> Option<Lo> {
     soffice.is_file().then_some(Lo { soffice, version: info.version, pack: true })
 }
 
+/// What to do on Linux, where LibreOffice isn't fetched by Paginaut.
+#[cfg(not(windows))]
+pub const NOT_HERE: &str = "Install LibreOffice from your software centre (or in a terminal: sudo apt install libreoffice), then try again.";
+
+/// Linux: LibreOffice from the distribution (apt), its own .deb packages (/opt), a snap or a flatpak, in that
+/// order. The version is left out: finding it means starting LibreOffice.
+#[cfg(not(windows))]
+pub fn installed() -> Option<Lo> {
+    let mut found: Vec<PathBuf> = vec!["/usr/lib/libreoffice/program/soffice".into(), "/usr/bin/soffice".into(), "/usr/bin/libreoffice".into()];
+    if let Ok(list) = std::fs::read_dir("/opt") {
+        let mut opt: Vec<PathBuf> = list.flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("libreoffice"))).collect();
+        opt.sort();
+        found.extend(opt.into_iter().rev().map(|p| p.join("program").join("soffice")));
+    }
+    found.push("/snap/bin/libreoffice".into());
+    found.push("/var/lib/flatpak/exports/bin/org.libreoffice.LibreOffice".into());
+    if let Some(home) = std::env::var_os("HOME") {
+        found.push(PathBuf::from(home).join(".local/share/flatpak/exports/bin/org.libreoffice.LibreOffice"));
+    }
+    let soffice = found.into_iter().find(|p| p.is_file())?;
+    Some(Lo { soffice, version: String::new(), pack: false })
+}
+
 /// A LibreOffice installed on the system (its registry entry, or the usual folder).
+#[cfg(windows)]
 pub fn installed() -> Option<Lo> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     #[cfg(windows)]
@@ -240,6 +264,13 @@ fn free_space(dir: &Path) -> Option<u64> {
 /// anything. Parts a converter doesn't need (help, other languages' menus and dictionaries, icon themes)
 /// are left out: about 600 MB instead of 1.6 GB. `work` holds the download meanwhile.
 pub fn install(dir: &Path, work: &Path, profile: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(Stage, u64, u64)) -> Result<Lo, String> {
+    // Linux: programs come from the distribution, which keeps them up to date.
+    #[cfg(not(windows))]
+    {
+        let _ = (dir, work, profile, cancel, progress);
+        return Err(NOT_HERE.into());
+    }
+    #[cfg(windows)]
     std::fs::create_dir_all(work).map_err(|e| format!("Couldn't create {}: {e}", work.display()))?;
     #[cfg(windows)]
     if free_space(work).is_some_and(|f| f < 2_300 << 20) {

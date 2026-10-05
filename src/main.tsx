@@ -37,8 +37,11 @@ api.userName().then(setAuthor).catch(() => {});
 // Diagnostics hook for tools/cdp.mjs.
 (window as unknown as { paginaut: unknown }).paginaut = { openFiles, tabs, activeTab, renderer, actions: A, pages: P, compare: C };
 
-// Show the window once the first frame is painted (no white flash).
-requestAnimationFrame(() => requestAnimationFrame(() => getCurrentWindow().show()));
+// Show the window once the first frame is painted (no white flash). WebKitGTK (Linux) paints no frames for a
+// window that isn't shown yet, so a moment later it's shown regardless.
+const showWindow = () => void getCurrentWindow().show();
+requestAnimationFrame(() => requestAnimationFrame(showWindow));
+setTimeout(showWindow, 300);
 
 // Minimizing sends a resize too: give memory back while minimized.
 getCurrentWindow().onResized(() => {

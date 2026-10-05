@@ -1357,7 +1357,8 @@ fn app_memory() -> u64 {
         false
     };
     let pids: Vec<Pid> = procs.keys().copied().filter(|p| mine(*p)).collect();
-    let total = pids.iter().filter_map(|p| procs.get(p)).map(|p| p.virtual_memory()).sum();
+    // (sysinfo's figure is the commit charge on Windows, but the whole address space on Linux.)
+    let total = pids.iter().filter_map(|p| if cfg!(windows) { procs.get(p).map(|x| x.virtual_memory()) } else { private_bytes(p.as_u32()) }).sum();
     *guard = Some((pids, std::time::Instant::now()));
     total
 }
@@ -1380,9 +1381,16 @@ fn private_bytes(pid: u32) -> Option<u64> {
     }
 }
 
+/// Linux: the process's private memory (resident pages no other process shares), from /proc.
 #[cfg(not(windows))]
-fn private_bytes(_pid: u32) -> Option<u64> {
-    None
+fn private_bytes(pid: u32) -> Option<u64> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).ok()?;
+    let kb: u64 = text
+        .lines()
+        .filter(|l| l.starts_with("Private_Clean:") || l.starts_with("Private_Dirty:"))
+        .filter_map(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+        .sum();
+    Some(kb * 1024)
 }
 
 #[tauri::command]

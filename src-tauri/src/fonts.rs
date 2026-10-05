@@ -1,4 +1,4 @@
-//! Fonts for themes: the families installed in Windows, and font files the user added (kept in Paginaut's data
+//! Fonts for themes: the families installed in Windows (or known to fontconfig on Linux), and font files the user added (kept in Paginaut's data
 //! folder, read by the page as bytes).
 
 use serde::Serialize;
@@ -23,6 +23,11 @@ pub fn installed() -> Vec<String> {
         for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
             names.extend(reg_values(root, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"));
         }
+    }
+    // Linux: fontconfig's list (every desktop has it); a family's first name, the others being translations.
+    #[cfg(not(windows))]
+    if let Ok(out) = std::process::Command::new("fc-list").args([":", "family"]).output() {
+        names.extend(String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.split(',').next()).map(|f| f.trim().replace('\\', "")).filter(|f| !f.is_empty()));
     }
     let mut out: Vec<String> = names.iter().flat_map(|n| families(n)).collect();
     out.sort_by_key(|s| s.to_lowercase());

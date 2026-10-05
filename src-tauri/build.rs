@@ -88,10 +88,10 @@ fn rar(mupdf: &Path, windows: bool) {
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let mupdf = manifest.join("..").join("native").join("mupdf");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
-        android(&mupdf);
-    } else {
-        windows(&manifest, &mupdf);
+    match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("android") => android(&mupdf),
+        Ok("linux") => linux(&manifest, &mupdf),
+        _ => windows(&manifest, &mupdf),
     }
     // The frontend is embedded at compile time; rebuild when it changes.
     println!("cargo:rerun-if-changed=../dist");
@@ -125,27 +125,7 @@ fn windows(manifest: &Path, mupdf: &Path) {
         .compile("paginaut_native");
     rar(mupdf, true);
 
-    // Tesseract bridge, against the Tesseract and Leptonica built into MuPDF's
-    // libraries (same defines, so the classes match).
-    let third = mupdf.join("thirdparty");
-    cc::Build::new()
-        .cpp(true)
-        .file("native/ocr.cpp")
-        .include(third.join("tesseract").join("include"))
-        .include(mupdf.join("scripts").join("tesseract"))
-        .include(third.join("leptonica").join("src"))
-        .define("NDEBUG", None)
-        .define("HAVE_LEPTONICA", None)
-        .define("HAVE_TESSERACT", None)
-        .define("DISABLED_LEGACY_ENGINE", None)
-        .define("GRAPHICS_DISABLED", None)
-        .define("TESSERACT_IMAGEDATA_AS_PIX", None)
-        .define("TESSERACT_DISABLE_DEBUG_FONTS", None)
-        .flag_if_supported("/std:c++17")
-        .flag_if_supported("/EHsc")
-        .opt_level(2)
-        .warnings(false)
-        .compile("paginaut_ocr");
+    ocr_bridge(mupdf, "/std:c++17");
 
     println!("cargo:rustc-link-search=native={}", libdir.display());
     for lib in MUPDF_LIBS {
@@ -160,6 +140,64 @@ fn windows(manifest: &Path, mupdf: &Path) {
     // Our own Windows manifest: Tauri's, plus Windows 10/11 as supported (see windows/app.manifest).
     let windows = tauri_build::WindowsAttributes::new().app_manifest(include_str!("windows/app.manifest"));
     tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows)).expect("failed to run the Tauri build script");
+}
+
+/// The Tesseract bridge, against the Tesseract and Leptonica built into MuPDF's libraries (same
+/// defines, so the classes match). `std`: the compiler's flag for C++17.
+fn ocr_bridge(mupdf: &Path, std: &str) {
+    let third = mupdf.join("thirdparty");
+    cc::Build::new()
+        .cpp(true)
+        .file("native/ocr.cpp")
+        .include(third.join("tesseract").join("include"))
+        .include(mupdf.join("scripts").join("tesseract"))
+        .include(third.join("leptonica").join("src"))
+        .define("NDEBUG", None)
+        .define("HAVE_LEPTONICA", None)
+        .define("HAVE_TESSERACT", None)
+        .define("DISABLED_LEGACY_ENGINE", None)
+        .define("GRAPHICS_DISABLED", None)
+        .define("TESSERACT_IMAGEDATA_AS_PIX", None)
+        .define("TESSERACT_DISABLE_DEBUG_FONTS", None)
+        .flag_if_supported(std)
+        .flag_if_supported("/EHsc")
+        .opt_level(2)
+        .warnings(false)
+        .compile("paginaut_ocr");
+}
+
+/// The Linux app: MuPDF built by native/build-mupdf-linux.sh, with Tesseract for OCR, as on Windows.
+fn linux(manifest: &Path, mupdf: &Path) {
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+    let libdir = mupdf.join("build").join(format!("linux-{arch}"));
+    if !libdir.join("libmupdf.a").exists() {
+        panic!("MuPDF for Linux not found in {}.
+Build it first: bash native/build-mupdf-linux.sh", libdir.display());
+    }
+    let tessdata = manifest.join("..").join("native").join("tessdata");
+    if !tessdata.join("eng.traineddata").exists() {
+        panic!("OCR models not found in {}.
+Fetch them first: powershell -File native/get-tessdata.ps1", tessdata.display());
+    }
+    cc::Build::new()
+        .file("native/paginaut.c")
+        .include(mupdf.join("include"))
+        .define("NDEBUG", None)
+        .opt_level(2)
+        .warnings(false)
+        .compile("paginaut_native");
+    rar(mupdf, false);
+    ocr_bridge(mupdf, "-std=c++17");
+    println!("cargo:rustc-link-search=native={}", libdir.display());
+    println!("cargo:rustc-link-lib=static=mupdf");
+    println!("cargo:rustc-link-lib=static=mupdf-third");
+    // HarfBuzz and Tesseract are C++.
+    for sys in ["stdc++", "m", "pthread", "dl"] {
+        println!("cargo:rustc-link-lib=dylib={sys}");
+    }
+    println!("cargo:rerun-if-changed=native/ocr.cpp");
+    println!("cargo:rerun-if-changed={}", libdir.join("libmupdf.a").display());
+    tauri_build::build();
 }
 
 /// The Android viewer: MuPDF built by native/build-mupdf-android.sh for this ABI, without OCR.

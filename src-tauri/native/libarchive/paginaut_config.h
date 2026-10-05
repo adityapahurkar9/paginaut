@@ -80,6 +80,8 @@
 #define HAVE_TIMEGM 1
 #define HAVE_PTHREAD_H 1
 #define HAVE_FCNTL_H 1
+/* archive_random.c asks for this name (Linux: glibc before 2.36 has no arc4random, so libarchive's own). */
+#define HAVE_FCNTL 1
 #endif
 
 #endif

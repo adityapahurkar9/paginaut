@@ -13,13 +13,30 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-/// Piper's Windows release: host, path, size, SHA-256.
+/// Piper's release for this system: host, path, size, SHA-256.
+#[cfg(windows)]
 const RUNTIME: (&str, &str, u64, &str) = (
     "github.com",
     "/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip",
     22_477_236,
     "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea",
 );
+#[cfg(all(not(windows), target_arch = "x86_64"))]
+const RUNTIME: (&str, &str, u64, &str) = (
+    "github.com",
+    "/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz",
+    26_460_462,
+    "a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992",
+);
+#[cfg(all(not(windows), target_arch = "aarch64"))]
+const RUNTIME: (&str, &str, u64, &str) = (
+    "github.com",
+    "/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz",
+    26_004_717,
+    "fea0fd2d87c54dbc7078d0f878289f404bd4d6eea6e7444a77835d1537ab88eb",
+);
+/// The program inside the release's `piper/` folder.
+const PIPER: &str = if cfg!(windows) { "piper.exe" } else { "piper" };
 const VOICE_HOST: &str = "huggingface.co";
 /// Voice ids are given to the page with this in front, to tell them from Windows' own.
 pub const PREFIX: &str = "piper:";
@@ -78,7 +95,7 @@ impl Voices {
         self.dir.join("piper")
     }
     fn exe(&self) -> PathBuf {
-        self.runtime().join("piper.exe")
+        self.runtime().join(PIPER)
     }
     fn model(&self, id: &str) -> PathBuf {
         self.dir.join(format!("{}.onnx", stem(id)))
@@ -180,7 +197,11 @@ impl Voices {
                 return Err("The downloaded Piper didn't match the expected one; try again.".into());
             }
             let _ = std::fs::remove_dir_all(&fresh);
+            #[cfg(not(windows))]
+            unpack_tar(&zip, &fresh)?;
+            #[cfg(windows)]
             let zip_path = zip.to_string_lossy();
+            #[cfg(windows)]
             for name in crate::engine::mupdf::zip_list(&zip_path)? {
                 let Some(rel) = name.strip_prefix("piper/") else { continue };
                 // Only plain relative names.
@@ -192,8 +213,8 @@ impl Voices {
                 std::fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
                 std::fs::write(&dest, data).map_err(|e| e.to_string())?;
             }
-            if !fresh.join("piper.exe").is_file() {
-                return Err("The Piper download had no piper.exe.".into());
+            if !fresh.join(PIPER).is_file() {
+                return Err(format!("The Piper download had no {PIPER}."));
             }
             let _ = std::fs::remove_dir_all(self.runtime());
             std::fs::rename(&fresh, self.runtime()).map_err(|e| e.to_string())
@@ -275,6 +296,9 @@ impl Voices {
         let mut cmd = std::process::Command::new(self.exe());
         cmd.arg("--model").arg(format!("{}.onnx", stem(id))).arg("--json-input").arg("--length_scale").arg(format!("{length:.3}")).arg("--quiet");
         cmd.current_dir(&self.dir).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
+        // Linux: its own libraries (ONNX Runtime, espeak-ng) sit next to it.
+        #[cfg(not(windows))]
+        cmd.env("LD_LIBRARY_PATH", self.runtime()).arg("--espeak_data").arg(self.runtime().join("espeak-ng-data"));
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -494,4 +518,21 @@ mod tests {
         assert!(!dir.join("piper").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// Linux: the release's `piper/` folder unpacked into `fresh` with the system's tar (links and the
+/// program's executable bit kept), refusing names outside it.
+#[cfg(not(windows))]
+fn unpack_tar(archive: &std::path::Path, fresh: &std::path::Path) -> Result<(), String> {
+    let list = std::process::Command::new("tar").arg("-tzf").arg(archive).output().map_err(|e| format!("Couldn't unpack Piper: {e}"))?;
+    if String::from_utf8_lossy(&list.stdout).lines().any(|n| n.starts_with('/') || n.split('/').any(|p| p == "..")) {
+        return Err("The Piper download had unexpected files.".into());
+    }
+    let parent = fresh.with_extension("unpack");
+    let _ = std::fs::remove_dir_all(&parent);
+    std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+    let ok = std::process::Command::new("tar").arg("-xzf").arg(archive).arg("-C").arg(&parent).status().map_err(|e| format!("Couldn't unpack Piper: {e}"))?;
+    let r = if ok.success() { std::fs::rename(parent.join("piper"), fresh).map_err(|e| e.to_string()) } else { Err("Couldn't unpack Piper.".into()) };
+    let _ = std::fs::remove_dir_all(&parent);
+    r
 }

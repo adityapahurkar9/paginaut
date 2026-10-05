@@ -1,5 +1,6 @@
-//! HTTPS downloads and file hashes through Windows itself: WinHTTP (the system's proxy settings and
-//! certificate store apply, and no HTTP library ships with the app) and BCrypt.
+//! HTTPS downloads and file hashes. On Windows through Windows itself: WinHTTP (the system's proxy settings
+//! and certificate store apply, and no HTTP library ships with the app) and BCrypt; on Linux through ureq
+//! and RustCrypto (see `other`).
 
 use std::sync::atomic::AtomicBool;
 
@@ -171,22 +172,114 @@ mod win {
 }
 
 #[cfg(not(windows))]
-pub struct Hasher;
+pub use other::{fetch, Hasher};
+
+/// Linux: ureq over rustls, trusting the system's certificates (as WinHTTP does on Windows) and its
+/// proxy settings (https_proxy, all_proxy); hashes with RustCrypto's SHA-1 and SHA-256.
 #[cfg(not(windows))]
-impl Hasher {
-    pub fn new(_: Alg) -> Result<Self, String> {
-        Err("not supported on this system".into())
+mod other {
+    use super::{Alg, Get, RESTART, SLOW};
+    use sha1::Digest;
+    use std::io::Read;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    pub enum Hasher {
+        Sha1(sha1::Sha1),
+        Sha256(sha2::Sha256),
     }
-    pub fn update(&mut self, _: &[u8]) -> Result<(), String> {
-        Ok(())
+
+    impl Hasher {
+        pub fn new(alg: Alg) -> Result<Self, String> {
+            Ok(match alg {
+                Alg::Sha1 => Hasher::Sha1(sha1::Sha1::new()),
+                Alg::Sha256 => Hasher::Sha256(sha2::Sha256::new()),
+            })
+        }
+        pub fn update(&mut self, data: &[u8]) -> Result<(), String> {
+            match self {
+                Hasher::Sha1(h) => h.update(data),
+                Hasher::Sha256(h) => h.update(data),
+            }
+            Ok(())
+        }
+        pub fn finish(self) -> Result<Vec<u8>, String> {
+            Ok(match self {
+                Hasher::Sha1(h) => h.finalize().to_vec(),
+                Hasher::Sha256(h) => h.finalize().to_vec(),
+            })
+        }
     }
-    pub fn finish(self) -> Result<Vec<u8>, String> {
-        Err("not supported on this system".into())
+
+    /// Downloads over HTTPS (following redirects to other HTTPS servers), handing each piece to `sink`.
+    /// Returns the size.
+    pub fn fetch(g: Get, sink: &mut dyn FnMut(&[u8]) -> Result<(), String>) -> Result<u64, String> {
+        let offline = |e: ureq::Error| format!("Couldn't download (are you online?): {e}");
+        let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .tls_config(tls)
+            .proxy(ureq::Proxy::try_from_env())
+            .https_only(true)
+            .http_status_as_error(false)
+            .timeout_connect(Some(Duration::from_secs(15)))
+            .timeout_recv_response(Some(Duration::from_secs(30)))
+            .timeout_recv_body(None)
+            .user_agent("Paginaut")
+            .build()
+            .into();
+        let mut req = agent.get(format!("https://{}{}", g.host, g.path));
+        if g.from > 0 {
+            req = req.header("Range", format!("bytes={}-", g.from));
+        }
+        let mut resp = req.call().map_err(offline)?;
+        let status = resp.status().as_u16();
+        match status {
+            200 if g.from > 0 => return Err(RESTART.into()),
+            200 | 206 => {}
+            _ => return Err(format!("The download server answered {status}.")),
+        }
+        // A partial answer's length is what's left.
+        let length = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|s| s.trim().parse::<u64>().ok()).map(|l| l + g.from);
+        let expect = match (g.expect, length) {
+            (Some(e), Some(l)) if e != l => return Err("The download server offered a different file than expected.".into()),
+            (Some(e), _) => e,
+            (None, Some(l)) => l,
+            (None, None) => g.max,
+        };
+        if expect > g.max {
+            return Err("The download was larger than expected.".into());
+        }
+        let mut reader = resp.body_mut().with_config().limit(g.max.saturating_add(1)).reader();
+        let mut buf = vec![0u8; 256 << 10];
+        let mut total = g.from;
+        let mut window = (std::time::Instant::now(), total);
+        loop {
+            if g.cancel.load(Ordering::Acquire) {
+                return Err("stopped".into());
+            }
+            let read = reader.read(&mut buf).map_err(|e| format!("Couldn't download (are you online?): {e}"))?;
+            if read == 0 {
+                break;
+            }
+            total += read as u64;
+            let secs = window.0.elapsed().as_secs();
+            if secs >= 30 {
+                if g.min_rate > 0 && (total - window.1) / secs < g.min_rate {
+                    return Err(SLOW.into());
+                }
+                window = (std::time::Instant::now(), total);
+            }
+            if total > expect {
+                return Err("The download was larger than expected.".into());
+            }
+            sink(&buf[..read])?;
+            (g.progress)(total, expect);
+        }
+        if (g.expect.is_some() || length.is_some()) && total != expect {
+            return Err("The download was cut short; try again.".into());
+        }
+        Ok(total)
     }
-}
-#[cfg(not(windows))]
-pub fn fetch(_: Get, _: &mut dyn FnMut(&[u8]) -> Result<(), String>) -> Result<u64, String> {
-    Err("Downloads aren't supported on this system.".into())
 }
 
 /// Downloads into `dest` (hashing as it goes when `hash` is set). Returns the hash.

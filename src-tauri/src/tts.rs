@@ -1,12 +1,18 @@
-//! Read aloud with the voices installed in Windows (Settings › Time & language › Speech). WebView2's own
+//! Read aloud with the voices installed in Windows (Settings › Time & language › Speech); on Linux, only
+//! Piper's (piper.rs). WebView2's own
 //! speechSynthesis has no voices, so the text is spoken here into a WAV, with the time each word starts,
 //! and the page plays it and follows along.
 
 use serde::Serialize;
+#[cfg(windows)]
 use windows::core::{Interface, HSTRING};
+#[cfg(windows)]
 use windows::Media::Core::SpeechCue;
+#[cfg(windows)]
 use windows::Media::SpeechSynthesis::{SpeechSynthesizer, VoiceGender};
+#[cfg(windows)]
 use windows::Storage::Streams::DataReader;
+#[cfg(windows)]
 use windows::Win32::System::Com::{CoIncrementMTAUsage, CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
 #[derive(Serialize)]
@@ -27,6 +33,7 @@ pub struct Word {
     pub at: f64,
 }
 
+#[cfg(windows)]
 /// Runs `f` with COM started on this thread (WinRT needs it), and ended again after: the blocking pool's threads
 /// are shared, and other work on them starts its own apartment. A thread already in one (either kind) is fine
 /// for the speech classes, which are agile. Everything WinRT is released inside `f`.
@@ -46,14 +53,23 @@ fn with_com<R>(f: impl FnOnce() -> R) -> R {
     r
 }
 
+#[cfg(windows)]
 fn err(e: windows::core::Error) -> String {
     format!("Windows speech: {}", e.message())
 }
 
+#[cfg(windows)]
 pub fn voices() -> Result<Vec<Voice>, String> {
     with_com(voices_now)
 }
 
+/// Linux has no system voices with word timings: reading aloud uses Piper's (Settings › Voices, piper.rs).
+#[cfg(not(windows))]
+pub fn voices() -> Result<Vec<Voice>, String> {
+    Ok(Vec::new())
+}
+
+#[cfg(windows)]
 fn voices_now() -> Result<Vec<Voice>, String> {
     let default = SpeechSynthesizer::DefaultVoice().and_then(|v| v.Id()).map(|s| s.to_string()).unwrap_or_default();
     let mut out = Vec::new();
@@ -72,10 +88,17 @@ fn voices_now() -> Result<Vec<Voice>, String> {
 
 /// Speaks `text` with the voice `voice` (its id; the Windows default if empty or gone) at `rate` (1 = normal,
 /// 0.5–3). Returns the WAV and its words.
+#[cfg(windows)]
 pub fn speak(text: &str, voice: &str, rate: f64) -> Result<(Vec<u8>, Vec<Word>), String> {
     with_com(|| speak_now(text, voice, rate))
 }
 
+#[cfg(not(windows))]
+pub fn speak(_: &str, _: &str, _: f64) -> Result<(Vec<u8>, Vec<Word>), String> {
+    Err("Get a voice first: Settings › Voices.".into())
+}
+
+#[cfg(windows)]
 fn speak_now(text: &str, voice: &str, rate: f64) -> Result<(Vec<u8>, Vec<Word>), String> {
     let synth = SpeechSynthesizer::new().map_err(err)?;
     if !voice.is_empty() {
@@ -111,7 +134,7 @@ fn speak_now(text: &str, voice: &str, rate: f64) -> Result<(Vec<u8>, Vec<Word>),
     Ok((wav, words))
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     #[test]
     fn speaks_with_words() {

@@ -33,6 +33,16 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Downloads (OCR models, voices, updates) and their checks: Windows does these itself (net.rs).
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+sha1 = "0.10"
+sha2 = "0.10"
+# Saved signatures: sealed under a key in the desktop's keyring (Windows uses DPAPI; sigstore.rs).
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+chacha20poly1305 = "0.10"
+getrandom = "0.3"
+
 [target.'cfg(windows)'.dependencies]
 # Same versions Tauri uses, to reach WebView2 settings it doesn't expose (touchpad pinch).
 webview2-com = "0.39"
