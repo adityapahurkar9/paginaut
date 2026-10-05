@@ -1,13 +1,14 @@
 // The first screen: open a file, or carry on with one read before (Recent); and the shelf of
 // every e-book and comic (E-books, Comics).
 import { signal } from "@preact/signals";
-import { useState } from "preact/hooks";
-import { FolderOpen, Settings, X } from "lucide-preact";
+import { useEffect, useRef, useState } from "preact/hooks";
+import { ArrowLeft, FolderOpen, Search, Settings, X } from "lucide-preact";
 import { Logo } from "../ui/Logo";
 import { openRecent, pickAndOpen } from "./open";
+import { back, pushLayer } from "./nav";
 import { openSheet } from "./Sheets";
-import { progressOf, recent, unlist, type ReadRecord } from "./records";
-import { shelf, shelfOn } from "./shelf";
+import { progressOf, recent, records, unlist, type ReadRecord } from "./records";
+import { metas, openShelf, recordFor, shelf, shelfOn, shelved, type Shelved } from "./shelf";
 import { ShelfPane } from "./ShelfView";
 import { load, save } from "./state";
 
@@ -41,8 +42,22 @@ function ago(t: number) {
   return new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short", year: d > 300 ? "numeric" : undefined });
 }
 
+/** Searching the library (the header turns into a search field). */
+const finding = signal(false);
+
+function startFinding() {
+  pushLayer(() => (finding.value = false));
+  finding.value = true;
+}
+
 export function Library() {
   const t = tab.value;
+  if (finding.value)
+    return (
+      <div class="lib">
+        <LibSearch />
+      </div>
+    );
   const count = (k: "ebook" | "comic") => (shelfOn.value ? shelf.value.filter((it) => it.kind === k).length : 0);
   const tabs: [Tab, string, number][] = [
     ["recent", "Recent", 0],
@@ -54,6 +69,9 @@ export function Library() {
       <header class="lib-head">
         <Logo size={30} />
         <h1>Paginaut</h1>
+        <button class="ib" aria-label="Search your files" onClick={startFinding}>
+          <Search size={22} />
+        </button>
         <button class="ib" aria-label="Settings" onClick={() => openSheet("settings")}>
           <Settings size={22} />
         </button>
@@ -144,6 +162,121 @@ function RecentRow({ r, removing, onHold, onDone }: { r: ReadRecord; removing: b
           <X size={16} /> Remove
         </button>
       )}
+    </li>
+  );
+}
+
+/** What a search matches: a recent file, or a book on the shelf. */
+type Hit = { kind: "recent"; r: ReadRecord } | { kind: "shelf"; s: Shelved };
+
+/**
+ * Files in Recent and books on the shelf whose name (extension included: "pdf", ".cbr"), title or
+ * author has every word typed.
+ */
+function search(q: string): Hit[] {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const has = (...fields: string[]) => {
+    const hay = fields.join(" ").toLowerCase();
+    return words.every((w) => hay.includes(w));
+  };
+  const list = records.value;
+  const m = metas.value;
+  const hits: Hit[] = [];
+  const seen = new Set<string>();
+  for (const r of recent.value) {
+    if (!has(r.name, r.title, r.format)) continue;
+    hits.push({ kind: "recent", r });
+    seen.add(r.id);
+  }
+  if (shelfOn.value)
+    for (const it of shelf.value) {
+      const s = shelved(it, list, m);
+      if (s.r && seen.has(s.r.id)) continue;
+      if (has(it.name, s.title, s.author)) hits.push({ kind: "shelf", s });
+    }
+  return hits;
+}
+
+function LibSearch() {
+  const [q, setQ] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => input.current?.focus(), []);
+  const hits = search(q);
+  return (
+    <>
+      <header class="lib-head lib-find">
+        <button class="ib" aria-label="Close the search" onClick={() => back()}>
+          <ArrowLeft size={22} />
+        </button>
+        <input
+          ref={input}
+          type="search"
+          enterKeyHint="search"
+          placeholder="Name, title, author or pdf, epub…"
+          value={q}
+          onInput={(e) => setQ((e.target as HTMLInputElement).value)}
+        />
+        {q && (
+          <button class="ib" aria-label="Clear the search" onClick={() => (setQ(""), input.current?.focus())}>
+            <X size={20} />
+          </button>
+        )}
+      </header>
+      {q.trim() && hits.length === 0 && <p class="hint find-none">Nothing in Recent{shelfOn.value ? " or on the shelf" : ""} matches.</p>}
+      {hits.length > 0 && (
+        <section class="recent">
+          <ul>
+            {hits.map((h) => (h.kind === "recent" ? <RecentHit key={h.r.id} r={h.r} /> : <ShelfHit key={h.s.it.id} s={h.s} />))}
+          </ul>
+        </section>
+      )}
+    </>
+  );
+}
+
+/** Opens a search hit: the search closes first, so back from the reader returns to the library. */
+function openHit(open: () => void) {
+  back();
+  setTimeout(open, 0);
+}
+
+function RecentHit({ r }: { r: ReadRecord }) {
+  const color = FORMAT_COLORS[r.format] ?? "#5b6475";
+  return (
+    <li class="rec">
+      <button class="rec-main" onClick={() => openHit(() => void openRecent(r))}>
+        <span class="rec-badge" style={{ background: color }}>
+          {r.format.slice(0, 4)}
+        </span>
+        <span class="rec-tx">
+          <span class="rec-name">{r.title.trim() || r.name.replace(/\.[^.]+$/, "")}</span>
+          <span class="rec-meta">
+            Recent · {r.name} · {ago(r.at)}
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function ShelfHit({ s }: { s: Shelved }) {
+  const ext = s.it.name.split(".").pop()?.toUpperCase() ?? "";
+  const color = FORMAT_COLORS[ext] ?? "#5b6475";
+  return (
+    <li class="rec">
+      <button class="rec-main" onClick={() => openHit(() => void openShelf(s.it))}>
+        <span class="rec-badge" style={{ background: color }}>
+          {ext.slice(0, 4)}
+        </span>
+        <span class="rec-tx">
+          <span class="rec-name">{s.title}</span>
+          <span class="rec-meta">
+            {s.it.kind === "comic" ? "Comics" : "E-books"}
+            {s.author && <> · {s.author}</>} · {s.it.name}
+          </span>
+        </span>
+      </button>
     </li>
   );
 }
