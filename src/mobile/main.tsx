@@ -10,7 +10,7 @@ import { checkIntent, passwordAsk, savePosition } from "./open";
 import { Reader } from "./Reader";
 import { Sheets } from "./Sheets";
 import { tidyCache } from "./records";
-import { scanShelf } from "./shelf";
+import { scanIfStale, scanShelf } from "./shelf";
 import { busy, chrome, doc, isDark, searching, settings, sheet, toast } from "./state";
 
 function App() {
@@ -106,7 +106,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     void checkIntent();
     // Access may have changed meanwhile (all-files access turned on or off, say), and books come and go.
-    if (!doc.value) void tidyCache().then(() => scanShelf());
+    if (!doc.value) void tidyCache().then(scanIfStale);
   }
   else savePosition();
 });

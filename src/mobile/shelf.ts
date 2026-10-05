@@ -66,12 +66,25 @@ export function sections(kind: ShelfItem["kind"], sort: "title" | "author" | "ad
   return { all, reading, rest, finished };
 }
 
-/** Looks for books again (at start, when the app comes back, on pulling the shelf down). */
+/** What the last scan could reach, and when it ran (scanIfStale). */
+let lastScan = { at: 0, access: "" };
+const accessKey = () => {
+  const st = storage.value;
+  return st ? `${st.allFiles}|${st.folders.map((f) => f.uri).join("|")}` : "";
+};
+
+/** Looks again when the app comes back, if access changed (a folder, all-files access) or it's been ten minutes. */
+export function scanIfStale() {
+  if (accessKey() !== lastScan.access || Date.now() - lastScan.at > 600_000) void scanShelf();
+}
+
+/** Looks for books again (at start, when access changes, on pulling the shelf down). */
 export async function scanShelf(loud = false) {
   if (scanning.value) return;
   scanning.value = true;
   try {
     const st = await refreshStorage();
+    lastScan = { at: Date.now(), access: accessKey() };
     if (!st || (!st.allFiles && !st.folders.length)) {
       shelf.value = [];
       save(KEY, []);
