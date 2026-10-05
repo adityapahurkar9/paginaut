@@ -65,6 +65,8 @@ svg { display: block; flex-shrink: 0; }
 /* ---------------------------------------------------------------- title bar */
 .titlebar { height: 40px; flex-shrink: 0; display: flex; align-items: stretch; background: var(--chrome); }
 .titlebar .brand { display: flex; align-items: center; gap: 8px; padding: 0 12px 0 14px; font-weight: 700; }
+/* The mark on its white tile: a hairline edge so the tile shows on light title bars too. */
+.logo rect { stroke: rgba(0, 0, 0, 0.14); stroke-width: 14; }
 .tabs { display: flex; align-items: flex-end; gap: 2px; min-width: 0; overflow: hidden; }
 .tab {
   height: 32px; padding: 0 6px 0 12px; display: flex; align-items: center; gap: 8px; border: 0;

@@ -1,8 +1,11 @@
 // The Paginaut mark (assets/icon.svg): a P that is also a page, an astronaut's helmet in its bowl.
+// Used by both apps (the Android viewer and the Windows title bar and start page).
 
-export function Logo({ size = 32 }: { size?: number }) {
+/** `tile`: on a white rounded square, as the app icon is, so it reads on dark title bars too. */
+export function Logo({ size = 32, tile = false }: { size?: number; tile?: boolean }) {
   return (
-    <svg width={size} height={size} viewBox="160 100 704 824" aria-hidden="true">
+    <svg width={size} height={size} viewBox={tile ? "-95 -38 1100 1100" : "160 100 704 824"} aria-hidden="true" class="logo">
+      {tile && <rect x="-95" y="-38" width="1100" height="1100" rx="240" fill="#fff" />}
       <defs>
         <linearGradient id="lg-navy" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stop-color="#1a2c63" />

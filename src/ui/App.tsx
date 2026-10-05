@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { BookOpen, FileDiff, FileImage, FileSpreadsheet, FileText, House, Plus, Presentation, X } from "lucide-preact";
+import { Logo } from "./Logo";
 import * as A from "../actions";
 import { api, type SystemInfo } from "../api";
 import { Viewer } from "../render/Viewer";
@@ -167,11 +168,7 @@ function TitleBar() {
   return (
     <div class="titlebar">
       <div class="brand" data-tauri-drag-region>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M5 2h9l6 6v14H5z" fill="var(--acc)" />
-          <path d="M14 2v6h6" fill="none" stroke="var(--chrome)" stroke-width="1.6" stroke-linejoin="round" />
-          <path d="M8.5 13h7M8.5 16.5h5" stroke="var(--on-acc)" stroke-width="1.6" stroke-linecap="round" />
-        </svg>
+        <Logo size={20} tile />
         <span data-tauri-drag-region>Paginaut</span>
       </div>
       <div class="tabs">

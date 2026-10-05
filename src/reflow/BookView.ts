@@ -135,11 +135,21 @@ export class BookView implements ReflowView {
     return parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5;
   }
 
+  /**
+   * More characters than a page can possibly hold (a quarter of an em each, far narrower than
+   * any real text): paragraphs longer than this are measured a page's worth at a time.
+   */
+  private capacity(lh: number) {
+    const fs = parseFloat(getComputedStyle(this.measure).fontSize) || 16;
+    return Math.ceil((this.measure.clientWidth / (fs * 0.25)) * (this.measure.clientHeight / lh)) + 200;
+  }
+
   /** Paginates one section, yielding after every page so it can run in slices. */
   private *paginate(sec: Section): Generator<void, Pos[]> {
     const { blocks } = this.flow;
     const pages: Pos[] = [];
     const lh = this.lineHeight();
+    const cap = this.capacity(lh);
     let pos: Pos = { b: sec.b0, o: 0 };
     while (pos.b < sec.b1) {
       const start = pos;
@@ -148,32 +158,46 @@ export class BookView implements ReflowView {
       for (;;) {
         if (pos.b >= sec.b1) break;
         const block = blocks[pos.b];
-        const el = blockEl(block, pos.b, this.pics, pos.o);
-        this.measure.append(el);
-        if (!this.overflows()) {
-          placed++;
-          pos = { b: pos.b + 1, o: 0 };
-          continue;
+        const text = block.k === "p" || block.k === "li";
+        // A paragraph longer than a page can't fit whole: don't lay it all out to find that out
+        // (some documents come out as a few paragraphs of a million characters).
+        const long = text && block.len - pos.o > cap;
+        const el = long ? null : blockEl(block, pos.b, this.pics, pos.o);
+        if (el) {
+          this.measure.append(el);
+          if (!this.overflows()) {
+            placed++;
+            pos = { b: pos.b + 1, o: 0 };
+            continue;
+          }
+          el.remove();
         }
-        el.remove();
-        if (block.k === "img" && placed > 0 && this.fitPicture(el, pos.b)) {
+        if (el && block.k === "img" && placed > 0 && this.fitPicture(el, pos.b)) {
           placed++;
           pos = { b: pos.b + 1, o: 0 };
           break;
         }
-        if (block.k === "p" || block.k === "li") {
-          const k = this.fit(block, pos.b, pos.o, lh, placed === 0);
+        if (text) {
+          const k = this.fit(block, pos.b, pos.o, lh, placed === 0, cap);
           if (k > pos.o) {
             this.measure.append(blockEl(block, pos.b, this.pics, pos.o, k));
             placed++;
-            pos = { b: pos.b, o: k };
+            pos = k >= block.len ? { b: pos.b + 1, o: 0 } : { b: pos.b, o: k };
           }
         }
         if (placed === 0) {
-          // Nothing fits on an empty page (a huge picture or heading): place it anyway.
-          this.measure.append(el);
+          // Nothing fits on an empty page (a huge picture or heading, a word too long for the
+          // line): place it anyway. A long paragraph gives up just its first word.
+          if (el) {
+            this.measure.append(el);
+            pos = { b: pos.b + 1, o: 0 };
+          } else {
+            const t = textOf(block), sp = t.indexOf(" ", pos.o + 1);
+            const k = sp < 0 ? t.length : sp + 1;
+            this.measure.append(blockEl(block, pos.b, this.pics, pos.o, k));
+            pos = k >= t.length ? { b: pos.b + 1, o: 0 } : { b: pos.b, o: k };
+          }
           placed++;
-          pos = { b: pos.b + 1, o: 0 };
         }
         break;
       }
@@ -215,22 +239,31 @@ export class BookView implements ReflowView {
     return true;
   }
 
-  /** Largest word boundary k such that characters [from, k) of the paragraph fit. */
-  private fit(block: Extract<Block, { k: "p" | "li" }>, index: number, from: number, lh: number, emptyPage: boolean): number {
+  /**
+   * Largest word boundary k such that characters [from, k) of the paragraph fit. Only the next
+   * `cap` characters are tried (more than a page holds), widened if they all fit.
+   */
+  private fit(block: Extract<Block, { k: "p" | "li" }>, index: number, from: number, lh: number, emptyPage: boolean, cap: number): number {
     const text = textOf(block);
-    const cuts: number[] = [];
-    for (let i = from + 1; i < text.length; i++) if (text[i - 1] === " ") cuts.push(i);
-    let lo = 0, hi = cuts.length - 1, best = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const el = blockEl(block, index, this.pics, from, cuts[mid]);
-      this.measure.append(el);
-      const ok = !this.overflows();
-      el.remove();
-      if (ok) {
-        best = mid;
-        lo = mid + 1;
-      } else hi = mid - 1;
+    let cuts: number[] = [], best = -1;
+    for (let end = from + cap; ; end += cap) {
+      const stop = Math.min(text.length, end);
+      cuts = [];
+      for (let i = from + 1; i < stop; i++) if (text[i - 1] === " ") cuts.push(i);
+      let lo = 0, hi = cuts.length - 1;
+      best = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const el = blockEl(block, index, this.pics, from, cuts[mid]);
+        this.measure.append(el);
+        const ok = !this.overflows();
+        el.remove();
+        if (ok) {
+          best = mid;
+          lo = mid + 1;
+        } else hi = mid - 1;
+      }
+      if (stop >= text.length || best < cuts.length - 1) break;
     }
     if (best < 0) return from;
     const k = cuts[best];
@@ -567,7 +600,7 @@ export class BookView implements ReflowView {
     const edge = w * 0.09, zone = w * 0.14;
     const dir: 1 | -1 | 0 = x > w - zone ? 1 : x < zone ? -1 : 0;
     if (!dir) {
-      if (e.pointerType === "touch") this.swipe(e, w);
+      if (e.pointerType !== "mouse" && e.pointerType !== "pen") this.swipe(e, w); // touch (older WebViews leave pointerType empty)
       return;
     }
     const onEdge = dir > 0 ? x > w - edge : x < edge;

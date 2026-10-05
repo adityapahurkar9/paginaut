@@ -1,7 +1,7 @@
 // The first screen: open a file, or carry on with one read before.
 import { useState } from "preact/hooks";
 import { FolderOpen, Settings, X } from "lucide-preact";
-import { Logo } from "./Logo";
+import { Logo } from "../ui/Logo";
 import { openRecent, pickAndOpen } from "./open";
 import { openSheet } from "./Sheets";
 import { forget, recent, type Recent } from "./state";

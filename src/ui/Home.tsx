@@ -1,5 +1,6 @@
 import { Combine, FileText, FolderOpen, X } from "lucide-preact";
 import * as A from "../actions";
+import { Logo } from "./Logo";
 import { startMerge } from "./PagesUI";
 import { forgetFile, openFiles, recent } from "../store";
 
@@ -18,11 +19,7 @@ export function Home() {
     <div class="home">
       <div class="home-inner">
         <div class="drop">
-          <svg width="44" height="44" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M5 2h9l6 6v14H5z" fill="var(--acc)" />
-            <path d="M14 2v6h6" fill="none" stroke="var(--surface)" stroke-width="1.4" stroke-linejoin="round" />
-            <path d="M8.5 13h7M8.5 16.5h5" stroke="var(--on-acc)" stroke-width="1.5" stroke-linecap="round" />
-          </svg>
+          <Logo size={56} tile />
           <h1>Open a document</h1>
           <span>PDF, scans, e-books (EPUB, MOBI, FB2), comics (CBZ), XPS and images.</span>
           <span>Drop files anywhere in this window, or</span>
