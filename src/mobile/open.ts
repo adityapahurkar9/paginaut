@@ -6,7 +6,7 @@ import { native, type Picked } from "./native";
 import { stopReading } from "./speech";
 import { back, pushLayer } from "./nav";
 import { findRecord, openedRecord, recordById, tidyCache, unlist, updateRecord, type ReadRecord } from "./records";
-import { busy, chrome, doc, errorText, isTablet, mode, page, say, searching, sheet } from "./state";
+import { busy, chrome, doc, errorText, isTablet, layout, mode, page, say, searching, sheet } from "./state";
 
 /** A password asked for: the file's name, and how to answer (null: cancelled). */
 export const passwordAsk = signal<{ name: string; wrong: boolean; answer: (pw: string | null) => void } | null>(null);
@@ -29,6 +29,9 @@ export let positionOf: () => { page: number; frac: number } = () => ({ page: pag
 export function setPositionSource(f: () => { page: number; frac: number }) {
   positionOf = f;
 }
+
+const EBOOKS = ["epub", "mobi", "fb2", "fbz"];
+const COMICS = ["cbz", "cbr", "cbt"];
 
 const kind = (info: DocInfo, name: string) => (info.isPdf ? "PDF" : (name.split(".").pop() ?? info.format).toUpperCase());
 
@@ -69,10 +72,14 @@ export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
   // Known by its contents, wherever it came from this time (or as an edited copy of one read before).
   const at = findRecord({ fp: p.fp ?? "", uri, name, pages: info.pageCount, title: info.title });
   page.value = at ? Math.min(at.page, info.pageCount - 1) : 0;
-  // E-books and Markdown are laid out on book-sized pages, too small to read on a phone: they open
-  // in Read mode. Everything else (PDFs, comics, XPS) opens as pages.
-  const saved = at?.mode === "book" && !isTablet ? "read" : at?.mode;
-  mode.value = saved ?? (info.reflowable ? "read" : "pages");
+  // Opened before: as it was read. New: e-books as a book (their text as pages you turn), comics as
+  // pages turned one by one (two side by side on a tablet held sideways), everything else one page
+  // at a time.
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  const ebook = info.reflowable && EBOOKS.includes(ext);
+  const comic = COMICS.includes(ext);
+  mode.value = at?.mode ?? (ebook ? "book" : "pages");
+  layout.value = at?.layout ?? (comic && isTablet ? "double" : "paged");
   chrome.value = true;
   startPosition = at ? { page: page.value, frac: at.frac } : { page: 0, frac: 0 };
   // Remembered even when it can't be opened from Recent (a big file lent once): where you were
@@ -89,6 +96,7 @@ export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
     page: page.value,
     frac: startPosition.frac,
     mode: mode.value,
+    layout: layout.value,
     at: Date.now(),
   });
   doc.value = { info, name, uri, path: p.path, rec, inPlace: p.inPlace };
@@ -107,7 +115,7 @@ export function savePosition() {
   const d = doc.value;
   if (!d) return;
   const pos = positionOf();
-  updateRecord(d.rec, { page: pos.page, frac: pos.frac, mode: mode.value, at: Date.now() });
+  updateRecord(d.rec, { page: pos.page, frac: pos.frac, mode: mode.value, layout: layout.value, at: Date.now() });
 }
 
 /** Closes the open document (the reader's history entry is taken off by whoever asked). */

@@ -97,6 +97,8 @@ export const doc = signal<OpenDoc | null>(null);
 /** Displayed page (0-based). */
 export const page = signal(0);
 export const mode = signal<Mode>("pages");
+/** How the open document's pages are shown in Pages mode (kept with it: records.ts). */
+export const layout = signal<Layout>("paged");
 /** The reader's bars are shown (a tap toggles them). */
 export const chrome = signal(true);
 

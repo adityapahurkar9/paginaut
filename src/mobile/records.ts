@@ -6,7 +6,7 @@
 // and opens where you left it. Recent lists the records whose file can still be opened.
 import { computed, signal } from "@preact/signals";
 import { native, type Storage } from "./native";
-import { load, save, type Mode } from "./state";
+import { load, save, type Layout, type Mode } from "./state";
 
 export interface Bookmark {
   page: number;
@@ -32,6 +32,8 @@ export interface ReadRecord {
   page: number;
   frac: number;
   mode: Mode;
+  /** Its pages in Pages mode: scrolled, one by one, or two side by side. */
+  layout?: Layout;
   bookmarks: Bookmark[];
   /** Last opened. */
   at: number;

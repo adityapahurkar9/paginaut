@@ -16,7 +16,7 @@ import { openSheet } from "./Sheets";
 import { PageSelection, pressHolding, selTick, usePressSelect } from "./select";
 import { nextRate, pauseReading, reading, resumeReading, stopReading } from "./speech";
 import { bookmarksOf, toggleBookmark } from "./records";
-import { chrome, doc, isDark, mode, page, say, searching, settings, sheet, updateSettings, type OpenDoc, type TextSettings } from "./state";
+import { chrome, doc, isDark, layout as docLayout, mode, page, say, searching, settings, sheet, updateSettings, type OpenDoc, type TextSettings } from "./state";
 import { bookInfo, goTo, movedByApp, views } from "./views";
 
 export function Reader({ d }: { d: OpenDoc }) {
@@ -101,7 +101,7 @@ function useWide() {
 function Pages({ d }: { d: OpenDoc }) {
   const host = useRef<HTMLDivElement>(null);
   const [v, setV] = useState<Viewer | null>(null);
-  const layout = settings.value.layout;
+  const layout = docLayout.value;
   const night = settings.value.night;
   const wide = useWide();
 
@@ -113,7 +113,7 @@ function Pages({ d }: { d: OpenDoc }) {
       },
       onZoom: (_z, fit) => {
         // Zoomed in by hand: pages are no longer turned one at a time.
-        viewer.el.classList.toggle("turn", settings.value.layout !== "scroll" && fit === "page");
+        viewer.el.classList.toggle("turn", docLayout.value !== "scroll" && fit === "page");
       },
       onSelection: () => selTick.value++,
       onPageAction() {},
@@ -125,7 +125,7 @@ function Pages({ d }: { d: OpenDoc }) {
     });
     const unwatch = chrome.subscribe((c) => c && (shownAt = performance.now()));
     views.viewer = viewer;
-    const L = settings.value.layout;
+    const L = docLayout.value;
     viewer.setLayoutMode(spreadFor(L, innerWidth > innerHeight));
     viewer.setSlots(L !== "scroll");
     viewer.restore({ page: startPosition.page, frac: startPosition.frac, zoom: 1, fit: fitFor(L) });
@@ -264,7 +264,7 @@ function Pages({ d }: { d: OpenDoc }) {
       if (!v) return;
       const r = v.el.getBoundingClientRect();
       if (v.viewState().fit !== "none") v.setZoom(v.zoomLevel * 2.2, x - r.left, y - r.top);
-      else v.setFit(fitFor(settings.value.layout));
+      else v.setFit(fitFor(docLayout.value));
     },
   );
 

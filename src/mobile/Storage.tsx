@@ -47,7 +47,7 @@ export function StorageSheet() {
   return (
     <>
       <div class="sheet-title">
-        <button class="ib" aria-label="Back to settings" onClick={() => back()}>
+        <button class="ib" aria-label="Close storage" onClick={() => back()}>
           <ArrowLeft size={22} />
         </button>
         <h3>Storage</h3>

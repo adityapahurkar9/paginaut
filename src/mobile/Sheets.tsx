@@ -10,7 +10,7 @@ import { back, pushLayer } from "./nav";
 import { bookmarksOf, refreshStorage, storage, toggleBookmark, unlistAll } from "./records";
 import { sizeText, StorageSheet } from "./Storage";
 import { ShelfSheet } from "./ShelfView";
-import { doc, errorText, isTablet, mode, page, say, settings, sheet, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
+import { doc, errorText, isTablet, layout, mode, page, say, settings, sheet, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
 import { startReading } from "./speech";
 import { goTo } from "./views";
 
@@ -149,15 +149,15 @@ function ViewSheet() {
         options={[
           ["pages", <><FileText size={17} /> Pages</>],
           ["read", <><ScrollText size={17} /> Read</>],
-          ...(isTablet ? [["book", <><BookOpen size={17} /> Book</>] as [Mode, ComponentChildren]] : []),
+          ["book", <><BookOpen size={17} /> Book</>],
         ]}
       />
       <p class="hint">{m === "pages" ? "The document as it was laid out." : m === "read" ? "Just the text, sized for your screen." : "Just the text, as pages you turn."}</p>
       {m === "pages" ? (
         <Row label="Pages">
           <Seg<Layout>
-            value={st.layout === "double" && !isTablet ? "scroll" : st.layout}
-            onChange={(v) => updateSettings({ layout: v })}
+            value={layout.value === "double" && !isTablet ? "paged" : layout.value}
+            onChange={(v) => (layout.value = v)}
             options={[["scroll", "Scroll"], ["paged", "One by one"], ...(isTablet ? [["double", "Two"] as [Layout, string]] : [])]}
           />
         </Row>
@@ -445,8 +445,7 @@ function SettingsSheet() {
       <button
         class="row"
         onClick={() => {
-          // Back returns here.
-          pushLayer(() => (sheet.value = "settings"));
+          // In place of Settings: closing it goes back to the library.
           sheet.value = "storage";
         }}
       >
