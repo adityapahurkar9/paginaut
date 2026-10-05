@@ -480,7 +480,7 @@ export const api = {
   outline: (doc: number) => invoke<OutlineItem[]>("outline", { doc }),
   links: (doc: number, page: number) => invoke<LinkItem[]>("page_links", { doc, page }),
   images: (doc: number, page: number) => invoke<[number, number, number, number][]>("page_images", { doc, page }),
-  select: (doc: number, page: number, a: [number, number], b: [number, number], mode: 0 | 1 | 2) =>
+  select: (doc: number, page: number, a: [number, number], b: [number, number], mode: 0 | 1 | 2 | 3 | 4 | 5) =>
     invoke<Quad[]>("text_select", { doc, page, a, b, mode }),
   copy: (doc: number, page: number, a: [number, number], b: [number, number]) =>
     invoke<string>("text_copy", { doc, page, a, b }),

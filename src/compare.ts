@@ -2,7 +2,7 @@
 // PDF, or with the Word, PowerPoint, Excel or Markdown file it was made from.
 import { batch, signal } from "@preact/signals";
 import { api, type CompareOptions, type CompareOutcome, type CompareSideReq, type DocInfo } from "./api";
-import { activeKey, baseName, HOME, homeOpen, settings, tabs, updateSettings } from "./store";
+import { activeKey, baseName, closeKey, leaveHome, setCompareKey, settings, tabs, updateSettings } from "./store";
 
 /** The Compare tab's key (like the Home tab's). */
 export const COMPARE = "compare";
@@ -36,6 +36,7 @@ export interface CompareSession {
 }
 
 export const compare = signal<CompareSession | null>(null);
+setCompareKey(() => (compare.value ? COMPARE : null));
 /** The change picked in the list (or on a page), -1 for none. */
 export const compareSel = signal(-1);
 /** Scroll the two sides together. */
@@ -111,7 +112,7 @@ export async function startCompare(a: string, b: string) {
   batch(() => {
     compare.value = { a: blank(a), b: blank(b), state: "opening", progress: "Opening…", fraction: -1, error: "", outcome: null, run: gen };
     compareSel.value = -1;
-    if (activeKey.value === HOME) homeOpen.value = false;
+    leaveHome();
     activeKey.value = COMPARE;
   });
   try {
@@ -180,9 +181,8 @@ export function closeCompare() {
   generation++;
   stopCompare();
   closeDocs();
-  batch(() => {
+  closeKey(COMPARE, () => {
     compare.value = null;
     compareSel.value = -1;
-    if (activeKey.value === COMPARE) activeKey.value = tabs.value[tabs.value.length - 1]?.key ?? null;
   });
 }

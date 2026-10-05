@@ -115,6 +115,28 @@ export function clearRecent() {
   save("paginaut.m.recent", []);
 }
 
+/** Pages you marked to come back to, by document (its source, as Recent keys it). Kept in the app, not the file. */
+export interface Bookmark {
+  page: number;
+  at: number;
+}
+export const bookmarks = signal<Record<string, Bookmark[]>>(load<Record<string, Bookmark[]>>("paginaut.m.bookmarks", {}));
+
+export const bookmarksOf = (uri: string) => bookmarks.value[uri] ?? [];
+
+/** Marks the page, or unmarks it if it was. Returns whether it is marked now. */
+export function toggleBookmark(uri: string, page: number): boolean {
+  const list = bookmarksOf(uri);
+  const on = !list.some((b) => b.page === page);
+  const next = on ? [...list, { page, at: Date.now() }].sort((a, b) => a.page - b.page) : list.filter((b) => b.page !== page);
+  const all = { ...bookmarks.value };
+  if (next.length) all[uri] = next;
+  else delete all[uri];
+  bookmarks.value = all;
+  save("paginaut.m.bookmarks", all);
+  return on;
+}
+
 // ---------------------------------------------------------------- the open document
 
 export interface OpenDoc {

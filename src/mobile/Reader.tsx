@@ -1,7 +1,7 @@
 // The open document: its pages (the desktop's viewer) or its text reflowed (Read, Book), with bars a tap
 // shows or hides.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { ArrowLeft, ChevronDown, ChevronUp, EllipsisVertical, ListTree, Moon, Pause, Play, Search, SlidersHorizontal, Square, Sun, X } from "lucide-preact";
+import { ArrowLeft, Bookmark, ChevronDown, ChevronUp, EllipsisVertical, ListTree, Moon, Pause, Play, Search, SlidersHorizontal, Square, Sun, X } from "lucide-preact";
 import { api } from "../api";
 import { Viewer, type FitMode } from "../render/Viewer";
 import type { Flow } from "../reflow/model";
@@ -13,8 +13,9 @@ import { back, pushLayer } from "./nav";
 import { leaveReader, savePosition, setPositionSource, startPosition } from "./open";
 import { clearFind, find, found, next, prev } from "./search";
 import { openSheet } from "./Sheets";
+import { PageSelection, pressHolding, selTick, usePressSelect } from "./select";
 import { nextRate, pauseReading, reading, resumeReading, stopReading } from "./speech";
-import { chrome, doc, isDark, mode, page, searching, settings, sheet, updateSettings, type OpenDoc, type TextSettings } from "./state";
+import { bookmarksOf, chrome, doc, isDark, mode, page, say, searching, settings, sheet, toggleBookmark, updateSettings, type OpenDoc, type TextSettings } from "./state";
 import { bookInfo, goTo, movedByApp, views } from "./views";
 
 export function Reader({ d }: { d: OpenDoc }) {
@@ -113,7 +114,7 @@ function Pages({ d }: { d: OpenDoc }) {
         // Zoomed in by hand: pages are no longer turned one at a time.
         viewer.el.classList.toggle("turn", settings.value.layout !== "scroll" && fit === "page");
       },
-      onSelection() {},
+      onSelection: () => selTick.value++,
       onPageAction() {},
       onScroll: () => {
         // Reading on hides the bars (not when the app moved the view, nor right after they appeared).
@@ -192,6 +193,11 @@ function Pages({ d }: { d: OpenDoc }) {
     };
     const move = (e: TouchEvent) => {
       if (state === "no" || !state) return;
+      if (pressHolding()) {
+        // A long press is selecting text: the finger is the selection's.
+        state = "no";
+        return;
+      }
       if (e.touches.length > 1) {
         // A second finger: the pinch is the viewer's (it takes over the page's transform too).
         state = "no";
@@ -261,7 +267,26 @@ function Pages({ d }: { d: OpenDoc }) {
     },
   );
 
-  return <div class="stage" ref={host} />;
+  usePressSelect(v);
+  // With text selected, a tap clears it (rather than showing or hiding the bars).
+  useEffect(() => {
+    const el = host.current;
+    if (!el || !v) return;
+    const click = (e: MouseEvent) => {
+      if (!v.hasSelection) return;
+      e.stopPropagation();
+      if (!pressHolding()) v.clearSelection();
+    };
+    el.addEventListener("click", click, true);
+    return () => el.removeEventListener("click", click, true);
+  }, [v]);
+
+  return (
+    <>
+      <div class="stage" ref={host} />
+      {v && mode.value === "pages" && <PageSelection v={v} />}
+    </>
+  );
 }
 
 // ---------------------------------------------------------------- Read and Book
@@ -367,16 +392,33 @@ function TopBar({ d }: { d: OpenDoc }) {
       <div class="bar-title">
         <strong>{title}</strong>
       </div>
+      <BookmarkButton d={d} />
       <button class="ib" aria-label="Find in document" onClick={openFind}>
         <Search size={21} />
       </button>
-      <button class="ib" aria-label="Contents and comments" onClick={() => openSheet("contents")}>
+      <button class="ib" aria-label="Contents, bookmarks and comments" onClick={() => openSheet("contents")}>
         <ListTree size={21} />
       </button>
       <button class="ib" aria-label="More" onClick={() => openSheet("more")}>
         <EllipsisVertical size={21} />
       </button>
     </header>
+  );
+}
+
+/** Marks the page you're on (filled while it is marked); the list is in the Contents sheet. */
+function BookmarkButton({ d }: { d: OpenDoc }) {
+  const p = page.value;
+  const on = bookmarksOf(d.uri).some((b) => b.page === p);
+  return (
+    <button
+      class={`ib ${on ? "marked" : ""}`}
+      aria-label={on ? `Remove the bookmark on page ${p + 1}` : `Bookmark page ${p + 1}`}
+      aria-pressed={on}
+      onClick={() => say(toggleBookmark(d.uri, p) ? `Bookmarked page ${p + 1}` : "Bookmark removed")}
+    >
+      <Bookmark size={21} fill={on ? "currentColor" : "none"} />
+    </button>
   );
 }
 

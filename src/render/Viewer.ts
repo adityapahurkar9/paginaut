@@ -113,7 +113,8 @@ interface Selection {
   view: number;
   a: [number, number];
   b: [number, number];
-  mode: 0 | 1 | 2;
+  /** 0: characters between a and b, 1: words, 2: lines, 3: the word nearest a (touch), 4: its paragraph, 5: the page. */
+  mode: 0 | 1 | 2 | 3 | 4 | 5;
 }
 
 // ------------------------------------------------------------ rotation math
@@ -730,11 +731,13 @@ export class Viewer {
     this.cb.onSelection(false);
   }
 
-  selectAllOnPage() {
-    const v = this.currentPage;
-    const [w, h] = origSize(this.pages[v]);
-    this.updateSelection({ view: v, a: [0, 0], b: [w, h], mode: 0 });
+  /** Selects all the text on displayed page `view` (by default the one being read). */
+  selectAllOnPage(view?: number) {
+    const v = view ?? this.currentPage;
+    // Mode 5: the engine's first character to its last (corner to corner misses lines).
+    void this.updateSelection({ view: v, a: [0, 0], b: [0, 0], mode: 5 });
   }
+
 
   focus() {
     this.el.focus({ preventScroll: true });
@@ -856,6 +859,81 @@ export class Viewer {
     if (Math.abs(p.zoom - this.zoom) > 1e-3) this.setZoom(p.zoom, p.cx, p.cy);
     this.el.scrollLeft -= p.dx;
     this.el.scrollTop -= p.dy;
+  }
+
+  // ------------------------------------------------------------ touch selection (the Android viewer)
+
+  /** A long press: selects the word under the screen point. Resolves true if there was text. */
+  async selectWordAt(clientX: number, clientY: number): Promise<boolean> {
+    const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>(".pg");
+    const pv = el && this.el.contains(el) ? this.mounted.get(Number(el.dataset.index)) : undefined;
+    if (!pv) return false;
+    const p = this.pointToPage(pv, clientX, clientY);
+    // Mode 3: the engine's word nearest the point (MuPDF's own word snapping needs the point close
+    // to the middle of the line, which a fingertip on small text rarely is).
+    void this.updateSelection({ view: pv.index, a: p, b: p, mode: 3 });
+    await this.selectionSettled();
+    if (!this.selQuads.length) this.clearSelection();
+    return this.selQuads.length > 0;
+  }
+
+  /**
+   * Selects the paragraph at a screen point, or (no point) the one holding the selection's start.
+   * Resolves true if there was text.
+   */
+  async selectParagraph(clientX?: number, clientY?: number): Promise<boolean> {
+    let view: number, p: [number, number];
+    if (clientX !== undefined && clientY !== undefined) {
+      const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>(".pg");
+      const pv = el && this.el.contains(el) ? this.mounted.get(Number(el.dataset.index)) : undefined;
+      if (!pv) return false;
+      [view, p] = [pv.index, this.pointToPage(pv, clientX, clientY)];
+    } else if (this.selection) [view, p] = [this.selection.view, this.selection.a];
+    else return false;
+    void this.updateSelection({ view, a: p, b: p, mode: 4 });
+    await this.selectionSettled();
+    return this.selQuads.length > 0;
+  }
+
+  /** Moves the start ("a") or end ("b") of the selection to a screen point on its page (a handle dragged). */
+  moveSelectionEnd(end: "a" | "b", clientX: number, clientY: number) {
+    const s = this.selection;
+    const pv = s && this.mounted.get(s.view);
+    if (!s || !pv) return;
+    void this.updateSelection({ ...s, [end]: this.pointToPage(pv, clientX, clientY), mode: 0 });
+  }
+
+  /**
+   * The selection's first and last line on screen: where its handles go (bottom-left of the
+   * first, bottom-right of the last) and the menu (above the top). Null with none, or off screen.
+   */
+  selectionEnds(): { start: [number, number]; end: [number, number]; top: number; bottom: number } | null {
+    const s = this.selection;
+    const pv = s && this.mounted.get(s.view);
+    if (!s || !pv || !this.selQuads.length) return null;
+    const r = pv.el.getBoundingClientRect();
+    const spec = pv.spec;
+    const box = (q: ArrayLike<number>) => {
+      const [x0, y0, x1, y1] = quadBox(spec, q);
+      return [r.left + (x0 / spec.w) * r.width, r.top + (y0 / spec.h) * r.height, r.left + (x1 / spec.w) * r.width, r.top + (y1 / spec.h) * r.height];
+    };
+    const first = box(this.selQuads[0]), last = box(this.selQuads[this.selQuads.length - 1]);
+    let top = Infinity, bottom = -Infinity;
+    for (const q of this.selQuads) {
+      const b = box(q);
+      top = Math.min(top, b[1]);
+      bottom = Math.max(bottom, b[3]);
+    }
+    return { start: [first[0], first[3]], end: [last[2], last[3]], top, bottom };
+  }
+
+  /** The displayed page the selection is on (null with none). */
+  get selectionView() {
+    return this.selection?.view ?? null;
+  }
+
+  get hasSelection() {
+    return this.selQuads.length > 0;
   }
 
   /** Screen point → unrotated page points on displayed page `view` (null if it isn't in view). */

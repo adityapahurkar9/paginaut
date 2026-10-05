@@ -178,7 +178,8 @@ window.addEventListener("keydown", (e) => {
   else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && ready) { handled(); (e.key === "ArrowRight" ? A.nextPage : A.prevPage)(); }
 });
 
-// Disable the browser's own zoom and context menu in the app window.
+// Disable the browser's own zoom and context menu in the app window (fields keep theirs: cut, copy,
+// paste). Pages and Read/Book text have the app's own (extract.ts).
 window.addEventListener("wheel", (e) => e.ctrlKey && e.preventDefault(), { passive: false });
 window.addEventListener("contextmenu", (e) => {
   if (!isTyping(e as unknown as KeyboardEvent)) e.preventDefault();

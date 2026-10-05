@@ -8,12 +8,12 @@ import { searchFlow } from "./reflow/find";
 import { setViewMode, viewModeOf } from "./modes";
 import { updateReflow, zoomText } from "./ui/Reflow";
 import {
-  activeKey, activeTab, closeTab, cycleTab, findOpen, openFiles, paletteOpen, settings, showToast, updateSettings, type Tab,
+  activeKey, activeTab, closeHome, closeTab, cycleTab, isHome, findOpen, openFiles, paletteOpen, settings, showToast, updateSettings, type Tab,
 } from "./store";
 import { closeCompare, COMPARE } from "./compare";
 
 export const OPENABLE = [
-  "pdf", "xps", "oxps", "epub", "mobi", "fb2", "fbz", "cbz", "svg", "txt", "md", "markdown", "html", "htm", "xhtml",
+  "pdf", "xps", "oxps", "epub", "mobi", "fb2", "fbz", "cbz", "cbr", "svg", "txt", "md", "markdown", "html", "htm", "xhtml",
   "png", "jpg", "jpeg", "jfif", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "pnm", "pbm", "pgm", "ppm", "pam", "jxr",
   ...OFFICE_EXT,
 ];
@@ -90,6 +90,7 @@ export function closeActive() {
   const t = activeTab.value;
   if (t) closeTab(t);
   else if (activeKey.value === COMPARE) closeCompare();
+  else if (isHome(activeKey.value)) closeHome(activeKey.value!);
 }
 export const nextTab = () => cycleTab(1);
 export const prevTab = () => cycleTab(-1);

@@ -8,6 +8,9 @@
 #include <stdarg.h>
 #include <time.h>
 
+/* RAR comic books (cbr.c). */
+void po_register_rar(fz_context *ctx);
+
 #ifdef _WIN32
 #include <windows.h>
 static CRITICAL_SECTION g_locks[FZ_LOCK_MAX];
@@ -52,6 +55,7 @@ int fo_global_init(size_t store_bytes)
 	fz_try(g_base)
 	{
 		fz_register_document_handlers(g_base);
+		po_register_rar(g_base);
 		fz_disable_icc(g_base);
 	}
 	fz_catch(g_base)
@@ -92,6 +96,7 @@ fo_ctx *fo_ctx_new_private(size_t store_bytes)
 	fz_try(c->ctx)
 	{
 		fz_register_document_handlers(c->ctx);
+		po_register_rar(c->ctx);
 		fz_disable_icc(c->ctx);
 	}
 	fz_catch(c->ctx)
@@ -7029,8 +7034,141 @@ int fo_text_highlight(fo_ctx *c, fo_text *t, const float b[4], float ax, float a
 	return n;
 }
 
+/* A character that ends a word (spaces, and punctuation around words; hyphens and apostrophes stay in). */
+static int select_break(int ch)
+{
+	if (fz_is_unicode_whitespace(ch))
+		return 1;
+	return (ch > 0 && ch < 128 && strchr(",.;:!?()[]{}<>\"/\\|", ch) != NULL)
+		|| ch == 0x201C || ch == 0x201D || ch == 0x2018 || ch == 0x2019 || ch == 0x00AB || ch == 0x00BB
+		|| ch == 0x2013 || ch == 0x2014 || ch == 0x2026;
+}
+
+/*
+ * The word nearest a point (a long press): the character closest to it, in both directions (a
+ * fingertip lands anywhere on a line, or between two), then out to the word's ends. MuPDF's word
+ * snapping takes a point more than half a character above or below a line's middle as the line's
+ * start. With `paragraph`, the whole text block it is in. Returns a quad like
+ * fz_snap_selection's (start's left edge, end's right edge), or 0.
+ */
+static int word_at(fz_stext_page *page, fz_point p, int paragraph, fz_quad *out)
+{
+	fz_stext_block *block, *best_block = NULL;
+	fz_stext_line *line, *best_line = NULL;
+	fz_stext_char *ch, *best = NULL;
+	float best_d = 1e30f;
+	for (block = page->first_block; block; block = block->next)
+	{
+		if (block->type != FZ_STEXT_BLOCK_TEXT)
+			continue;
+		for (line = block->u.t.first_line; line; line = line->next)
+			for (ch = line->first_char; ch; ch = ch->next)
+			{
+				fz_rect r = fz_rect_from_quad(ch->quad);
+				float dx = p.x < r.x0 ? r.x0 - p.x : p.x > r.x1 ? p.x - r.x1 : 0;
+				float dy = p.y < r.y0 ? r.y0 - p.y : p.y > r.y1 ? p.y - r.y1 : 0;
+				float d = dx * dx + dy * dy;
+				if (d < best_d)
+				{
+					best_d = d;
+					best = ch;
+					best_line = line;
+					best_block = block;
+				}
+			}
+	}
+	/* Nothing within a couple of character heights: not on any text. */
+	if (!best || best_d > 4 * best->size * best->size)
+		return 0;
+	/* The paragraph: the whole text block, first character to last. */
+	if (paragraph)
+	{
+		fz_stext_line *first = best_block->u.t.first_line, *last = best_block->u.t.last_line;
+		if (!first || !last || !first->first_char || !last->last_char)
+			return 0;
+		out->ul = first->first_char->quad.ul;
+		out->ll = first->first_char->quad.ll;
+		out->ur = last->last_char->quad.ur;
+		out->lr = last->last_char->quad.lr;
+		return 1;
+	}
+	{
+		fz_stext_char *start = NULL, *end = NULL, *run = NULL;
+		int found = 0;
+		/* The run of word characters holding `best` (or `best` alone, if it is a break). */
+		for (ch = best_line->first_char; ch; ch = ch->next)
+		{
+			if (select_break(ch->c))
+			{
+				if (found)
+					break;
+				run = NULL;
+				if (ch == best)
+				{
+					start = end = ch;
+					found = 1;
+					break;
+				}
+				continue;
+			}
+			if (!run)
+				run = ch;
+			if (ch == best)
+			{
+				found = 1;
+				start = run;
+			}
+			if (found)
+				end = ch;
+		}
+		if (!start || !end)
+			return 0;
+		out->ul = start->quad.ul;
+		out->ll = start->quad.ll;
+		out->ur = end->quad.ur;
+		out->lr = end->quad.lr;
+	}
+	return 1;
+}
+
 int fo_text_snap(fo_ctx *c, fo_text *t, const float b[4], float ax, float ay, float bx, float by, int mode, float *out)
 {
+	/*
+	 * 5: the whole page, first character to last. (Corner to corner doesn't do it: MuPDF takes
+	 * each corner to its nearest line, often not the first and last.)
+	 */
+	if (mode == 5)
+	{
+		fz_stext_block *block;
+		fz_stext_char *first = NULL, *last = NULL;
+		fz_quad q;
+		for (block = ((fz_stext_page *)t)->first_block; block; block = block->next)
+		{
+			if (block->type != FZ_STEXT_BLOCK_TEXT || !block->u.t.first_line)
+				continue;
+			if (!first)
+				first = block->u.t.first_line->first_char;
+			if (block->u.t.last_line->last_char)
+				last = block->u.t.last_line->last_char;
+		}
+		if (!first || !last)
+			return 0;
+		q.ul = first->quad.ul;
+		q.ll = first->quad.ll;
+		q.ur = last->quad.ur;
+		q.lr = last->quad.lr;
+		put_quad(out, q, b);
+		return 1;
+	}
+	/* 3: the word nearest a point, 4: its paragraph (both for touch and the right-click menu). */
+	if (mode == 3 || mode == 4)
+	{
+		fz_quad q;
+		if (!word_at((fz_stext_page *)t, fz_make_point(ax + b[0], ay + b[1]), mode == 4, &q))
+			return 0;
+		put_quad(out, q, b);
+		return 1;
+	}
 	fz_try(CTX)
 	{
 		fz_point a = fz_make_point(ax + b[0], ay + b[1]);

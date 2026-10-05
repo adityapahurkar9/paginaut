@@ -33,6 +33,8 @@
                 <data android:mimeType="application/x-fictionbook+xml" />
                 <data android:mimeType="application/vnd.comicbook+zip" />
                 <data android:mimeType="application/x-cbz" />
+                <data android:mimeType="application/vnd.comicbook-rar" />
+                <data android:mimeType="application/x-cbr" />
                 <data android:mimeType="text/markdown" />
                 <data android:mimeType="text/x-markdown" />
             </intent-filter>
@@ -48,6 +50,8 @@
                 <data android:mimeType="application/x-fictionbook+xml" />
                 <data android:mimeType="application/vnd.comicbook+zip" />
                 <data android:mimeType="application/x-cbz" />
+                <data android:mimeType="application/vnd.comicbook-rar" />
+                <data android:mimeType="application/x-cbr" />
                 <data android:mimeType="text/markdown" />
             </intent-filter>
         </activity>

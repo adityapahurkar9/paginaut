@@ -12,7 +12,7 @@ import * as P from "../pages";
 import { specs } from "../edits";
 import { renderer } from "../render/RenderManager";
 import { bookScreen } from "../modes";
-import { activeKey, activeTab, closeHome, closeTab, findOpen, HOME, homeOpen, minimized, openHome, recent, settings, tabs, type Tab } from "../store";
+import { activeKey, activeTab, closeHome, closeTab, findOpen, homes, minimized, openHome, recent, settings, tabs, type Tab } from "../store";
 import { Sidebar } from "./Sidebar";
 import { AskDialog, FindBar, Palette, PasswordDialog, Toast } from "./Overlays";
 import { Ribbon, Toolbar, ViewControls } from "./Toolbar";
@@ -231,14 +231,15 @@ function TitleBar() {
             </span>
           </button>
         )}
-        {homeOpen.value && (
+        {homes.value.map((k) => (
           <button
-            class={`tab ${activeKey.value === HOME ? "on" : ""}`}
+            key={k}
+            class={`tab ${activeKey.value === k ? "on" : ""}`}
             onMouseDown={(e) => {
               if (e.button === 1) {
                 e.preventDefault();
-                closeHome();
-              } else if (e.button === 0) activeKey.value = HOME;
+                closeHome(k);
+              } else if (e.button === 0) activeKey.value = k;
             }}
           >
             <House size={15} />
@@ -250,13 +251,13 @@ function TitleBar() {
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                closeHome();
+                closeHome(k);
               }}
             >
               <X size={13} strokeWidth={2.2} />
             </span>
           </button>
-        )}
+        ))}
         <button class="ib sm" style={{ marginBottom: 3, marginLeft: 2 }} aria-label="New tab" title="New tab (Ctrl+T)" onClick={openHome}>
           <Plus size={16} />
         </button>

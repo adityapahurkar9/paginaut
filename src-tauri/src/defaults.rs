@@ -26,7 +26,7 @@ pub const KINDS: &[Kind] = &[
     Kind { id: "pdf", name: "PDF document", exts: &["pdf"], core: true, others: false },
     Kind { id: "xps", name: "XPS document", exts: &["xps", "oxps"], core: true, others: false },
     Kind { id: "ebook", name: "E-book", exts: &["epub", "mobi", "fb2", "fbz"], core: true, others: false },
-    Kind { id: "comic", name: "Comic book", exts: &["cbz"], core: true, others: false },
+    Kind { id: "comic", name: "Comic book", exts: &["cbz", "cbr"], core: true, others: false },
     Kind { id: "markdown", name: "Markdown document", exts: &["md", "markdown"], core: false, others: false },
     Kind {
         id: "picture",

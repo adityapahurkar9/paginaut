@@ -49,6 +49,8 @@ pub fn run() {
             safe_area,
             speak,
             stop_speaking,
+            prune_cache,
+            share_text,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Paginaut")
@@ -114,6 +116,11 @@ async fn share(native: State<'_, Native<Wry>>, path: String) -> Res<()> {
     call(&native, "share", json!({ "path": path })).await.map(|_| ())
 }
 
+#[tauri::command]
+async fn share_text(native: State<'_, Native<Wry>>, text: String) -> Res<()> {
+    call(&native, "shareText", json!({ "text": text })).await.map(|_| ())
+}
+
 /// Android's print service takes PDFs: other documents (e-books, XPS, comics) are written
 /// as a PDF next to their copy first.
 #[tauri::command]
@@ -151,4 +158,10 @@ async fn speak(native: State<'_, Native<Wry>>, text: String, rate: f64, lang: Op
 #[tauri::command]
 async fn stop_speaking(native: State<'_, Native<Wry>>) -> Res<()> {
     call(&native, "stopSpeaking", json!({})).await.map(|_| ())
+}
+
+/// Drops the copies of documents no longer listed (Recent, and the one open).
+#[tauri::command]
+async fn prune_cache(native: State<'_, Native<Wry>>, keep: Vec<String>) -> Res<()> {
+    call(&native, "pruneCache", json!({ "keep": keep })).await.map(|_| ())
 }

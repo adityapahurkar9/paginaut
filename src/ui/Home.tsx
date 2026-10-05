@@ -21,7 +21,7 @@ export function Home() {
         <div class="drop">
           <Logo size={56} tile />
           <h1>Open a document</h1>
-          <span>PDF, scans, e-books (EPUB, MOBI, FB2), comics (CBZ), XPS and images.</span>
+          <span>PDF, scans, e-books (EPUB, MOBI, FB2), comics (CBZ, CBR), XPS and images.</span>
           <span>Drop files anywhere in this window, or</span>
           <button class="btn pri" onClick={A.openDialog} style={{ height: 34, padding: "0 16px" }}>
             <FolderOpen size={16} /> Choose files <kbd style={{ background: "transparent", color: "inherit", borderColor: "currentColor", opacity: 0.7 }}>Ctrl+O</kbd>

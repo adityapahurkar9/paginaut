@@ -9,7 +9,7 @@ import { native } from "./native";
 import { checkIntent, passwordAsk, savePosition } from "./open";
 import { Reader } from "./Reader";
 import { Sheets } from "./Sheets";
-import { busy, chrome, doc, isDark, searching, settings, sheet, toast } from "./state";
+import { busy, chrome, doc, isDark, recent, searching, settings, sheet, toast } from "./state";
 
 function App() {
   const d = doc.value;
@@ -86,6 +86,14 @@ effect(() => {
     document.documentElement.style.background = color;
     void native.setBars(dark, immersive);
   });
+});
+
+// Copies of documents no longer in Recent go (each is only there to reopen one from Recent):
+// checked from the library, so never under a document being opened.
+effect(() => {
+  const list = recent.value;
+  if (doc.value || busy.value) return;
+  void native.pruneCache(list.map((r) => r.path));
 });
 
 // Files from other apps ("Open with", Share): at start, whenever the app comes back, and when

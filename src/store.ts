@@ -215,21 +215,58 @@ export class Tab {
 
 export const tabs = signal<Tab[]>([]);
 export const activeKey = signal<string | null>(null);
-/** The Home page as a tab of its own (the + button). */
-export const HOME = "home";
-export const homeOpen = signal(false);
+/**
+ * Home pages as tabs of their own, like a browser's new tabs: the app starts with one, + adds
+ * another, a file opened from one takes its place, and closing the last tab leaves a fresh one.
+ * Shown after the documents in the tab strip.
+ */
+export const homes = signal<string[]>([]);
+let homeSeq = 0;
+export const isHome = (key: string | null) => !!key && key.startsWith("home:");
 export function openHome() {
+  const key = `home:${++homeSeq}`;
   batch(() => {
-    homeOpen.value = true;
-    activeKey.value = HOME;
+    homes.value = [...homes.value, key];
+    activeKey.value = key;
   });
 }
-export function closeHome() {
+export function closeHome(key: string) {
+  closeKey(key, () => (homes.value = homes.value.filter((k) => k !== key)));
+}
+/** The Home tab a file is being opened from gives way to it. */
+export function leaveHome() {
+  const key = activeKey.value;
+  if (isHome(key)) homes.value = homes.value.filter((k) => k !== key);
+}
+
+/** Set by compare.ts (no import cycle): the comparison's key while it has a tab. */
+let compareKey: () => string | null = () => null;
+export function setCompareKey(fn: () => string | null) {
+  compareKey = fn;
+}
+/** Every tab, in the strip's order. */
+function stripKeys() {
+  const c = compareKey();
+  return [...tabs.value.map((t) => t.key), ...(c ? [c] : []), ...homes.value];
+}
+/**
+ * Removes a tab (`drop` takes it out of its list): the one next to it becomes current if it was,
+ * and with no tab left, a new Home tab opens.
+ */
+export function closeKey(key: string, drop: () => void) {
+  const before = stripKeys();
+  const i = before.indexOf(key);
   batch(() => {
-    homeOpen.value = false;
-    if (activeKey.value === HOME) activeKey.value = tabs.value[tabs.value.length - 1]?.key ?? null;
+    drop();
+    const after = stripKeys();
+    if (!after.length) {
+      const k = `home:${++homeSeq}`;
+      homes.value = [k];
+      activeKey.value = k;
+    } else if (activeKey.value === key || !after.includes(activeKey.value ?? "")) activeKey.value = after[Math.min(Math.max(0, i), after.length - 1)];
   });
 }
+openHome();
 export const activeTab = computed(() => tabs.value.find((t) => t.key === activeKey.value) ?? null);
 
 // ---------------------------------------------------------------- transient UI
@@ -288,9 +325,9 @@ export async function openFiles(paths: string[]) {
     void loadTab(tab);
   }
   if (!last) return;
-  // A file opened from the Home tab takes its place.
+  // A file opened from a Home tab takes its place.
   batch(() => {
-    if (activeKey.value === HOME) homeOpen.value = false;
+    leaveHome();
     activeKey.value = last!.key;
   });
 }
@@ -372,11 +409,7 @@ function closeTabNow(tab: Tab) {
     // Its pages and thumbnails can never be shown again (document ids aren't reused).
     renderer.forget(`${info.docId}.`);
   }
-  const next = list.filter((t) => t !== tab);
-  batch(() => {
-    tabs.value = next;
-    if (activeKey.value === tab.key) activeKey.value = next[Math.min(i, next.length - 1)]?.key ?? null;
-  });
+  closeKey(tab.key, () => (tabs.value = list.filter((t) => t !== tab)));
 }
 
 // WebView2 keeps what drawn pages used (mostly in its GPU process, often several
@@ -395,10 +428,10 @@ effect(() => {
 });
 
 export function cycleTab(dir: 1 | -1) {
-  const list = tabs.value;
+  const list = stripKeys();
   if (list.length < 2) return;
-  const i = list.findIndex((t) => t.key === activeKey.value);
-  activeKey.value = list[(i + dir + list.length) % list.length].key;
+  const i = list.indexOf(activeKey.value ?? "");
+  activeKey.value = list[(i + dir + list.length) % list.length];
 }
 
 /** The reading position last saved, by file: an unchanged one isn't saved again. */

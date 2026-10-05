@@ -3,11 +3,11 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import { getVersion } from "@tauri-apps/api/app";
-import { BookOpen, ChevronRight, FileText, Info, Minus, Plus, Printer, ScrollText, Share2, Volume2 } from "lucide-preact";
+import { BookOpen, ChevronRight, FileText, Info, Minus, Plus, Printer, ScrollText, Share2, Volume2, X } from "lucide-preact";
 import { api, type OutlineItem, type Properties, type Security } from "../api";
 import { native } from "./native";
 import { back, pushLayer } from "./nav";
-import { clearRecent, doc, errorText, isTablet, mode, page, say, settings, sheet, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
+import { bookmarksOf, clearRecent, doc, errorText, isTablet, mode, page, say, settings, sheet, toggleBookmark, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
 import { startReading } from "./speech";
 import { goTo } from "./views";
 
@@ -85,7 +85,7 @@ export function Sheets() {
       <div class={`sheet sheet-${s}`} role="dialog" ref={ref}>
         <div class="sheet-grip" />
         {s === "view" && d && <ViewSheet />}
-        {s === "contents" && d && <ContentsSheet docId={d.info.docId} />}
+        {s === "contents" && d && <ContentsSheet docId={d.info.docId} uri={d.uri} />}
         {s === "info" && d && <InfoSheet />}
         {s === "more" && d && <MoreSheet />}
         {s === "settings" && <SettingsSheet />}
@@ -192,8 +192,23 @@ const KIND: Record<string, string> = {
   FileAttachment: "Attachment", Caret: "Insert", Redact: "Redaction", Sound: "Sound",
 };
 
-function ContentsSheet({ docId }: { docId: number }) {
-  const [tab, setTab] = useState<"outline" | "comments">("outline");
+/** The outline entry a page falls under (the last one starting on or before it), for a bookmark's label. */
+function sectionOf(items: OutlineItem[], p: number): string {
+  let best = "";
+  const walk = (list: OutlineItem[]) => {
+    for (const it of list) {
+      if (it.p < 0 || it.p > p) continue;
+      best = it.t;
+      if (it.k?.length) walk(it.k);
+    }
+  };
+  walk(items);
+  return best;
+}
+
+function ContentsSheet({ docId, uri }: { docId: number; uri: string }) {
+  const [tab, setTab] = useState<"outline" | "marks" | "comments">("outline");
+  const marks = bookmarksOf(uri);
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
   const [comments, setComments] = useState<Comment[] | null>(null);
   useEffect(() => {
@@ -212,6 +227,7 @@ function ContentsSheet({ docId }: { docId: number }) {
         onChange={setTab}
         options={[
           ["outline", "Contents"],
+          ["marks", `Bookmarks${marks.length ? ` (${marks.length})` : ""}`],
           ["comments", `Comments${comments?.length ? ` (${comments.length})` : ""}`],
         ]}
       />
@@ -226,6 +242,27 @@ function ContentsSheet({ docId }: { docId: number }) {
               {outline.map((it, i) => (
                 <TocItem key={i} it={it} depth={0} onPick={jump} />
               ))}
+            </ul>
+          ))}
+        {tab === "marks" &&
+          (marks.length === 0 ? (
+            <p class="hint">No bookmarks yet. Tap the bookmark at the top to mark the page you're on.</p>
+          ) : (
+            <ul class="marks">
+              {marks.map((b) => {
+                const sec = outline ? sectionOf(outline, b.page) : "";
+                return (
+                  <li key={b.page} class={b.page === page.value ? "here" : ""}>
+                    <button class="mark-go" onClick={() => jump(b.page)}>
+                      <strong>Page {b.page + 1}</strong>
+                      {sec && <span class="c-text">{sec}</span>}
+                    </button>
+                    <button class="ib sm" aria-label={`Remove the bookmark on page ${b.page + 1}`} onClick={() => toggleBookmark(uri, b.page)}>
+                      <X size={17} />
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           ))}
         {tab === "comments" &&

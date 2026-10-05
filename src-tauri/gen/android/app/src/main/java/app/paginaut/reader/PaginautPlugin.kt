@@ -200,7 +200,25 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     return Pair(out, display)
   }
 
-  /** Keeps the copies under ~1 GB, dropping the least recently opened (never the one just made). */
+  /**
+   * Drops the copies of documents the app no longer lists (fallen off Recent, or Recent cleared):
+   * each copy is only there to reopen a file from Recent.
+   */
+  @Command
+  fun pruneCache(invoke: Invoke) {
+    val arr = invoke.getArgs().optJSONArray("keep")
+    val keep = (0 until (arr?.length() ?: 0)).map { File(arr!!.getString(it)).parentFile?.absolutePath ?: "" }.toSet()
+    io.execute {
+      // Not one touched in the last minute: it may be a copy still being made for a file just sent.
+      val recent = System.currentTimeMillis() - 60_000
+      File(activity.cacheDir, "docs").listFiles()
+        ?.filter { it.isDirectory && it.absolutePath !in keep && it.lastModified() < recent }
+        ?.forEach { it.deleteRecursively() }
+      invoke.resolve()
+    }
+  }
+
+  /** Keeps the copies under 512 MB, dropping the least recently opened (never the one just made). */
   private fun trimCache(keep: File) {
     val dirs = File(activity.cacheDir, "docs").listFiles()?.filter { it.isDirectory && it != keep } ?: return
     var total = dirs.sumOf { d -> d.listFiles()?.sumOf { it.length() } ?: 0L }
@@ -234,6 +252,18 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     // Sharing a file to Paginaut from Paginaut would only open it again.
     chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(android.content.ComponentName(activity, MainActivity::class.java)))
     activity.startActivity(chooser)
+    invoke.resolve()
+  }
+
+  /** Shares text (a selection on a page) through Android's share sheet. */
+  @Command
+  fun shareText(invoke: Invoke) {
+    val text = invoke.getArgs().getString("text", null) ?: return invoke.reject("Nothing to share.")
+    val send = Intent(Intent.ACTION_SEND).apply {
+      type = "text/plain"
+      putExtra(Intent.EXTRA_TEXT, text)
+    }
+    activity.startActivity(Intent.createChooser(send, null))
     invoke.resolve()
   }
 
@@ -417,7 +447,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
   companion object {
-    private const val CACHE_LIMIT = 1L shl 30
+    private const val CACHE_LIMIT = 512L shl 20
 
     /** What the picker offers: PDF, XPS, e-books, comics, Markdown, pictures (and unnamed files, as many comics are). */
     val MIME_TYPES = arrayOf(
@@ -438,6 +468,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
       "mobi" to "application/x-mobipocket-ebook",
       "fb2" to "application/x-fictionbook+xml",
       "cbz" to "application/vnd.comicbook+zip",
+      "cbr" to "application/vnd.comicbook-rar",
       "md" to "text/markdown",
     )
   }

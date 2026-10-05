@@ -219,8 +219,12 @@ async function pageMenu(tab: Tab, view: number, pt: [number, number], x: number,
     if (pt[0] < r[0] || pt[0] > r[2] || pt[1] < r[1] || pt[1] > r[3]) continue;
     if (hit < 0 || (r[2] - r[0]) * (r[3] - r[1]) < (pics[hit].r[2] - pics[hit].r[0]) * (pics[hit].r[3] - pics[hit].r[1])) hit = i;
   }
-  const items: MenuItem[] = [];
-  if (tab.hasSelection.value) items.push({ label: "Copy", hint: "Ctrl+C", run: A.copySelection }, { sep: true });
+  const items: MenuItem[] = [
+    { label: "Copy", hint: "Ctrl+C", disabled: !tab.hasSelection.value, run: A.copySelection },
+    { label: "Select paragraph", run: () => void tab.viewer?.selectParagraph(x, y) },
+    { label: "Select page", hint: "Ctrl+A", run: () => tab.viewer?.selectAllOnPage(view) },
+    { sep: true },
+  ];
   if (table) items.push(...tableItems(tab, view, table), { sep: true });
   if (hit >= 0 && !table) items.push(...pictureItems(tab, view, hit, pics[hit]), { sep: true });
   items.push(
@@ -245,6 +249,19 @@ window.addEventListener("contextmenu", (e) => {
   void pageMenu(tab, view, pt, e.clientX, e.clientY);
 });
 
+// ---------------------------------------------------------------- selecting text
+
+/** Selects the shown text of the blocks `want` picks (a paragraph may be shown in several pieces). */
+function selectBlocks(root: HTMLElement, want: (b: number) => boolean) {
+  const els = [...root.querySelectorAll<HTMLElement>("[data-b]")].filter((e) => want(Number(e.dataset.b)));
+  if (!els.length) return;
+  const r = document.createRange();
+  r.setStartBefore(els[0]);
+  r.setEndAfter(els[els.length - 1]);
+  getSelection()?.removeAllRanges();
+  getSelection()?.addRange(r);
+}
+
 // ---------------------------------------------------------------- Read and Book modes' right-click menu
 
 type Pic = Extract<Block, { k: "img" }>;
@@ -260,9 +277,21 @@ function overlap(a: [number, number, number, number], b: [number, number, number
 /** A right-click in Read or Book mode: a table's menu on a table (they're shown as pictures of the page), and
  * reading aloud from the paragraph clicked. */
 async function reflowMenu(tab: Tab, target: HTMLElement, x: number, y: number) {
-  const items: MenuItem[] = [];
+  const view = tab.reflowView!;
+  const at = target.closest<HTMLElement>("[data-b]");
+  const block = at && !target.closest("figure") ? Number(at.dataset.b) : null;
   const sel = getSelection()?.toString() ?? "";
-  if (sel.trim()) items.push({ label: "Copy", hint: "Ctrl+C", run: () => void navigator.clipboard.writeText(sel) }, { sep: true });
+  const items: MenuItem[] = [
+    { label: "Copy", hint: "Ctrl+C", disabled: !sel.trim(), run: () => void navigator.clipboard.writeText(sel).then(() => showToast("Copied")) },
+    { label: "Select paragraph", disabled: !block, run: () => selectBlocks(view.el, (b) => b === block) },
+    {
+      label: "Select page",
+      disabled: !block,
+      // The document page the paragraph comes from (Read and Book reflow the pages).
+      run: () => selectBlocks(view.el, (b) => view.flow.blocks[b]?.page === view.flow.blocks[block!]?.page),
+    },
+    { sep: true },
+  ];
   const pic = (target.closest("figure.rf-img") as (HTMLElement & { _pic?: Block }) | null)?._pic;
   if (pic?.k === "img") {
     const p = pic as Pic;
@@ -272,8 +301,7 @@ async function reflowMenu(tab: Tab, target: HTMLElement, x: number, y: number) {
     else if (p.kind === "table" || p.kind === "figure")
       items.push({ label: "Read as a table…", run: () => (tableDialog.value = { tab, view: p.page, area: p.box, table: null }) }, { sep: true });
   }
-  const para = target.closest<HTMLElement>("[data-b]");
-  if (para && !target.closest("figure")) items.push({ label: "Read aloud from here", run: () => void readAloud(tab, Number(para.dataset.b)) });
+  if (block !== null) items.push({ label: "Read aloud from here", run: () => void readAloud(tab, block) });
   while (items.length && "sep" in items[items.length - 1]) items.pop();
   if (items.length) openMenuAt(x, y, items, 260);
 }

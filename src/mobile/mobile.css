@@ -165,6 +165,19 @@ input { font: inherit; }
 .speech-rate { min-width: 52px; height: 44px; border: 0; border-radius: 12px; background: var(--hover); font-weight: 700; font-variant-numeric: tabular-nums; }
 .rf [data-b].speaking { background: var(--acc-soft); border-radius: 4px; box-shadow: 0 0 0 4px var(--acc-soft); }
 
+/* Text selected on a page by touch (select.tsx): two handles and a small menu. */
+.sel-ui { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 20; pointer-events: none; }
+.sel-handle { position: absolute; width: 20px; height: 20px; background: var(--acc); pointer-events: auto; touch-action: none; }
+.sel-handle::before { content: ""; position: absolute; top: -12px; right: -12px; bottom: -12px; left: -12px; }
+.sel-handle.start { border-radius: 50% 0 50% 50%; transform: translateX(-100%); }
+.sel-handle.end { border-radius: 0 50% 50% 50%; }
+.sel-menu {
+  position: absolute; display: flex; padding: 4px; border-radius: 12px; background: #1d2233; color: #fff;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3); pointer-events: auto; animation: pop 0.14s var(--ease);
+}
+.sel-menu button { height: 40px; padding: 0 13px; border: 0; border-radius: 9px; background: transparent; color: inherit; font-size: 14.5px; font-weight: 600; }
+.sel-menu button:active { background: rgba(255, 255, 255, 0.12); }
+
 /* ---------------------------------------------------------------- sheets */
 .sheet-scrim { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(5, 8, 18, 0.4); animation: fade 0.18s; }
 .sheet {
@@ -219,6 +232,14 @@ button.row { width: 100%; padding: 0; border: 0; background: transparent; text-a
 .c-head { font-size: 13px; color: var(--tx2); }
 .c-head strong { color: var(--tx); }
 .c-text { font-size: 14.5px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+
+.marks { list-style: none; margin: 0; padding: 0; }
+.marks li { display: flex; align-items: center; border-radius: 10px; }
+.marks li + li { border-top: 1px solid var(--bd); }
+.marks li.here { background: var(--acc-soft); }
+.mark-go { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 12px 6px; border: 0; background: transparent; text-align: left; }
+.mark-go .c-text { font-size: 13.5px; color: var(--tx2); -webkit-line-clamp: 1; }
+.bar .ib.marked { color: var(--acc); }
 
 .info { margin: 0; }
 .info div { display: grid; grid-template-columns: 108px 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--bd); }

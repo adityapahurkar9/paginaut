@@ -13,6 +13,53 @@ const MUPDF_LIBS: &[&str] = &[
     "libzxing",
 ];
 
+/// libarchive's sources for reading RAR archives from memory (native/libarchive holds just these).
+const LIBARCHIVE: &[&str] = &[
+    "archive_acl.c",
+    "archive_blake2s_ref.c",
+    "archive_blake2sp_ref.c",
+    "archive_check_magic.c",
+    "archive_entry.c",
+    "archive_entry_sparse.c",
+    "archive_entry_xattr.c",
+    "archive_ppmd7.c",
+    "archive_random.c",
+    "archive_rb.c",
+    "archive_read.c",
+    "archive_read_open_memory.c",
+    "archive_read_support_format_rar.c",
+    "archive_read_support_format_rar5.c",
+    "archive_string.c",
+    "archive_string_sprintf.c",
+    "archive_time.c",
+    "archive_util.c",
+    "archive_virtual.c",
+];
+
+/// Comic books packed with RAR (CBR): libarchive's RAR readers and the MuPDF archive handler on them.
+fn rar(mupdf: &Path, windows: bool) {
+    let dir = Path::new("native/libarchive");
+    let mut b = cc::Build::new();
+    for f in LIBARCHIVE {
+        b.file(dir.join(f));
+    }
+    if windows {
+        b.file(dir.join("archive_windows.c"));
+    }
+    b.file("native/cbr.c")
+        .include(mupdf.join("include"))
+        .include(dir)
+        // The hand-written configuration (no configure step), found next to archive_platform.h.
+        .define("PLATFORM_CONFIG_H", Some("\"paginaut_config.h\""))
+        .define("LIBARCHIVE_STATIC", None)
+        .define("NDEBUG", None)
+        .opt_level(2)
+        .warnings(false)
+        .compile("paginaut_rar");
+    println!("cargo:rerun-if-changed=native/cbr.c");
+    println!("cargo:rerun-if-changed=native/libarchive");
+}
+
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let mupdf = manifest.join("..").join("native").join("mupdf");
@@ -51,6 +98,7 @@ fn windows(manifest: &Path, mupdf: &Path) {
         .opt_level(2)
         .warnings(false)
         .compile("paginaut_native");
+    rar(mupdf, true);
 
     // Tesseract bridge, against the Tesseract and Leptonica built into MuPDF's
     // libraries (same defines, so the classes match).
@@ -78,7 +126,7 @@ fn windows(manifest: &Path, mupdf: &Path) {
     for lib in MUPDF_LIBS {
         println!("cargo:rustc-link-lib=static={lib}");
     }
-    for sys in ["advapi32", "user32", "gdi32", "shell32", "ws2_32"] {
+    for sys in ["advapi32", "user32", "gdi32", "shell32", "ws2_32", "bcrypt"] {
         println!("cargo:rustc-link-lib=dylib={sys}");
     }
     println!("cargo:rerun-if-changed=native/ocr.cpp");
@@ -110,6 +158,7 @@ fn android(mupdf: &Path) {
         .opt_level(2)
         .warnings(false)
         .compile("paginaut_native");
+    rar(mupdf, false);
     println!("cargo:rustc-link-search=native={}", libdir.display());
     println!("cargo:rustc-link-lib=static=mupdf");
     println!("cargo:rustc-link-lib=static=mupdf-third");
