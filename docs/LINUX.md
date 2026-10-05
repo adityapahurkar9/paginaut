@@ -23,8 +23,23 @@ AppImage (one file that runs without installing).**
 - Others: Flatpak (sandboxed; file access through portals would need work in how files are opened and saved;
   worth doing for Flathub later), Snap (Ubuntu-only in practice), an apt repository (gives automatic updates;
   needs hosting and a signing key).
-- The `.deb` depends on `libwebkit2gtk-4.1-0`, `libgtk-3-0` and `xdg-utils`; its desktop entry
-  (`src-tauri/linux/paginaut.desktop`) lists every type Paginaut opens.
+- The `.deb` depends on `libwebkit2gtk-4.1-0`, `libgtk-3-0`, `xdg-utils` and `libssl3` (`libssl3t64` on Ubuntu
+  24.04+ and Debian 13); its desktop entry (`src-tauri/linux/paginaut.desktop`) lists every type Paginaut opens.
+  **The .deb is the one to offer first.**
+- The AppImage carries its own libraries (≈96 MB). Like every AppImage, it needs FUSE 2 to mount itself, which
+  Ubuntu 22.04+ and Debian 12+ no longer install: `sudo apt install libfuse2` (`libfuse2t64` on Ubuntu 24.04+),
+  or run it with `--appimage-extract-and-run`.
+
+### Tested
+
+| System | Package | Result |
+|---|---|---|
+| Ubuntu 22.04.5 (glibc 2.35) | .deb | Installs with apt; opens PDFs, comics |
+| Debian 13 trixie (glibc 2.41) | .deb | Installs with apt (pulls WebKitGTK, libssl3t64); opens PDFs |
+| Debian 13 trixie | AppImage | Runs with `--appimage-extract-and-run` (no libfuse2 there) |
+| Ubuntu 26.04 | .deb (dev build) | Printing to a file, default apps, the repaired e-book, signing with a .pfx and a SoftHSM token |
+
+The release binary needs at most glibc 2.35 and libstdc++ 3.4.29 (GCC 11).
 
 ## Building
 
