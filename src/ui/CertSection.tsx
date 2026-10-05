@@ -7,7 +7,7 @@ import { FileKey, KeyRound, RefreshCw, Usb, X } from "lucide-preact";
 import { dscDefaults, listCerts, openPfx, proceed, signField, type CertSummary, type PfxChoice, type SignSetup } from "../dsc";
 import { sigs } from "../sign";
 import { testHook } from "./PagesUI";
-import type { Tab } from "../store";
+import { onLinux, type Tab } from "../store";
 
 const REASONS = [
   "I approve this document",
@@ -148,8 +148,13 @@ export function CertSection({ tab }: { tab: Tab | null }) {
           <div class="muted cert-empty">Looking for certificates…</div>
         ) : !shown.length ? (
           <div class="cert-empty">
-            <strong>No signing certificate found.</strong>
-            <span class="muted">Plug in your DSC token (its driver puts the certificate into Windows), then press Refresh. {err}</span>
+            <strong>{onLinux ? "Sign with your certificate file." : "No signing certificate found."}</strong>
+            <span class="muted">
+              {onLinux
+                ? "Choose your .pfx or .p12 file below. For a DSC token, use the .pfx your provider gave you, or export one with the token's own tool. "
+                : "Plug in your DSC token (its driver puts the certificate into Windows), then press Refresh. "}
+              {err}
+            </span>
           </div>
         ) : (
           shown.map((c) => (
@@ -197,7 +202,7 @@ export function CertSection({ tab }: { tab: Tab | null }) {
             <button class="btn sm" onClick={() => setPfxAsk(null)}>Cancel</button>
             <button class="btn pri sm" onClick={() => void openAsked()}>Open</button>
           </div>
-          <span class="muted">Used for this signature only: nothing is added to Windows, and the password isn't saved.</span>
+          <span class="muted">Used for this signature only: nothing is added to {onLinux ? "your system" : "Windows"}, and the password isn't saved.</span>
         </div>
       ) : (
         <button class="btn ghost sm cert-more" onClick={() => void choosePfx()} title="Sign with a .pfx or .p12 certificate file instead">
