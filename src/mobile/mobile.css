@@ -365,3 +365,11 @@ button.row { width: 100%; padding: 0; border: 0; background: transparent; text-a
 .sort-l { margin-right: 4px; font-size: 12.5px; color: var(--tx2); }
 .sort-key { height: 32px; padding: 0 10px; border: 0; border-radius: 9px; background: var(--hover); color: var(--tx); font-size: 13px; font-weight: 600; }
 .sort-dir { margin-left: 2px; color: var(--tx2); }
+
+/* An e-book that's a PDF converted page by page (Reader RepairStrip) */
+.repair-strip { position: absolute; left: 8px; right: 8px; top: 64px; z-index: 19; padding: 10px 6px 4px 14px; border-radius: 14px; background: var(--panel); color: var(--tx); box-shadow: 0 4px 18px rgb(0 0 0 / 0.25); }
+.repair-strip p { margin: 0 8px 2px 0; font-size: 13.5px; line-height: 1.4; }
+.repair-acts { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.btn-text { height: 38px; padding: 0 10px; border: 0; background: none; color: var(--acc); font-size: 14px; font-weight: 600; }
+.reader:not(.chrome) .repair-strip { transform: translateY(-140%); opacity: 0; pointer-events: none; }
+.repair-strip { transition: transform 0.22s var(--ease), opacity 0.22s; }

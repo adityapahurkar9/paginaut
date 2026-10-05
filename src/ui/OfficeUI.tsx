@@ -30,19 +30,22 @@ export function openingText(tab: Tab) {
 
 const dismissed = new Set<string>();
 
-/** An EPUB made from a PDF, shown repaired (pdfhtml.rs): what happened, and saving it so. */
+/** An EPUB made from a PDF, shown as that PDF (pdfhtml.rs): what was wrong, and saving it so. */
 export function RepairBar({ tab }: { tab: Tab }) {
   const info = tab.info.value;
   const [, redraw] = useState(0);
   if (!info?.repaired || dismissed.has(tab.key)) return null;
   return (
-    <div class="formbar officebar">
+    <div class="formbar officebar repairbar">
       <Wrench size={16} />
-      <span title="This e-book is a PDF converted page by page, with every line pinned in place and its words cut into pieces. Paginaut rebuilt its text as paragraphs; the file itself is unchanged.">
-        Repaired for reading: this e-book was made from a PDF and its text was in pieces
+      <span title="This e-book is a PDF converted page by page: every line is pinned in place and words are cut into pieces, which e-book readers (and phones) show scrambled. Paginaut draws its pages again as they were made. The file itself is unchanged.">
+        This e-book is a PDF converted page by page, so e-book readers show it scrambled. Shown here as made; save it to keep it readable.
       </span>
-      <button class="btn ghost" onClick={() => void P.saveRepaired(tab)}>
-        Save repaired copy…
+      <button class="btn ghost" onClick={() => void P.saveRepaired(tab, true)} title="The pages exactly as made, with their pictures (best for this book)">
+        Save as PDF…
+      </button>
+      <button class="btn ghost" onClick={() => void P.saveRepaired(tab, false)} title="Text and pictures that flow to fit any e-book reader (the page layout isn't kept)">
+        Save as repaired EPUB…
       </button>
       <button
         class="ib sm"
@@ -62,7 +65,8 @@ export function OfficeBar({ tab }: { tab: Tab }) {
   const info = tab.info.value;
   const [, redraw] = useState(0);
   const busy = reconverting.value.get(tab.key);
-  const from = info?.converted?.from ?? (info && isOffice(tab.path) ? tab.path : null);
+  // An e-book drawn again as a PDF has a bar of its own (RepairBar).
+  const from = info?.repaired ? null : (info?.converted?.from ?? (info && isOffice(tab.path) ? tab.path : null));
   useEffect(() => {
     if (from && !engines.value) void loadEngines();
   }, [from]);

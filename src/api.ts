@@ -17,7 +17,7 @@ export interface DocInfo {
   firstSize: [number, number];
   /** An Office file shown through a PDF made from it (`path` is that PDF, in the app's cache). */
   converted: Converted | null;
-  /** An EPUB made from a PDF (its text in pieces), shown rebuilt as an ordinary e-book; saveRepaired keeps it. */
+  /** An EPUB made from a PDF (pinned lines, words in pieces), shown as the PDF it was made from; saveRepaired keeps it. */
   repaired: boolean;
 }
 
@@ -517,8 +517,8 @@ export const api = {
   formReset: (doc: number) => invoke<FormChange>("form_reset", { doc }),
   saveFlattened: (doc: number, target: string, order: number[], rot: number[], annots: boolean) =>
     invoke<void>("save_flattened", { doc, target, order, rot, annots }),
-  /** A repaired e-book (DocInfo.repaired) saved as an EPUB of its own. */
-  saveRepaired: (doc: number, target: string) => invoke<void>("save_repaired", { doc, target }),
+  /** A repaired e-book (DocInfo.repaired) saved as the PDF it's shown as, or as a flowing EPUB. */
+  saveRepaired: (doc: number, target: string, pdf: boolean) => invoke<void>("save_repaired", { doc, target, pdf }),
   officeEngines: (fresh = false) => invoke<OfficeEngines>("office_engines", { fresh }),
   officeSetPreference: (preference: string) => invoke<void>("office_set_preference", { preference }),
   officeInstall: (onEvent: (e: InstallEvent) => void) => {

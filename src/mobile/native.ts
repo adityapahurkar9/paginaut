@@ -1,5 +1,7 @@
 // Android's side (PaginautPlugin.kt, through src-tauri/src/mobile.rs): files, sharing, printing, system bars.
 import { invoke } from "@tauri-apps/api/core";
+import { appCacheDir } from "@tauri-apps/api/path";
+import { api } from "../api";
 import type { BookMeta, ShelfItem } from "./shelf";
 
 /** A document ready for the engine; empty when nothing was picked or sent. */
@@ -56,3 +58,12 @@ export const native = {
   /** What the page must keep clear of (bars, camera cutout, keyboard), in CSS px. */
   safeArea: () => invoke<{ top: number; right: number; bottom: number; left: number }>("safe_area"),
 };
+
+/** A repaired e-book (DocInfo.repaired) saved as a PDF or a flowing EPUB, handed on through the share sheet
+ *  ("Save to Files", Drive…): only the cache's docs folder can be shared; the copy goes with the cache. */
+export async function shareRepaired(doc: number, name: string, pdf: boolean) {
+  const stem = name.replace(/\.[^.]+$/, "");
+  const out = `${await appCacheDir()}/docs/repaired-${Date.now()}/${pdf ? `${stem}.pdf` : `${stem} (repaired).epub`}`;
+  await api.saveRepaired(doc, out, pdf);
+  await native.share(out);
+}

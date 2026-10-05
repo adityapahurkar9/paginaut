@@ -16,7 +16,8 @@ import { openSheet } from "./Sheets";
 import { PageSelection, pressHolding, selTick, usePressSelect } from "./select";
 import { nextRate, pauseReading, reading, resumeReading, stopReading } from "./speech";
 import { bookmarksOf, toggleBookmark } from "./records";
-import { chrome, doc, isDark, layout as docLayout, mode, page, say, searching, settings, sheet, updateSettings, type OpenDoc, type TextSettings } from "./state";
+import { chrome, doc, errorText, isDark, layout as docLayout, mode, page, say, searching, settings, sheet, updateSettings, type OpenDoc, type TextSettings } from "./state";
+import { shareRepaired } from "./native";
 import { bookInfo, goTo, movedByApp, views } from "./views";
 
 export function Reader({ d }: { d: OpenDoc }) {
@@ -27,6 +28,7 @@ export function Reader({ d }: { d: OpenDoc }) {
       <Pages d={d} />
       {m !== "pages" && <Reflow d={d} key={`${d.info.docId}-${m}`} />}
       {searching.value ? <FindBar /> : <TopBar d={d} />}
+      {d.info.repaired && <RepairStrip d={d} />}
       <BottomBar d={d} />
       {reading.value && <SpeechBar />}
     </div>
@@ -382,6 +384,31 @@ function Reflow({ d }: { d: OpenDoc }) {
 }
 
 // ---------------------------------------------------------------- bars
+
+const repairSeen = new Set<number>();
+
+/** An e-book that's a PDF converted page by page (shown as that PDF): what was wrong, and saving it so. */
+function RepairStrip({ d }: { d: OpenDoc }) {
+  const [, redraw] = useState(0);
+  if (repairSeen.has(d.info.docId)) return null;
+  const close = () => {
+    repairSeen.add(d.info.docId);
+    redraw((n) => n + 1);
+  };
+  const save = (pdf: boolean) => () => void shareRepaired(d.info.docId, d.name, pdf).catch((e) => say(errorText(e)));
+  return (
+    <div class="repair-strip" role="status">
+      <p>This e-book is a PDF converted page by page, so e-book apps show it scrambled. Paginaut shows its pages as made: save it as a PDF to keep them readable.</p>
+      <div class="repair-acts">
+        <button class="btn-text" onClick={save(true)}>Save as PDF</button>
+        <button class="btn-text" onClick={save(false)}>Save as repaired EPUB</button>
+        <button class="ib" aria-label="Dismiss" onClick={close}>
+          <X size={18} />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function TopBar({ d }: { d: OpenDoc }) {
   const title = d.info.title?.trim() || d.name.replace(/\.[^.]+$/, "");

@@ -8743,3 +8743,206 @@ int fo_zip_read(fo_ctx *c, const char *path, const char *entry, unsigned char **
 	}
 	return missing;
 }
+
+/* ---------------------------------------------------------------- EPUBs made from PDFs, drawn again as PDF pages */
+
+/* A number at *s (skipping spaces), moving past it. */
+static float pinned_num(const char **s)
+{
+	char *end;
+	float v;
+	while (**s == ' ')
+		(*s)++;
+	v = fz_strtof(*s, &end);
+	*s = end;
+	return v;
+}
+
+/* One tab-separated field of a script line: copied into `buf` (at most n-1 bytes); *s moves past its tab. */
+static void pinned_field(const char **s, const char *end, char *buf, size_t n)
+{
+	size_t k = 0;
+	while (*s < end && **s != '\t')
+	{
+		if (k + 1 < n)
+			buf[k++] = **s;
+		(*s)++;
+	}
+	buf[k] = 0;
+	if (*s < end)
+		(*s)++;
+}
+
+/*
+ * Writes a PDF at `out` from the pages of a pdf2htmlEX EPUB, as pdfhtml.rs describes them in `script`, one
+ * instruction per line (fields split by tabs; positions in CSS pixels, y measured down from the page's top):
+ *   P w h                      a new page
+ *   F id entry                 font `id` is the EPUB's file `entry`
+ *   I entry x y w h            a picture
+ *   G id rgba abcd xy fs ls ws cont text
+ *                              text in font `id`: colour and alpha; the line's matrix (CSS orientation); its
+ *                              origin (the baseline's start); type size; letter and word spacing; whether it
+ *                              carries on after the previous run; then the characters, with \1<n>\1 moving on n.
+ * Fonts and pictures are read from the EPUB itself.
+ */
+int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, const char *out)
+{
+	enum { MAX_FONTS = 512 };
+	fz_archive *zip = NULL;
+	fz_document_writer *w = NULL;
+	fz_device *dev = NULL;
+	fz_font *fonts[MAX_FONTS] = { 0 };
+	fz_text *text = NULL;
+	fz_buffer *buf = NULL;
+	fz_image *img = NULL;
+	char *p = NULL;
+	float pen = 0;
+	int i;
+	fz_var(zip);
+	fz_var(w);
+	fz_var(dev);
+	fz_var(text);
+	fz_var(buf);
+	fz_var(img);
+	fz_var(p);
+	fz_var(pen);
+	fz_try(CTX)
+	{
+		const char *s = script, *eof = script + len;
+		p = os_path(CTX, epub);
+		zip = fz_open_archive(CTX, p);
+		fz_free(CTX, p);
+		p = NULL;
+		p = os_path(CTX, out);
+		w = fz_new_pdf_writer(CTX, p, "compress");
+		while (s < eof)
+		{
+			const char *end = memchr(s, '\n', eof - s);
+			char op, field[1024];
+			if (!end)
+				end = eof;
+			op = *s;
+			s += (s + 1 < end && s[1] == '\t') ? 2 : 1;
+			if (op == 'P')
+			{
+				float pw = pinned_num(&s), ph = pinned_num(&s);
+				if (dev)
+					fz_end_page(CTX, w);
+				dev = fz_begin_page(CTX, w, fz_make_rect(0, 0, pw, ph));
+			}
+			else if (op == 'F')
+			{
+				int id;
+				pinned_field(&s, end, field, sizeof field);
+				id = atoi(field);
+				pinned_field(&s, end, field, sizeof field);
+				if (id >= 0 && id < MAX_FONTS && !fonts[id])
+				{
+					fz_try(CTX)
+					{
+						buf = fz_read_archive_entry(CTX, zip, field);
+						fonts[id] = fz_new_font_from_buffer(CTX, NULL, buf, 0, 0);
+					}
+					fz_always(CTX)
+					{
+						fz_drop_buffer(CTX, buf);
+						buf = NULL;
+					}
+					fz_catch(CTX)
+					{
+						/* A font FreeType can't read: the lines keep their places in a standard one. */
+						fz_report_error(CTX);
+						fonts[id] = fz_new_base14_font(CTX, "Times-Roman");
+					}
+				}
+			}
+			else if (op == 'I' && dev)
+			{
+				float x, y, iw, ih;
+				pinned_field(&s, end, field, sizeof field);
+				x = pinned_num(&s), y = pinned_num(&s), iw = pinned_num(&s), ih = pinned_num(&s);
+				fz_try(CTX)
+				{
+					buf = fz_read_archive_entry(CTX, zip, field);
+					img = fz_new_image_from_buffer(CTX, buf);
+					fz_fill_image(CTX, dev, img, fz_make_matrix(iw, 0, 0, ih, x, y), 1, fz_default_color_params);
+				}
+				fz_always(CTX)
+				{
+					fz_drop_image(CTX, img);
+					img = NULL;
+					fz_drop_buffer(CTX, buf);
+					buf = NULL;
+				}
+				fz_catch(CTX)
+					fz_report_error(CTX);
+			}
+			else if (op == 'G' && dev)
+			{
+				float rgb[3], alpha, m[4], ox, oy, fs, ls, ws;
+				int id, cont;
+				fz_font *font;
+				id = (int)pinned_num(&s);
+				rgb[0] = pinned_num(&s), rgb[1] = pinned_num(&s), rgb[2] = pinned_num(&s), alpha = pinned_num(&s);
+				m[0] = pinned_num(&s), m[1] = pinned_num(&s), m[2] = pinned_num(&s), m[3] = pinned_num(&s);
+				ox = pinned_num(&s), oy = pinned_num(&s);
+				fs = pinned_num(&s), ls = pinned_num(&s), ws = pinned_num(&s);
+				cont = (int)pinned_num(&s);
+				if (s < end && *s == '\t')
+					s++;
+				font = id >= 0 && id < MAX_FONTS ? fonts[id] : NULL;
+				if (!cont)
+					pen = 0;
+				if (font)
+				{
+				text = fz_new_text(CTX);
+				while (s < end)
+				{
+					int ucs, gid;
+					if (*s == 1)
+					{
+						s++;
+						pen += pinned_num(&s);
+						while (s < end && *s != 1)
+							s++;
+						if (s < end)
+							s++;
+						continue;
+					}
+					s += fz_chartorune(&ucs, s);
+					gid = fz_encode_character(CTX, font, ucs);
+					/* Glyph space is y-up; the line's matrix is in CSS's y-down orientation. */
+					fz_show_glyph(CTX, text, font,
+						fz_make_matrix(fs * m[0], fs * m[1], -fs * m[2], -fs * m[3], ox + m[0] * pen, oy + m[1] * pen),
+						gid, ucs, 0, 0, FZ_BIDI_LTR, FZ_LANG_UNSET);
+					pen += fz_advance_glyph(CTX, font, gid, 0) * fs + ls + (ucs == ' ' ? ws : 0);
+				}
+				fz_fill_text(CTX, dev, text, fz_identity, fz_device_rgb(CTX), rgb, alpha, fz_default_color_params);
+				fz_drop_text(CTX, text);
+				text = NULL;
+				}
+			}
+			s = end + 1;
+		}
+		if (dev)
+			fz_end_page(CTX, w);
+		fz_close_document_writer(CTX, w);
+	}
+	fz_always(CTX)
+	{
+		fz_drop_text(CTX, text);
+		fz_drop_buffer(CTX, buf);
+		fz_drop_image(CTX, img);
+		for (i = 0; i < MAX_FONTS; i++)
+			fz_drop_font(CTX, fonts[i]);
+		fz_drop_document_writer(CTX, w);
+		fz_drop_archive(CTX, zip);
+		fz_free(CTX, p);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
+}

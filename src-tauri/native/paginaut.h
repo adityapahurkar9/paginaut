@@ -303,6 +303,8 @@ char *fo_text_words_json(fo_ctx *c, fo_text *t, const float bounds[4]);
 /* One file out of a zip (Office files): 0 read, 1 no such entry, -1 error. data freed with fo_free. */
 int fo_zip_read(fo_ctx *c, const char *path, const char *entry, unsigned char **data, size_t *len);
 int fo_zip_list(fo_ctx *c, const char *path, unsigned char **data, size_t *len);
+/* A PDF at `out` drawn from a pdf2htmlEX EPUB's pages as `script` describes them (pdfhtml.rs). */
+int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, const char *out);
 
 void fo_free(fo_ctx *c, void *p);
 

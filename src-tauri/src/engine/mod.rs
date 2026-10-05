@@ -210,7 +210,8 @@ pub struct DocInfo {
     pub first_size: [f32; 2],
     /// Set for an Office file shown through a PDF made from it (`path` is that PDF).
     pub converted: Option<Converted>,
-    /// An EPUB made from a PDF, shown rebuilt as an ordinary e-book (pdfhtml.rs); `save_repaired` keeps it.
+    /// An EPUB made from a PDF, shown as the PDF it was made from (pdfhtml.rs; `converted` says from
+    /// which file); `save_repaired` makes a flowing EPUB of it.
     pub repaired: bool,
 }
 
@@ -1415,6 +1416,12 @@ impl Doc {
         info.title = doc.metadata("info:Title").unwrap_or_default();
         info.author = doc.metadata("info:Author").unwrap_or_default();
         drop(inner);
+        // A book drawn again as a PDF keeps the title and author its EPUB gave.
+        if info.repaired {
+            if let Some(c) = &info.converted {
+                (info.title, info.author) = pdfhtml::title_author(&c.from);
+            }
+        }
         if let Ok(b) = self.bounds(0) {
             info.first_size = [b[2] - b[0], b[3] - b[1]];
         }
@@ -1465,8 +1472,11 @@ impl Engine {
         let convert = self.converter.read().clone();
         match convert.map(|f| f(path, engine)).transpose()?.flatten() {
             Some(c) => Ok((c.pdf.clone(), Some(c))),
-            // EPUBs that are PDFs in disguise open rebuilt as ordinary e-books (pdfhtml.rs).
-            None => Ok((pdfhtml::rebuilt(path, &mupdf::temp_dir()).unwrap_or_else(|| path.to_string()), None)),
+            None => match pdfhtml::as_pdf(path, &mupdf::temp_dir()) {
+                // EPUBs that are PDFs in disguise open as the PDF they were made from (pdfhtml.rs).
+                Some(pdf) => Ok((pdf.clone(), Some(Converted { from: path.to_string(), engine: "pdf2htmlex".into(), engine_name: "Paginaut".into(), pdf }))),
+                None => Ok((path.to_string(), None)),
+            },
         }
     }
 
@@ -1576,17 +1586,20 @@ impl Engine {
         Ok(d.info())
     }
 
-    /// Saves a repaired e-book (see `DocInfo::repaired`) as an EPUB file of its own.
-    pub fn save_repaired(&self, id: DocId, target: &str) -> Result<(), String> {
-        let path = self.doc(id)?.path();
-        if !pdfhtml::is_rebuilt(&path) {
-            return Err("This e-book didn't need repairing.".into());
-        }
+    /// Saves a repaired e-book (see `DocInfo::repaired`): as the PDF it is shown as (`pdf`), or as an
+    /// ordinary, flowing EPUB.
+    pub fn save_repaired(&self, id: DocId, target: &str, pdf: bool) -> Result<(), String> {
+        let d = self.doc(id)?;
+        let from = d.converted.read().as_ref().filter(|_| pdfhtml::is_rebuilt(&d.path())).map(|c| c.from.clone());
+        let from = from.ok_or("This e-book didn't need repairing.")?;
         if let Some(dir) = std::path::Path::new(target).parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
+        if !pdf {
+            return pdfhtml::repaired_epub(&from, target);
+        }
         let part = format!("{target}.part");
-        std::fs::copy(&path, &part).map_err(|e| e.to_string())?;
+        std::fs::copy(d.path(), &part).map_err(|e| e.to_string())?;
         std::fs::rename(&part, target).map_err(|e| {
             let _ = std::fs::remove_file(&part);
             e.to_string()

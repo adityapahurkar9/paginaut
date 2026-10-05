@@ -324,20 +324,21 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
   }
 }
 
-/** Saves a repaired e-book (an EPUB made from a PDF, shown rebuilt) as an EPUB that reads properly anywhere. */
-export async function saveRepaired(tab: Tab) {
+/** Saves a repaired e-book (an EPUB made from a PDF): as that PDF, pages exactly as made, or as a
+ *  flowing EPUB that any e-book reader shows properly (text and pictures, not the page layout). */
+export async function saveRepaired(tab: Tab, pdf: boolean) {
   const info = tab.info.value;
   if (!info?.repaired) return;
   const stem = baseName(tab.path).replace(/\.[^.]+$/, "");
   const target = await saveDialog({
-    title: "Save the repaired e-book",
-    defaultPath: tab.path.replace(/[^\\/]+$/, `${stem} (repaired).epub`),
-    filters: [{ name: "EPUB e-book", extensions: ["epub"] }],
+    title: pdf ? "Save as PDF" : "Save as a repaired e-book",
+    defaultPath: tab.path.replace(/[^\\/]+$/, pdf ? `${stem}.pdf` : `${stem} (repaired).epub`),
+    filters: [pdf ? { name: "PDF", extensions: ["pdf"] } : { name: "EPUB e-book", extensions: ["epub"] }],
   });
   if (!target) return;
   try {
-    await api.saveRepaired(info.docId, target);
-    showToast(`Saved ${baseName(target)}: it reads properly in any e-book reader now.`, 5000);
+    await api.saveRepaired(info.docId, target, pdf);
+    showToast(`Saved ${baseName(target)}`, 4000);
   } catch (err) {
     showToast(`Couldn't save: ${err}`, 5000);
   }

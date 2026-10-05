@@ -1109,6 +1109,15 @@ pub fn zip_read(path: &str, entry: &str) -> Result<Option<Vec<u8>>> {
     })
 }
 
+/// A PDF at `out` drawn from the pages of a pdf2htmlEX EPUB, as `script` describes them (pdfhtml.rs).
+pub fn pinned_pdf(epub: &str, script: &str, out: &str) -> Result<()> {
+    let (e, o) = (CString::new(epub).map_err(|e| e.to_string())?, CString::new(out).map_err(|e| e.to_string())?);
+    with_ctx(|c| match unsafe { fo_pinned_pdf(c, e.as_ptr(), script.as_ptr().cast(), script.len(), o.as_ptr()) } {
+        0 => Ok(()),
+        _ => Err(last_error(c)),
+    })
+}
+
 /// The names of a zip archive's entries.
 pub fn zip_list(path: &str) -> Result<Vec<String>> {
     let p = CString::new(path).map_err(|e| e.to_string())?;

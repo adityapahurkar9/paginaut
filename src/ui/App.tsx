@@ -83,6 +83,11 @@ export function App() {
                 <FormBar tab={tab} />
               </div>
             )}
+            {tab && tab.mode.value === "read" && (
+              <div class="topbars">
+                <RepairBar tab={tab} />
+              </div>
+            )}
             {tab && tab.mode.value === "pages" && <AnnotBar tab={tab} />}
             <SpeechBar />
             <PrintBar />

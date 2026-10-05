@@ -104,6 +104,7 @@ extern "C" {
     pub fn fo_text_match_json(c: *mut fo_ctx, t: *mut fo_text, bounds: *const c_float, needle: *const c_char, flags: c_int, snippets: c_int) -> *mut c_char;
     pub fn fo_text_words_json(c: *mut fo_ctx, t: *mut fo_text, bounds: *const c_float) -> *mut c_char;
     pub fn fo_zip_read(c: *mut fo_ctx, path: *const c_char, entry: *const c_char, data: *mut *mut u8, len: *mut usize) -> c_int;
+    pub fn fo_pinned_pdf(c: *mut fo_ctx, epub: *const c_char, script: *const c_char, len: usize, out: *const c_char) -> c_int;
     pub fn fo_zip_list(c: *mut fo_ctx, path: *const c_char, data: *mut *mut u8, len: *mut usize) -> c_int;
 
     pub fn fo_pdf_apply_page_edits(c: *mut fo_ctx, d: *mut fo_doc, rot: *const c_int, npages: c_int, order: *const c_int, count: c_int, file_pages: c_int) -> c_int;
