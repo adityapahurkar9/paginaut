@@ -124,9 +124,9 @@ input { font: inherit; }
 .pg { cursor: default; }
 /* The desktop's rotate/delete buttons on hover: no page editing here. */
 .pg-ctl { display: none !important; }
-/* One page at a time: pages snap into place (until you zoom in). */
+/* One page at a time: pages snap into place (until you zoom in); sideways swipes are the app's, to turn pages. */
 .viewer.slots .viewer-sizer { margin: 0; }
-.viewer.snap { scroll-snap-type: y mandatory; }
+.viewer.snap { scroll-snap-type: y mandatory; touch-action: pan-y; }
 .viewer.snap .pg { scroll-snap-align: center; scroll-snap-stop: always; }
 
 .bar {

@@ -151,6 +151,81 @@ function Pages({ d }: { d: OpenDoc }) {
     }
   }, [v, mode.value]);
 
+  // One by one: a sideways swipe turns the page too, sliding it out and the next one in.
+  useEffect(() => {
+    if (!v || layout === "scroll") return;
+    const el = v.el;
+    const sizer = el.querySelector<HTMLElement>(".viewer-sizer")!;
+    let x0 = 0, y0 = 0, t0 = 0, dx = 0, state: "" | "maybe" | "side" | "no" = "", busy = false;
+    const slide = (x: number, ms: number) => {
+      sizer.style.transition = ms ? `transform ${ms}ms cubic-bezier(0.2, 0.8, 0.2, 1)` : "";
+      sizer.style.transform = x ? `translateX(${x}px)` : "";
+    };
+    const start = (e: TouchEvent) => {
+      // Zoomed in, the finger pans the page instead.
+      state = e.touches.length === 1 && !busy && v.viewState().fit !== "none" ? "maybe" : "no";
+      x0 = e.touches[0].clientX;
+      y0 = e.touches[0].clientY;
+      t0 = e.timeStamp;
+      dx = 0;
+    };
+    const move = (e: TouchEvent) => {
+      if (state === "no" || !state) return;
+      if (e.touches.length > 1) {
+        if (state === "side") slide(0, 160);
+        state = "no";
+        return;
+      }
+      const ddx = e.touches[0].clientX - x0, ddy = e.touches[0].clientY - y0;
+      if (state === "maybe") {
+        if (Math.hypot(ddx, ddy) < 10) return;
+        state = Math.abs(ddx) > Math.abs(ddy) ? "side" : "no";
+        if (state === "no") return;
+      }
+      dx = ddx;
+      // At the first or last page it gives a little, then stops.
+      const p = v.viewState().page, last = d.info.pageCount - 1;
+      const edge = (dx > 0 && p <= 0) || (dx < 0 && p >= last);
+      slide(edge ? dx / 4 : dx, 0);
+      if (e.cancelable) e.preventDefault();
+    };
+    const end = (e: TouchEvent) => {
+      if (state !== "side") return;
+      state = "";
+      const w = el.clientWidth;
+      const p = v.viewState().page, last = d.info.pageCount - 1;
+      const dir = dx < 0 ? 1 : -1;
+      const far = Math.abs(dx) > w * 0.25 || (Math.abs(dx) > 40 && Math.abs(dx) / Math.max(1, e.timeStamp - t0) > 0.4);
+      if (!far || (dir < 0 && p <= 0) || (dir > 0 && p >= last)) return slide(0, 180);
+      busy = true;
+      slide(-dir * w, 160);
+      setTimeout(() => {
+        // The next page, brought in from the other side.
+        el.classList.remove("snap");
+        v.stepRow(dir as 1 | -1);
+        slide(dir * w, 0);
+        void sizer.offsetWidth;
+        el.classList.add("snap");
+        slide(0, 200);
+        setTimeout(() => {
+          slide(0, 0);
+          busy = false;
+        }, 210);
+      }, 160);
+    };
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchmove", move, { passive: false });
+    el.addEventListener("touchend", end);
+    el.addEventListener("touchcancel", end);
+    return () => {
+      el.removeEventListener("touchstart", start);
+      el.removeEventListener("touchmove", move);
+      el.removeEventListener("touchend", end);
+      el.removeEventListener("touchcancel", end);
+      slide(0, 0);
+    };
+  }, [v, layout]);
+
   useTaps(
     () => host.current,
     (x, y) => {
