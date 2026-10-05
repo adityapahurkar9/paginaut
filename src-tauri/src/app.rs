@@ -133,6 +133,39 @@ pub async fn text_select(
     .await
 }
 
+/// A word (mode 3), paragraph (4) or the page (5) near a point, as a character range with its
+/// quads: drawn and later copied exactly (see fo_text_snap_range).
+#[derive(Serialize)]
+pub struct TextRange {
+    range: [i32; 2],
+    quads: Vec<[f32; 8]>,
+}
+
+#[tauri::command]
+pub async fn text_range(state: State<'_, AppState>, doc: DocId, page: usize, p: [f32; 2], mode: i32) -> Res<Option<TextRange>> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        let d = engine.doc(doc)?;
+        let bounds = d.bounds(page)?;
+        let text = d.text(page)?;
+        let t = text.lock();
+        Ok(t.snap_range(&bounds, p, mode).map(|[from, to]| TextRange { range: [from, to], quads: t.range_quads(&bounds, from, to) }))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn text_range_copy(state: State<'_, AppState>, doc: DocId, page: usize, from: i32, to: i32) -> Res<String> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        let d = engine.doc(doc)?;
+        let text = d.text(page)?;
+        let s = text.lock().range_copy(from, to);
+        Ok(s)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn text_copy(state: State<'_, AppState>, doc: DocId, page: usize, a: [f32; 2], b: [f32; 2]) -> Res<String> {
     let engine = state.engine.clone();

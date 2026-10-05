@@ -1277,6 +1277,23 @@ impl Drop for List {
     }
 }
 
+/// Where comic books packed as solid RAR archives are unpacked while open (native/cbr.c). Copies left
+/// by an earlier run that didn't close them are removed.
+pub fn set_temp_dir(dir: &std::path::Path) {
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(list) = std::fs::read_dir(dir) {
+        for e in list.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with("paginaut-rar-") && name.ends_with(".tmp") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    if let Ok(c) = CString::new(dir.to_string_lossy().as_bytes()) {
+        unsafe { po_set_temp_dir(c.as_ptr()) };
+    }
+}
+
 // ---------------------------------------------------------------- Structured text
 
 /// Structured text of one page. Read-only after creation; callers still
@@ -1300,6 +1317,25 @@ impl Text {
         let mut q = [0f32; 8];
         let n = with_kind(self.1, |c| unsafe { fo_text_snap(c, self.0, bounds.as_ptr(), a[0], a[1], b[0], b[1], mode, q.as_mut_ptr()) });
         (n > 0 && q.iter().any(|v| *v != 0.0)).then_some(q)
+    }
+
+    /// The character range [from, to) of the word (mode 3) or paragraph (4) nearest a point, or the page (5).
+    pub fn snap_range(&self, bounds: &[f32; 4], p: [f32; 2], mode: i32) -> Option<[i32; 2]> {
+        let (mut from, mut to) = (0, 0);
+        let ok = with_kind(self.1, |c| unsafe { fo_text_snap_range(c, self.0, bounds.as_ptr(), p[0], p[1], mode, &mut from, &mut to) });
+        (ok > 0 && to > from).then_some([from, to])
+    }
+
+    /// One quad per line for the characters in [from, to).
+    pub fn range_quads(&self, bounds: &[f32; 4], from: i32, to: i32) -> Vec<QuadF> {
+        const MAX: usize = 4096;
+        let mut out = vec![0f32; MAX * 8];
+        let n = with_kind(self.1, |c| unsafe { fo_text_range_quads(c, self.0, bounds.as_ptr(), from, to, out.as_mut_ptr(), MAX as c_int) });
+        (0..n.max(0) as usize).map(|i| out[i * 8..i * 8 + 8].try_into().unwrap()).collect()
+    }
+
+    pub fn range_copy(&self, from: i32, to: i32) -> String {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_text_range_copy(c, self.0, from, to) })).unwrap_or_default()
     }
 
     pub fn copy(&self, bounds: &[f32; 4], a: [f32; 2], b: [f32; 2]) -> String {

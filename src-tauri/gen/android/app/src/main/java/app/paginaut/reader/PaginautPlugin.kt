@@ -154,12 +154,26 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
           put("uri", uri.toString())
         })
       } catch (e: SecurityException) {
-        invoke.reject("Paginaut can no longer open this file. Open it again from its app or Files.")
+        // Lent by another app for one visit: the copy made then is what there is (counted as opened).
+        val copy = cachedCopy(uri)
+        if (copy != null) {
+          copy.parentFile?.setLastModified(System.currentTimeMillis())
+          invoke.resolve(JSObject().apply {
+            put("path", copy.absolutePath)
+            put("name", copy.name)
+            put("uri", uri.toString())
+          })
+        } else invoke.reject("Paginaut can no longer open this file. Open it again from its app or Files.")
       } catch (e: Exception) {
         invoke.reject("Couldn't read the file: ${e.message ?: e.javaClass.simpleName}")
       }
     }
   }
+
+  /** The copy kept for a source, if there is one (not a half-made one, nor a PDF made for printing). */
+  private fun cachedCopy(uri: Uri): File? =
+    File(activity.cacheDir, "docs/" + sha1(uri.toString()).take(16)).listFiles()
+      ?.firstOrNull { it.isFile && it.name != ".part" && !it.name.endsWith(".print.pdf") }
 
   private fun copyToCache(uri: Uri): Pair<File, String> {
     val cr = activity.contentResolver
@@ -187,7 +201,11 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     }
     val dir = File(activity.cacheDir, "docs/" + sha1(uri.toString()).take(16))
     val out = File(dir, display)
-    if (size >= 0 && out.isFile && out.length() == size) return Pair(out, display)
+    if (size >= 0 && out.isFile && out.length() == size) {
+      // Opened again: the copy counts as recent (trimCache drops the least recently opened first).
+      dir.setLastModified(System.currentTimeMillis())
+      return Pair(out, display)
+    }
     // Read the source before dropping the old copy: if it can't be read any more (a file another
     // app lent us for one visit), the copy is what Recent opens instead.
     val input = cr.openInputStream(uri) ?: throw IllegalStateException("the file is empty")

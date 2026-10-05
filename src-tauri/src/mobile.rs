@@ -32,6 +32,8 @@ pub fn run() {
             app::page_images,
             app::text_select,
             app::text_copy,
+            app::text_range,
+            app::text_range_copy,
             app::page_text,
             app::page_text_stats,
             app::search,
@@ -76,6 +78,10 @@ struct Native<R: Runtime>(PluginHandle<R>);
 fn native<R: Runtime>() -> TauriPlugin<R> {
     PluginBuilder::new("paginaut")
         .setup(|app, api| {
+            // Solid RAR comic books are unpacked here while open (std's temp dir isn't writable on Android).
+            if let Ok(dir) = app.path().app_cache_dir() {
+                crate::engine::mupdf::set_temp_dir(&dir.join("unpacked"));
+            }
             #[cfg(target_os = "android")]
             {
                 let handle = api.register_android_plugin("app.paginaut.reader", "PaginautPlugin")?;

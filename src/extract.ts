@@ -11,6 +11,7 @@ import { menu, openMenuAt } from "./ui/Toolbar";
 import type { MenuItem } from "./ui/Overlays";
 import { testHook } from "./ui/PagesUI";
 import type { Block } from "./reflow/model";
+import type { ReflowView } from "./reflow/ReadView";
 import { readAloud } from "./speech";
 
 const stemOf = (tab: Tab) => baseName(tab.path).replace(/\.[^.]+$/, "");
@@ -221,7 +222,8 @@ async function pageMenu(tab: Tab, view: number, pt: [number, number], x: number,
   }
   const items: MenuItem[] = [
     { label: "Copy", hint: "Ctrl+C", disabled: !tab.hasSelection.value, run: A.copySelection },
-    { label: "Select paragraph", run: () => void tab.viewer?.selectParagraph(x, y) },
+    // The page and point clicked (the menu is still over that spot while its item runs).
+    { label: "Select paragraph", run: () => void tab.viewer?.selectParagraph({ view, p: pt }) },
     { label: "Select page", hint: "Ctrl+A", run: () => tab.viewer?.selectAllOnPage(view) },
     { sep: true },
   ];
@@ -251,9 +253,16 @@ window.addEventListener("contextmenu", (e) => {
 
 // ---------------------------------------------------------------- selecting text
 
-/** Selects the shown text of the blocks `want` picks (a paragraph may be shown in several pieces). */
-function selectBlocks(root: HTMLElement, want: (b: number) => boolean) {
-  const els = [...root.querySelectorAll<HTMLElement>("[data-b]")].filter((e) => want(Number(e.dataset.b)));
+/**
+ * Selects the text of blocks b0–b1 (a paragraph may be shown in several pieces). Read mode lays
+ * them out first; Book mode has the ones on the pages shown.
+ */
+function selectBlocks(view: ReflowView, b0: number, b1: number) {
+  view.showBlocks?.(b0, b1);
+  const els = [...view.el.querySelectorAll<HTMLElement>("[data-b]")].filter((e) => {
+    const b = Number(e.dataset.b);
+    return b >= b0 && b <= b1;
+  });
   if (!els.length) return;
   const r = document.createRange();
   r.setStartBefore(els[0]);
@@ -283,12 +292,19 @@ async function reflowMenu(tab: Tab, target: HTMLElement, x: number, y: number) {
   const sel = getSelection()?.toString() ?? "";
   const items: MenuItem[] = [
     { label: "Copy", hint: "Ctrl+C", disabled: !sel.trim(), run: () => void navigator.clipboard.writeText(sel).then(() => showToast("Copied")) },
-    { label: "Select paragraph", disabled: !block, run: () => selectBlocks(view.el, (b) => b === block) },
+    { label: "Select paragraph", disabled: block === null, run: () => selectBlocks(view, block!, block!) },
     {
       label: "Select page",
-      disabled: !block,
+      disabled: block === null,
       // The document page the paragraph comes from (Read and Book reflow the pages).
-      run: () => selectBlocks(view.el, (b) => view.flow.blocks[b]?.page === view.flow.blocks[block!]?.page),
+      run: () => {
+        // Blocks run in page order: the page's are one stretch round the one clicked.
+        const blocks = view.flow.blocks, page = blocks[block!].page;
+        let b0 = block!, b1 = block!;
+        while (b0 > 0 && blocks[b0 - 1].page === page) b0--;
+        while (b1 < blocks.length - 1 && blocks[b1 + 1].page === page) b1++;
+        selectBlocks(view, b0, b1);
+      },
     },
     { sep: true },
   ];

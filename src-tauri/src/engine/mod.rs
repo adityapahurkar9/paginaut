@@ -1439,6 +1439,19 @@ pub struct Engine {
     converter: RwLock<Option<Arc<Converter>>>,
 }
 
+const SOLID_RAR4: &str = "This comic book is a solid RAR 4 archive, which Paginaut can't read. Unpacked and packed again \
+     (as CBZ, or as RAR 5) it opens.";
+
+/// A RAR 4 archive with the solid flag: libarchive (native/cbr.c) reads no further than its first file.
+fn solid_rar4(path: &str) -> bool {
+    use std::io::Read;
+    let mut h = [0u8; 12];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut h)).is_ok()
+        && &h[..7] == b"Rar!\x1a\x07\x00"
+        && h[9] == 0x73
+        && u16::from_le_bytes([h[10], h[11]]) & 0x0008 != 0
+}
+
 impl Engine {
     pub fn new(workers: usize, store_bytes: usize) -> Result<Arc<Self>, String> {
         mupdf::init(store_bytes)?;
@@ -1545,7 +1558,7 @@ impl Engine {
     /// Opens a file; an Office file through a PDF made with `engine` (or the preferred converter).
     pub fn open_with(&self, path: &str, engine: Option<&str>) -> Result<DocInfo, String> {
         let (file, converted) = self.source(path, engine)?;
-        let doc = Document::open(&file)?;
+        let doc = Document::open(&file).map_err(|e| if solid_rar4(&file) { SOLID_RAR4.to_string() } else { e })?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let d = Arc::new(Doc {
             id,

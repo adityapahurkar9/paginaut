@@ -195,6 +195,7 @@ fn run_desktop() {
     #[cfg(windows)]
     migrate_from_folio();
     let engine = engine::Engine::new(worker_count(), store_bytes()).expect("MuPDF failed to start");
+    engine::mupdf::set_temp_dir(&std::env::temp_dir());
     let converter = engine.clone();
     let args: Vec<String> = std::env::args().collect();
     let launch = app::files_from_args(&args, None);
@@ -267,6 +268,8 @@ fn run_desktop() {
             app::page_images,
             app::text_select,
             app::text_copy,
+            app::text_range,
+            app::text_range_copy,
             app::page_text,
             app::page_text_stats,
             app::search,

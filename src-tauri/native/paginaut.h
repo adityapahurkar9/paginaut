@@ -79,6 +79,10 @@ int fo_text_highlight(fo_ctx *c, fo_text *t, const float bounds[4], float ax, fl
 /* mode: 0 chars, 1 words, 2 lines; writes one quad. */
 int fo_text_snap(fo_ctx *c, fo_text *t, const float bounds[4], float ax, float ay, float bx, float by, int mode, float *out);
 char *fo_text_copy(fo_ctx *c, fo_text *t, const float bounds[4], float ax, float ay, float bx, float by);
+/* Character ranges [from, to) (word 3, paragraph 4 or page 5 near a point), drawn and copied exactly. */
+int fo_text_snap_range(fo_ctx *c, fo_text *t, const float bounds[4], float x, float y, int mode, int *from, int *to);
+int fo_text_range_quads(fo_ctx *c, fo_text *t, const float bounds[4], int from, int to, float *out, int max);
+char *fo_text_range_copy(fo_ctx *c, fo_text *t, int from, int to);
 char *fo_text_all(fo_ctx *c, fo_text *t);
 int fo_text_char_count(fo_ctx *c, fo_text *t);
 /* JSON hits: [[quad8...],...] one array of quads per hit. */

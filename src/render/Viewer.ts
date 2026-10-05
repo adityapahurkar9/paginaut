@@ -115,6 +115,11 @@ interface Selection {
   b: [number, number];
   /** 0: characters between a and b, 1: words, 2: lines, 3: the word nearest a (touch), 4: its paragraph, 5: the page. */
   mode: 0 | 1 | 2 | 3 | 4 | 5;
+  /**
+   * A word, paragraph or page selection (modes 3–5) as the engine's character range [from, to):
+   * drawn and copied from it exactly. a and b still mark its ends, for the handles to move.
+   */
+  range?: [number, number];
 }
 
 // ------------------------------------------------------------ rotation math
@@ -720,7 +725,8 @@ export class Viewer {
   async copySelection(): Promise<string | null> {
     const s = this.selection;
     if (!s) return null;
-    const text = await api.copy(this.info.docId, this.pages[s.view].src, s.a, s.b);
+    const src = this.pages[s.view].src;
+    const text = await (s.range ? api.rangeCopy(this.info.docId, src, s.range[0], s.range[1]) : api.copy(this.info.docId, src, s.a, s.b));
     return text || null;
   }
 
@@ -734,7 +740,8 @@ export class Viewer {
   /** Selects all the text on displayed page `view` (by default the one being read). */
   selectAllOnPage(view?: number) {
     const v = view ?? this.currentPage;
-    // Mode 5: the engine's first character to its last (corner to corner misses lines).
+    // Mode 5: the engine's first character to its last (corner to corner misses lines: MuPDF
+    // takes each corner to its nearest line).
     void this.updateSelection({ view: v, a: [0, 0], b: [0, 0], mode: 5 });
   }
 
@@ -863,34 +870,39 @@ export class Viewer {
 
   // ------------------------------------------------------------ touch selection (the Android viewer)
 
+  /**
+   * The page under a screen point and the point on it, by geometry (not by the element there:
+   * the selection's handles or a menu may be on top).
+   */
+  private pageAtClient(clientX: number, clientY: number): { view: number; p: [number, number] } | null {
+    for (const pv of this.mounted.values()) {
+      const r = pv.el.getBoundingClientRect();
+      if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) return { view: pv.index, p: this.pointToPage(pv, clientX, clientY) };
+    }
+    return null;
+  }
+
   /** A long press: selects the word under the screen point. Resolves true if there was text. */
   async selectWordAt(clientX: number, clientY: number): Promise<boolean> {
-    const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>(".pg");
-    const pv = el && this.el.contains(el) ? this.mounted.get(Number(el.dataset.index)) : undefined;
-    if (!pv) return false;
-    const p = this.pointToPage(pv, clientX, clientY);
+    const at = this.pageAtClient(clientX, clientY);
+    if (!at) return false;
     // Mode 3: the engine's word nearest the point (MuPDF's own word snapping needs the point close
     // to the middle of the line, which a fingertip on small text rarely is).
-    void this.updateSelection({ view: pv.index, a: p, b: p, mode: 3 });
+    void this.updateSelection({ view: at.view, a: at.p, b: at.p, mode: 3 });
     await this.selectionSettled();
     if (!this.selQuads.length) this.clearSelection();
     return this.selQuads.length > 0;
   }
 
   /**
-   * Selects the paragraph at a screen point, or (no point) the one holding the selection's start.
-   * Resolves true if there was text.
+   * Selects the paragraph at a point on displayed page `view` (unrotated page points), or with
+   * none, the paragraph holding the selection's start. Resolves true if there was text.
    */
-  async selectParagraph(clientX?: number, clientY?: number): Promise<boolean> {
-    let view: number, p: [number, number];
-    if (clientX !== undefined && clientY !== undefined) {
-      const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>(".pg");
-      const pv = el && this.el.contains(el) ? this.mounted.get(Number(el.dataset.index)) : undefined;
-      if (!pv) return false;
-      [view, p] = [pv.index, this.pointToPage(pv, clientX, clientY)];
-    } else if (this.selection) [view, p] = [this.selection.view, this.selection.a];
-    else return false;
-    void this.updateSelection({ view, a: p, b: p, mode: 4 });
+  async selectParagraph(at?: { view: number; p: [number, number] }): Promise<boolean> {
+    const s = this.selection;
+    const where = at ?? (s ? { view: s.view, p: s.a } : null);
+    if (!where) return false;
+    void this.updateSelection({ view: where.view, a: where.p, b: where.p, mode: 4 });
     await this.selectionSettled();
     return this.selQuads.length > 0;
   }
@@ -900,7 +912,9 @@ export class Viewer {
     const s = this.selection;
     const pv = s && this.mounted.get(s.view);
     if (!s || !pv) return;
-    void this.updateSelection({ ...s, [end]: this.pointToPage(pv, clientX, clientY), mode: 0 });
+    // From here it's a range between two points (the word, paragraph or page range is left behind).
+    const p = this.pointToPage(pv, clientX, clientY);
+    void this.updateSelection({ view: s.view, a: end === "a" ? p : s.a, b: end === "b" ? p : s.b, mode: 0 });
   }
 
   /**
@@ -1044,7 +1058,20 @@ export class Viewer {
       while (cur) {
         this.selNext = null;
         const src = this.pages[cur.view].src;
-        const quads = await api.select(this.info.docId, src, cur.a, cur.b, cur.mode).catch(() => [] as Quad[]);
+        if (cur.mode >= 3) {
+          // A word, paragraph or page: the engine's character range, drawn as it is.
+          const r = await api.textRange(this.info.docId, src, cur.a, cur.mode as 3 | 4 | 5).catch(() => null);
+          if (r?.quads.length) {
+            const q0 = r.quads[0], qn = r.quads[r.quads.length - 1];
+            this.selection = { view: cur.view, a: [q0[0] + 0.1, (q0[1] + q0[5]) / 2], b: [qn[6] - 0.1, (qn[3] + qn[7]) / 2], mode: 0, range: r.range };
+            this.selQuads = r.quads;
+          } else this.selQuads = [];
+          for (const p of this.mounted.values()) this.drawMarks(p);
+          this.cb.onSelection(this.selQuads.length > 0);
+          cur = this.selNext;
+          continue;
+        }
+        const quads = await api.select(this.info.docId, src, cur.a, cur.b, cur.mode as 0 | 1 | 2).catch(() => [] as Quad[]);
         if (cur.mode !== 0 && quads.length) {
           // Snapped selections become a normal range from the snapped quad.
           const q = quads[0];

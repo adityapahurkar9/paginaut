@@ -25,6 +25,8 @@ export interface ReflowView {
   /** Block at the top of the view (to keep the place when switching modes). */
   currentBlock(): number;
   goToBlock(b: number): void;
+  /** Lays out blocks b0–b1 if they're held back (Read mode shows only the text near the view), to select them. */
+  showBlocks?(b0: number, b1: number): void;
   goToPage(view: number): void;
   next(): void;
   prev(): void;
@@ -181,13 +183,27 @@ export class ReadView implements ReflowView {
       const y = c.el.offsetTop;
       return y + c.el.offsetHeight > lo && y < hi;
     });
+    // Text selected stays laid out, or the selection would go with it.
+    const sel = getSelection();
+    const range = sel && sel.rangeCount && !sel.isCollapsed && this.col.contains(sel.anchorNode) ? sel.getRangeAt(0) : null;
     let added = false;
     this.chunks.forEach((c, i) => {
       if (near[i]) {
         if (!c.mounted) added = true;
         this.mount(c);
-      } else this.unmount(c);
+      } else if (!(c.mounted && range?.intersectsNode(c.el))) this.unmount(c);
     });
+    if (added && this.hits.length) paintHits(this.col, this.hits, this.active);
+  }
+
+  showBlocks(b0: number, b1: number) {
+    const first = this.chunkAt(b0), last = this.chunkAt(b1, Infinity);
+    if (!first || !last) return;
+    let added = false;
+    for (let i = this.chunks.indexOf(first); i <= this.chunks.indexOf(last); i++) {
+      if (!this.chunks[i].mounted) added = true;
+      this.mount(this.chunks[i]);
+    }
     if (added && this.hits.length) paintHits(this.col, this.hits, this.active);
   }
 
