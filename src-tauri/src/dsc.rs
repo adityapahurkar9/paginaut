@@ -1,4 +1,5 @@
-//! Digital signatures with certificates from the Windows certificate store: the
+//! Digital signatures with certificates from the Windows certificate store (on Linux, from .pfx/.p12
+//! files through OpenSSL: `imp` below): the
 //! store is where a DSC token's driver puts its certificates (Adobe finds them
 //! there too). Signing goes through Windows' own crypto, so the token's driver
 //! asks for its PIN in its own window; Paginaut never sees it.
@@ -866,39 +867,485 @@ mod imp {
     }
 }
 
+/// Linux: OpenSSL (the system's libssl). Certificates come from .pfx/.p12 files; the signature is built the
+/// same way as on Windows (CMS SignedData, detached, SHA-256, the chain, signing-certificate-v2) and checked
+/// against the system's trusted certificates (/etc/ssl/certs). Timestamps (RFC 3161) and revocation (OCSP)
+/// are asked for over the network as on Windows.
 #[cfg(not(windows))]
 mod imp {
-    use super::{CertSummary, SigCheck};
-    pub struct Cert;
+    use super::{CertSummary, Revocation, SigCheck};
+    use foreign_types::ForeignTypeRef;
+    use openssl::asn1::{Asn1Time, Asn1TimeRef};
+    use openssl::hash::{hash, MessageDigest};
+    use openssl::nid::Nid;
+    use openssl::ocsp::{OcspCertId, OcspCertStatus, OcspRequest, OcspResponse, OcspResponseStatus};
+    use openssl::pkcs12::Pkcs12;
+    use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
+    use openssl::pkey::{PKey, Private};
+    use openssl::stack::Stack;
+    use openssl::x509::store::{X509Store, X509StoreBuilder};
+    use openssl::x509::verify::X509VerifyParam;
+    use openssl::x509::{X509NameRef, X509Ref, X509};
+    use std::ffi::{c_char, c_int, c_long, c_uint, c_void};
+
+    const OID_SIGNING_CERT_V2: &[u8] = b"1.2.840.113549.1.9.16.2.47\0";
+    const OID_TIMESTAMP_TOKEN: &[u8] = b"1.2.840.113549.1.9.16.2.14\0";
+    // openssl/cms.h
+    const CMS_DETACHED: c_uint = 0x40;
+    const CMS_BINARY: c_uint = 0x80;
+    const CMS_NOSMIMECAP: c_uint = 0x200;
+    const CMS_PARTIAL: c_uint = 0x4000;
+    const V_ASN1_SEQUENCE: c_int = 16;
+
+    // The parts of OpenSSL's CMS the openssl crate doesn't cover (in libcrypto, linked through openssl-sys).
+    extern "C" {
+        fn CMS_sign(signcert: *mut c_void, pkey: *mut c_void, certs: *mut c_void, data: *mut c_void, flags: c_uint) -> *mut c_void;
+        fn CMS_add1_signer(cms: *mut c_void, signer: *mut c_void, pk: *mut c_void, md: *const c_void, flags: c_uint) -> *mut c_void;
+        fn CMS_add1_cert(cms: *mut c_void, cert: *mut c_void) -> c_int;
+        fn CMS_signed_add1_attr_by_OBJ(si: *mut c_void, obj: *const c_void, kind: c_int, bytes: *const c_void, len: c_int) -> c_int;
+        fn CMS_unsigned_add1_attr_by_OBJ(si: *mut c_void, obj: *const c_void, kind: c_int, bytes: *const c_void, len: c_int) -> c_int;
+        fn CMS_final(cms: *mut c_void, data: *mut c_void, dcont: *mut c_void, flags: c_uint) -> c_int;
+        fn CMS_get0_SignerInfos(cms: *mut c_void) -> *mut c_void;
+        fn CMS_SignerInfo_get0_signature(si: *mut c_void) -> *mut c_void;
+        fn i2d_CMS_ContentInfo(cms: *mut c_void, out: *mut *mut u8) -> c_int;
+        fn d2i_CMS_ContentInfo(a: *mut *mut c_void, pp: *mut *const u8, len: c_long) -> *mut c_void;
+        fn CMS_ContentInfo_free(cms: *mut c_void);
+        fn OPENSSL_sk_value(st: *const c_void, i: c_int) -> *mut c_void;
+        fn OPENSSL_sk_num(st: *const c_void) -> c_int;
+        fn OBJ_txt2obj(s: *const c_char, no_name: c_int) -> *mut c_void;
+        fn OBJ_txt2nid(s: *const c_char) -> c_int;
+        fn ASN1_OBJECT_free(o: *mut c_void);
+        fn ASN1_STRING_get0_data(x: *const c_void) -> *const u8;
+        fn ASN1_STRING_length(x: *const c_void) -> c_int;
+        fn BIO_new_mem_buf(buf: *const c_void, len: c_int) -> *mut c_void;
+        fn BIO_free(b: *mut c_void) -> c_int;
+        fn EVP_sha256() -> *const c_void;
+        fn PKCS7_get_signer_info(p7: *mut c_void) -> *mut c_void;
+        fn PKCS7_get_attribute(si: *mut c_void, nid: c_int) -> *mut c_void;
+        fn i2d_ASN1_TYPE(a: *mut c_void, out: *mut *mut u8) -> c_int;
+    }
+
+    fn err(e: openssl::error::ErrorStack) -> String {
+        e.to_string()
+    }
+
+    /// A DER value: tag, length, content.
+    fn der(tag: u8, content: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        let n = content.len();
+        if n < 0x80 {
+            out.push(n as u8);
+        } else {
+            let bytes: Vec<u8> = n.to_be_bytes().iter().copied().skip_while(|&b| b == 0).collect();
+            out.push(0x80 | bytes.len() as u8);
+            out.extend(bytes);
+        }
+        out.extend_from_slice(content);
+        out
+    }
+
+    /// A DER value at the start of `b`: (tag, header length, content length).
+    fn tlv(b: &[u8]) -> Option<(u8, usize, usize)> {
+        let (&tag, rest) = b.split_first()?;
+        let (&l, rest) = rest.split_first()?;
+        if l < 0x80 {
+            return Some((tag, 2, l as usize));
+        }
+        let n = (l & 0x7f) as usize;
+        if n == 0 || n > 4 || rest.len() < n {
+            return None;
+        }
+        Some((tag, 2 + n, rest[..n].iter().fold(0usize, |a, &x| (a << 8) | x as usize)))
+    }
+
+    /// The DER value at the start of `b` alone (a PDF's /Contents is padded with zeros).
+    fn der_len(b: &[u8]) -> usize {
+        tlv(b).map_or(b.len(), |(_, h, l)| (h + l).min(b.len()))
+    }
+
+    /// Bytes an OpenSSL `i2d_` function writes.
+    unsafe fn i2d(f: unsafe extern "C" fn(*mut c_void, *mut *mut u8) -> c_int, x: *mut c_void) -> Result<Vec<u8>, String> {
+        let n = f(x, std::ptr::null_mut());
+        if n <= 0 {
+            return Err("couldn't encode the signature".into());
+        }
+        let mut out = vec![0u8; n as usize];
+        let mut p = out.as_mut_ptr();
+        f(x, &mut p);
+        Ok(out)
+    }
+
+    fn name(n: &X509NameRef, nid: Nid) -> String {
+        n.entries_by_nid(nid).next().and_then(|e| e.data().to_string().ok()).unwrap_or_default()
+    }
+
+    fn epoch(t: &Asn1TimeRef) -> i64 {
+        Asn1Time::from_unix(0).ok().and_then(|z| z.diff(t).ok()).map_or(0, |d| d.days as i64 * 86_400 + d.secs as i64)
+    }
+
+    fn now() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    }
+
+    fn email(c: &X509Ref) -> String {
+        let from_name = name(c.subject_name(), Nid::PKCS9_EMAILADDRESS);
+        if !from_name.is_empty() {
+            return from_name;
+        }
+        c.subject_alt_names().and_then(|s| s.iter().find_map(|g| g.email().map(str::to_string))).unwrap_or_default()
+    }
+
+    fn summarize(c: &X509Ref, provider: &str) -> CertSummary {
+        let thumb = c.digest(MessageDigest::sha1()).map(|d| d.iter().map(|b| format!("{b:02X}")).collect()).unwrap_or_default();
+        let (not_before, not_after) = (epoch(c.not_before()), epoch(c.not_after()));
+        let t = now();
+        let self_signed = c.subject_name().to_der().ok() == c.issuer_name().to_der().ok();
+        CertSummary {
+            thumb,
+            name: name(c.subject_name(), Nid::COMMONNAME),
+            issuer: name(c.issuer_name(), Nid::COMMONNAME),
+            email: email(c),
+            org: name(c.subject_name(), Nid::ORGANIZATIONNAME),
+            not_before,
+            not_after,
+            provider: provider.into(),
+            hardware: false,
+            current: not_before <= t && t <= not_after,
+            likely: !self_signed,
+        }
+    }
+
+    /// The system's trusted certificates, checked as at `at` (seconds since 1970) when given.
+    fn trusted(at: Option<i64>) -> Result<X509Store, String> {
+        let mut b = X509StoreBuilder::new().map_err(err)?;
+        b.set_default_paths().map_err(err)?;
+        if let Some(t) = at {
+            let mut p = X509VerifyParam::new().map_err(err)?;
+            p.set_time(t as _);
+            b.set_param(&p).map_err(err)?;
+        }
+        Ok(b.build())
+    }
+
+    /// Linux has no shared store DSC drivers fill: certificates come from files.
     pub fn list() -> Result<Vec<CertSummary>, String> {
         Ok(Vec::new())
     }
+
+    pub struct Cert {
+        cert: X509,
+        key: PKey<Private>,
+        chain: Vec<X509>,
+    }
+
     impl Cert {
         pub fn find(_: &str) -> Result<Cert, String> {
-            Err("Signing with certificates is only available on Windows for now.".into())
+            Err("On Linux, sign with your certificate file (.pfx or .p12).".into())
         }
-        pub fn from_pfx(_: &str, _: &str) -> Result<Cert, String> {
-            Err("Signing with certificates is only available on Windows for now.".into())
+
+        pub fn from_pfx(path: &str, password: &str) -> Result<Cert, String> {
+            let der = std::fs::read(path).map_err(|e| format!("Couldn't read the certificate file: {e}"))?;
+            let p12 = Pkcs12::from_der(&der).map_err(|_| "This isn't a certificate file (.pfx or .p12).".to_string())?;
+            let parsed = p12.parse2(password).map_err(|_| "Wrong password for the certificate file.".to_string())?;
+            let cert = parsed.cert.ok_or("The file has no certificate.")?;
+            let key = parsed.pkey.ok_or("The file has no private key: it can't sign.")?;
+            let chain = parsed.ca.map(|s| s.into_iter().collect()).unwrap_or_default();
+            Ok(Cert { cert, key, chain })
         }
+
         pub fn summary(&self) -> CertSummary {
-            unreachable!()
+            summarize(&self.cert, "Certificate file")
         }
+
         pub fn dn(&self) -> [String; 5] {
-            Default::default()
+            let n = self.cert.subject_name();
+            [name(n, Nid::COMMONNAME), name(n, Nid::ORGANIZATIONNAME), name(n, Nid::ORGANIZATIONALUNITNAME), email(&self.cert), name(n, Nid::COUNTRYNAME)]
         }
-        pub fn sign(&self, _: &[u8], _: isize) -> Result<Vec<u8>, String> {
-            Err("not available".into())
+
+        /// The CMS signature over `data`.
+        pub fn sign(&self, data: &[u8], _hwnd: isize) -> Result<Vec<u8>, String> {
+            let cert_hash = hash(MessageDigest::sha256(), &self.cert.to_der().map_err(err)?).map_err(err)?;
+            // SigningCertificateV2 { [ESSCertIDv2 { certHash }] } (SHA-256, the default, so no algorithm).
+            let scv2 = der(0x30, &der(0x30, &der(0x30, &der(0x04, &cert_hash))));
+            // SAFETY: OpenSSL objects made and freed here; the certificate and key outlive the calls (OpenSSL
+            // takes its own references to them).
+            unsafe {
+                let cms = CMS_sign(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), CMS_DETACHED | CMS_BINARY | CMS_PARTIAL);
+                if cms.is_null() {
+                    return Err("Couldn't start the signature.".into());
+                }
+                let r = (|| {
+                    let si = CMS_add1_signer(cms, self.cert.as_ptr() as *mut c_void, self.key.as_ptr() as *mut c_void, EVP_sha256(), CMS_BINARY | CMS_NOSMIMECAP);
+                    if si.is_null() {
+                        return Err("The certificate's key couldn't sign.".to_string());
+                    }
+                    let obj = OBJ_txt2obj(OID_SIGNING_CERT_V2.as_ptr().cast(), 1);
+                    let ok = CMS_signed_add1_attr_by_OBJ(si, obj, V_ASN1_SEQUENCE, scv2.as_ptr().cast(), scv2.len() as c_int);
+                    ASN1_OBJECT_free(obj);
+                    if ok != 1 {
+                        return Err("Couldn't add the certificate to the signature.".into());
+                    }
+                    for c in &self.chain {
+                        CMS_add1_cert(cms, c.as_ptr() as *mut c_void);
+                    }
+                    let bio = BIO_new_mem_buf(data.as_ptr().cast(), data.len() as c_int);
+                    let ok = CMS_final(cms, bio, std::ptr::null_mut(), CMS_DETACHED | CMS_BINARY);
+                    BIO_free(bio);
+                    if ok != 1 {
+                        return Err(format!("Couldn't sign: {}", openssl::error::ErrorStack::get()));
+                    }
+                    i2d(i2d_CMS_ContentInfo, cms)
+                })();
+                CMS_ContentInfo_free(cms);
+                r
+            }
         }
     }
-    pub fn verify(_: &[u8], _: &[u8], _: Option<i64>) -> SigCheck {
-        SigCheck { trust: "unknown".into(), ..Default::default() }
+
+    /// The timestamp token in a signature's unsigned attributes (DER), if any.
+    fn timestamp_token(p7: &Pkcs7) -> Option<Vec<u8>> {
+        // SAFETY: borrowed pointers into `p7`, read only while it lives.
+        unsafe {
+            let sis = PKCS7_get_signer_info(p7.as_ptr() as *mut c_void);
+            if sis.is_null() || OPENSSL_sk_num(sis) < 1 {
+                return None;
+            }
+            let nid = OBJ_txt2nid(OID_TIMESTAMP_TOKEN.as_ptr().cast());
+            let t = PKCS7_get_attribute(OPENSSL_sk_value(sis, 0), nid);
+            if t.is_null() {
+                None
+            } else {
+                i2d(i2d_ASN1_TYPE, t).ok()
+            }
+        }
     }
-    pub fn add_timestamp(_: &[u8], _: &str) -> Result<(Vec<u8>, i64), String> {
-        Err("not available".into())
+
+    /// Days since 1970 of a civil date (Howard Hinnant's algorithm).
+    fn days(y: i64, m: i64, d: i64) -> i64 {
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146_097 + doe - 719_468
     }
-    pub fn revocation(_: &[u8]) -> super::Revocation {
-        super::Revocation { status: "unknown".into(), detail: "Only on Windows.".into() }
+
+    /// A timestamp token's time: the first GeneralizedTime in it is TSTInfo's genTime (the content comes before
+    /// the TSA's certificates and signer info).
+    fn gen_time(token: &[u8]) -> i64 {
+        for i in 0..token.len().saturating_sub(17) {
+            let n = token[i + 1] as usize;
+            if token[i] != 0x18 || !(15..=24).contains(&n) || i + 2 + n > token.len() {
+                continue;
+            }
+            let t = &token[i + 2..i + 2 + n];
+            if t.last() != Some(&b'Z') || !t[..14].iter().all(u8::is_ascii_digit) {
+                continue;
+            }
+            let num = |a: usize, b: usize| std::str::from_utf8(&t[a..b]).ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            return days(num(0, 4), num(4, 6), num(6, 8)) * 86_400 + num(8, 10) * 3600 + num(10, 12) * 60 + num(12, 14);
+        }
+        0
+    }
+
+    /// Checks a signature: that `data` is what was signed, who signed it, and whether the system trusts the
+    /// certificate (at signing time if it has expired since).
+    pub fn verify(data: &[u8], cms: &[u8], signed_at: Option<i64>) -> SigCheck {
+        let cms = &cms[..der_len(cms)];
+        let mut out = SigCheck { trust: "unknown".into(), ..Default::default() };
+        let Ok(p7) = Pkcs7::from_der(cms) else {
+            out.trust = "invalid".into();
+            out.detail = "The signature can't be read.".into();
+            return out;
+        };
+        let Ok(none) = Stack::<X509>::new() else { return out };
+        let Ok(empty) = X509StoreBuilder::new().map(|b| b.build()) else { return out };
+        out.intact = p7.verify(&none, &empty, Some(data), None, Pkcs7Flags::BINARY | Pkcs7Flags::NOVERIFY).is_ok();
+        if let Some(signer) = p7.signers(&none, Pkcs7Flags::empty()).ok().and_then(|s| s.into_iter().next()) {
+            out.signer = name(signer.subject_name(), Nid::COMMONNAME);
+            out.issuer = name(signer.issuer_name(), Nid::COMMONNAME);
+            out.email = email(&signer);
+            out.not_after = epoch(signer.not_after());
+        }
+        if let Some(token) = timestamp_token(&p7) {
+            out.timestamp = gen_time(&token);
+            if let Ok(t) = Pkcs7::from_der(&token) {
+                if let Some(tsa) = t.signers(&none, Pkcs7Flags::empty()).ok().and_then(|s| s.into_iter().next()) {
+                    out.tsa = name(tsa.subject_name(), Nid::COMMONNAME);
+                }
+                out.timestamp_trusted = trusted(None).is_ok_and(|store| t.verify(&none, &store, None, None, Pkcs7Flags::BINARY).is_ok());
+            }
+        }
+        if !out.intact {
+            out.trust = "invalid".into();
+            out.detail = "The document was changed after it was signed, or the signature is damaged.".into();
+            return out;
+        }
+        let at = (out.timestamp > 0).then_some(out.timestamp).or(signed_at);
+        let Ok(store) = trusted(at) else { return out };
+        match p7.verify(&none, &store, Some(data), None, Pkcs7Flags::BINARY) {
+            Ok(()) if out.not_after > 0 && now() > out.not_after => {
+                out.trust = "expired".into();
+                out.detail = "The certificate was valid when it signed, and has expired since.".into();
+            }
+            Ok(()) => out.trust = "trusted".into(),
+            Err(e) => {
+                let why = e.to_string();
+                (out.trust, out.detail) = if why.contains("expired") {
+                    ("expired".into(), "The certificate has expired.".into())
+                } else if why.contains("revoked") {
+                    ("revoked".into(), "The certificate was revoked by its issuer.".into())
+                } else if why.contains("self-signed") || why.contains("self signed") {
+                    ("untrusted".into(), "The certificate's authority isn't one this system trusts.".into())
+                } else if why.contains("unable to get") {
+                    ("incomplete".into(), "The certificate that issued the signer's isn't in the signature or this system.".into())
+                } else {
+                    ("untrusted".into(), why)
+                };
+            }
+        }
+        out
+    }
+
+    fn post(url: &str, kind: &str, body: &[u8]) -> Result<Vec<u8>, String> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .tls_config(ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
+            .proxy(ureq::Proxy::try_from_env())
+            .http_status_as_error(false)
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .user_agent("Paginaut")
+            .build()
+            .into();
+        let mut resp = agent.post(url).header("Content-Type", kind).send(body).map_err(|e| format!("{url} didn't answer: {e}"))?;
+        if resp.status().as_u16() != 200 {
+            return Err(format!("{url} answered {}.", resp.status().as_u16()));
+        }
+        resp.body_mut().with_config().limit(1 << 20).read_to_vec().map_err(|e| e.to_string())
+    }
+
+    /// Adds a trusted timestamp (RFC 3161) from the service at `url` to the signature. Returns the new
+    /// signature and the time.
+    pub fn add_timestamp(cms: &[u8], url: &str) -> Result<(Vec<u8>, i64), String> {
+        let cms = &cms[..der_len(cms)];
+        // SAFETY: the CMS object is parsed, changed and freed here; borrowed pointers are read while it lives.
+        unsafe {
+            let mut p = cms.as_ptr();
+            let ci = d2i_CMS_ContentInfo(std::ptr::null_mut(), &mut p, cms.len() as c_long);
+            if ci.is_null() {
+                return Err("The signature can't be read.".into());
+            }
+            let r = (|| {
+                let sis = CMS_get0_SignerInfos(ci);
+                if sis.is_null() || OPENSSL_sk_num(sis) < 1 {
+                    return Err("The signature has no signer.".to_string());
+                }
+                let si = OPENSSL_sk_value(sis, 0);
+                let sig = CMS_SignerInfo_get0_signature(si);
+                let value = std::slice::from_raw_parts(ASN1_STRING_get0_data(sig), ASN1_STRING_length(sig) as usize);
+                let imprint = hash(MessageDigest::sha256(), value).map_err(err)?;
+                let mut nonce = [0u8; 8];
+                openssl::rand::rand_bytes(&mut nonce).map_err(err)?;
+                nonce[0] &= 0x7f;
+                // TimeStampReq { version 1, messageImprint { sha256, imprint }, nonce, certReq TRUE }
+                let sha256 = der(0x30, &[der(0x06, &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]), vec![0x05, 0x00]].concat());
+                let req = der(0x30, &[der(0x02, &[1]), der(0x30, &[sha256, der(0x04, &imprint)].concat()), der(0x02, &nonce), vec![0x01, 0x01, 0xff]].concat());
+                let resp = post(url, "application/timestamp-query", &req)?;
+                // TimeStampResp { status PKIStatusInfo, timeStampToken ContentInfo }
+                let (_, h, _) = tlv(&resp).ok_or("The timestamp service's answer can't be read.")?;
+                let body = &resp[h..];
+                let (_, sh, sl) = tlv(body).ok_or("The timestamp service's answer can't be read.")?;
+                let status = body.get(sh + 2).copied().unwrap_or(2);
+                if status > 1 {
+                    return Err(format!("The timestamp service ({url}) refused the request."));
+                }
+                let token = &body[sh + sl..];
+                let token = &token[..der_len(token)];
+                if token.is_empty() {
+                    return Err("The timestamp service sent no timestamp.".into());
+                }
+                let obj = OBJ_txt2obj(OID_TIMESTAMP_TOKEN.as_ptr().cast(), 1);
+                let ok = CMS_unsigned_add1_attr_by_OBJ(si, obj, V_ASN1_SEQUENCE, token.as_ptr().cast(), token.len() as c_int);
+                ASN1_OBJECT_free(obj);
+                if ok != 1 {
+                    return Err("Couldn't add the timestamp to the signature.".into());
+                }
+                Ok((i2d(i2d_CMS_ContentInfo, ci)?, gen_time(token)))
+            })();
+            CMS_ContentInfo_free(ci);
+            r
+        }
+    }
+
+    /// Asks the signer certificate's issuer (OCSP) whether it has been revoked.
+    pub fn revocation(cms: &[u8]) -> Revocation {
+        let unknown = |detail: String| Revocation { status: "unknown".into(), detail };
+        let cms = &cms[..der_len(cms)];
+        let Ok(p7) = Pkcs7::from_der(cms) else { return unknown("The signature can't be read.".into()) };
+        let Ok(none) = Stack::<X509>::new() else { return unknown(String::new()) };
+        let Some(signer) = p7.signers(&none, Pkcs7Flags::empty()).ok().and_then(|s| s.into_iter().next()) else {
+            return unknown("The signature has no certificate.".into());
+        };
+        let certs: Vec<X509> = p7.signed().and_then(|s| s.certificates()).map(|c| c.iter().map(|x| x.to_owned()).collect()).unwrap_or_default();
+        let issuer_name = signer.issuer_name().to_der().ok();
+        let Some(issuer) = certs.iter().find(|c| c.subject_name().to_der().ok() == issuer_name) else {
+            return unknown("The certificate that issued the signer's isn't in the signature.".into());
+        };
+        let Some(url) = signer.ocsp_responders().ok().and_then(|r| r.iter().next().map(|u| u.to_string())) else {
+            return unknown("The issuer publishes no online revocation check.".into());
+        };
+        let check = || -> Result<Revocation, String> {
+            let mut req = OcspRequest::new().map_err(err)?;
+            req.add_id(OcspCertId::from_cert(MessageDigest::sha1(), &signer, issuer).map_err(err)?).map_err(err)?;
+            let resp = OcspResponse::from_der(&post(&url, "application/ocsp-request", &req.to_der().map_err(err)?)?).map_err(err)?;
+            if resp.status() != OcspResponseStatus::SUCCESSFUL {
+                return Ok(unknown("The issuer's revocation service couldn't answer.".into()));
+            }
+            let basic = resp.basic().map_err(err)?;
+            let id = OcspCertId::from_cert(MessageDigest::sha1(), &signer, issuer).map_err(err)?;
+            Ok(match basic.find_status(&id) {
+                Some(s) if s.status == OcspCertStatus::GOOD => Revocation { status: "good".into(), detail: "The issuer says the certificate hasn't been revoked.".into() },
+                Some(s) if s.status == OcspCertStatus::REVOKED => Revocation { status: "revoked".into(), detail: "The issuer has revoked the certificate.".into() },
+                _ => unknown("The issuer doesn't know this certificate.".into()),
+            })
+        };
+        check().unwrap_or_else(unknown)
     }
 }
 #[cfg(not(windows))]
 pub use imp::*;
+
+/// Linux: signing with a certificate file and checking the result (cargo test --lib dsc:: in WSL or on Linux;
+/// makes its own throwaway certificate with the openssl program).
+#[cfg(all(test, not(windows)))]
+mod linux_tests {
+    #[test]
+    fn signs_and_checks() {
+        let dir = std::env::temp_dir().join("paginaut-dsc-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let (key, crt, pfx) = (dir.join("k.pem"), dir.join("c.pem"), dir.join("t.p12"));
+        let run = |args: &[&str]| assert!(std::process::Command::new("openssl").args(args).status().unwrap().success());
+        run(&["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key.to_str().unwrap(), "-out", crt.to_str().unwrap(), "-days", "30", "-subj", "/CN=Paginaut Test Signer/O=Paginaut/emailAddress=test@example.com"]);
+        run(&["pkcs12", "-export", "-inkey", key.to_str().unwrap(), "-in", crt.to_str().unwrap(), "-out", pfx.to_str().unwrap(), "-passout", "pass:secret"]);
+        assert!(super::Cert::from_pfx(pfx.to_str().unwrap(), "wrong").is_err());
+        let cert = super::Cert::from_pfx(pfx.to_str().unwrap(), "secret").unwrap();
+        let s = cert.summary();
+        assert_eq!(s.name, "Paginaut Test Signer");
+        assert_eq!(s.email, "test@example.com");
+        assert!(s.current && !s.likely);
+        assert_eq!(cert.dn()[1], "Paginaut");
+        let data = b"the bytes a PDF signature covers";
+        let mut cms = cert.sign(data, 0).unwrap();
+        cms.resize(cms.len() + 64, 0); // /Contents is padded with zeros
+        let ok = super::verify(data, &cms, None);
+        assert!(ok.intact, "{ok:?}");
+        assert_eq!(ok.signer, "Paginaut Test Signer");
+        assert_eq!(ok.trust, "untrusted", "{ok:?}"); // self-signed
+        let bad = super::verify(b"changed bytes", &cms, None);
+        assert!(!bad.intact);
+        assert_eq!(bad.trust, "invalid");
+        // The signing-certificate-v2 attribute is in: its OID's bytes appear in the signature.
+        let oid = [0x06, 0x0b, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x10, 0x02, 0x2f];
+        assert!(cms.windows(oid.len()).any(|w| w == oid));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

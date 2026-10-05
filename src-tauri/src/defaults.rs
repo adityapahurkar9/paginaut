@@ -591,6 +591,8 @@ mod tests {
         open_settings(&PAGINAUT).unwrap();
     }
 
+    /// Windows' registry commands (C:\ paths, ".exe").
+    #[cfg(windows)]
     #[test]
     fn command_paths() {
         assert_eq!(command_exe(r#""C:\Program Files\P\paginaut.exe" "%1""#), std::path::PathBuf::from(r"C:\Program Files\P\paginaut.exe"));
