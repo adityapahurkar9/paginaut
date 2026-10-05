@@ -39,7 +39,7 @@ export function RepairBar({ tab }: { tab: Tab }) {
     <div class="formbar officebar repairbar">
       <Wrench size={16} />
       <span title="This e-book is a PDF converted page by page: every line is pinned in place and words are cut into pieces, which e-book readers (and phones) show scrambled. Paginaut draws its pages again as they were made. The file itself is unchanged.">
-        This e-book is a PDF converted page by page, so e-book readers show it scrambled. Shown here as made; save it to keep it readable.
+        A PDF converted page by page: e-book readers show it scrambled. Save it to keep it readable.
       </span>
       <button class="btn ghost" onClick={() => void P.saveRepaired(tab, true)} title="The pages exactly as made, with their pictures (best for this book)">
         Save as PDF…

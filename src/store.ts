@@ -368,7 +368,7 @@ function ready(tab: Tab, info: DocInfo) {
   });
   rememberFile(tab.path, { pages: info.pageCount });
   // Said once on opening too: the bar offering to save it isn't shown in Read and Book mode.
-  if (info.repaired) showToast(`${baseName(tab.path)} is a PDF turned into an e-book page by page, which e-book readers show scrambled. Paginaut shows its pages as made; save it as a PDF to keep them so.`, 8000);
+  if (info.repaired) showToast("This e-book is a PDF converted page by page: shown with its pages as made.", 6000);
   api.pageSizes(info.docId).then((s) => (tab.sizes.value = s)).catch(() => {});
   api.pageLabels(info.docId).then((l) => (tab.labels.value = l)).catch(() => {});
   api.outline(info.docId).then((o) => (tab.outline.value = o)).catch(() => (tab.outline.value = []));
