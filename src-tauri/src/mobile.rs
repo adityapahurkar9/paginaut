@@ -8,7 +8,7 @@ use crate::engine::DocId;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use tauri::plugin::{Builder as PluginBuilder, PluginHandle, TauriPlugin};
-use tauri::{AppHandle, Manager, Runtime, State, Wry};
+use tauri::{Manager, Runtime, State, Wry};
 
 pub fn run() {
     // A viewer fills in no forms: PDF scripts (form calculations, formatting) stay off.
@@ -59,7 +59,7 @@ pub fn run() {
             remove_folder,
             all_files_access,
             scan_books,
-            book_cover,
+            app::book_cover,
             share_text,
             release,
         ])
@@ -216,31 +216,3 @@ async fn scan_books(native: State<'_, Native<Wry>>) -> Res<Value> {
     call(&native, "scanBooks", json!({})).await
 }
 
-/// A book's title, author and pages, and its first page as a cover (`covers/<fp>.jpg` in the
-/// cache, served as paginaut://…/cover?f=<fp>).
-#[tauri::command]
-async fn book_cover(app: AppHandle, state: State<'_, AppState>, path: String, fp: String) -> Res<Value> {
-    if fp.is_empty() || !fp.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err("no fingerprint".into());
-    }
-    let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("covers");
-    let engine = state.engine.clone();
-    blocking(move || {
-        let info = engine.open(&path)?;
-        let cover = (|| -> Result<bool, String> {
-            if info.needs_password || info.page_count == 0 {
-                return Ok(false);
-            }
-            // About 360 px wide: sharp in a three-across grid on a phone.
-            let dpi = (72.0 * 360.0 / info.first_size[0].max(1.0)).clamp(12.0, 300.0);
-            let jpg = engine.doc(info.doc_id)?.page_image(0, 0, "jpg", dpi)?;
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            std::fs::write(dir.join(format!("{fp}.jpg")), jpg).map_err(|e| e.to_string())?;
-            Ok(true)
-        })()
-        .unwrap_or(false);
-        engine.close(info.doc_id);
-        Ok(json!({ "title": info.title, "author": info.author, "pages": info.page_count, "cover": cover }))
-    })
-    .await
-}

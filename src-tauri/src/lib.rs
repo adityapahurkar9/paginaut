@@ -55,6 +55,8 @@ mod tiff;
 pub mod xml;
 #[cfg(desktop)]
 pub mod dsc;
+#[cfg(desktop)]
+mod shelf;
 
 #[cfg(desktop)]
 use app::AppState;
@@ -358,6 +360,8 @@ fn run_desktop() {
             desk::update_install,
             desk::update_stop,
             desk::open_path,
+            app::book_cover,
+            shelf::scan_books,
             desk::markdown_read,
             desk::markdown_preview,
             desk::markdown_save,

@@ -13,7 +13,7 @@ import {
 import { closeCompare, COMPARE } from "./compare";
 
 export const OPENABLE = [
-  "pdf", "xps", "oxps", "epub", "mobi", "fb2", "fbz", "cbz", "cbr", "svg", "txt", "md", "markdown", "html", "htm", "xhtml",
+  "pdf", "xps", "oxps", "epub", "mobi", "fb2", "fbz", "cbz", "cbr", "cbt", "svg", "txt", "md", "markdown", "html", "htm", "xhtml",
   "png", "jpg", "jpeg", "jfif", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "pnm", "pbm", "pgm", "ppm", "pam", "jxr",
   ...OFFICE_EXT,
 ];

@@ -322,8 +322,15 @@ kbd { font: 11px var(--font); padding: 2px 6px; border-radius: 5px; border: 1px 
 }
 
 /* ---------------------------------------------------------------- home */
-.home { position: absolute; inset: 0; overflow: auto; display: flex; justify-content: center; }
-.home-inner { width: 640px; max-width: calc(100% - 48px); padding: 64px 0 40px; display: flex; flex-direction: column; gap: 22px; }
+.home { position: absolute; inset: 0; overflow: auto; scrollbar-gutter: stable; display: flex; justify-content: center; }
+.home-inner { width: 640px; max-width: calc(100% - 48px); padding: 28px 0 40px; display: flex; flex-direction: column; gap: 22px; }
+.home-inner.wide { width: 1040px; }
+/* Start · E-books · Comics */
+.home-tabs { display: flex; justify-content: center; gap: 4px; }
+.home-tabs button { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 14px; border: 1px solid transparent; border-radius: 16px; background: transparent; color: var(--tx2); font-size: 13px; }
+.home-tabs button:hover { background: var(--hover); }
+.home-tabs button.on { background: var(--acc-soft); border-color: color-mix(in srgb, var(--acc) 35%, transparent); color: var(--tx); font-weight: 600; }
+.home-tabs .n { color: var(--tx3); font-weight: 400; font-variant-numeric: tabular-nums; }
 .drop {
   border: 2px dashed var(--bd); border-radius: 16px; padding: 36px; display: flex; flex-direction: column; align-items: center; gap: 12px;
   background: var(--surface); text-align: center; color: var(--tx2); transition: border-color 0.15s, background 0.15s;
@@ -1279,3 +1286,39 @@ body.text-edit .pg { cursor: default; }
 
 /* A table cell over several columns (a group heading). */
 .table-preview td.span { text-align: center; max-width: none; }
+
+/* The shelf (ui/Shelf.tsx) */
+.shelf { display: flex; flex-direction: column; gap: 14px; }
+.shelf-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.shelf-find { flex: 1; min-width: 200px; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 6px 0 12px; border: 1px solid var(--bd2); border-radius: 10px; background: var(--surface); color: var(--tx3); }
+.shelf-find:focus-within { border-color: var(--acc); }
+.shelf-find input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--tx); font: inherit; }
+.sort { display: flex; align-items: center; flex: none; }
+.sort-l { margin-right: 4px; font-size: 12.5px; color: var(--tx3); }
+.sort-key { height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: var(--hover); color: var(--tx); font-size: 12.5px; font-weight: 600; }
+.sort-dir { margin-left: 2px; color: var(--tx2); }
+.turning { animation: spin 0.9s linear infinite; }
+.shelf-where { display: flex; flex-direction: column; gap: 6px; }
+.shelf-where-sum { align-self: flex-start; padding: 0; border: 0; background: transparent; color: var(--tx3); font-size: 12.5px; text-align: left; }
+.shelf-where-sum .lnk { color: var(--acc); }
+.shelf-where-sum:hover .lnk { text-decoration: underline; }
+.shelf-folders { display: flex; flex-direction: column; gap: 2px; padding: 8px; border: 1px solid var(--bd2); border-radius: 12px; background: var(--surface); }
+.shelf-folders .btn { align-self: flex-start; margin-top: 4px; }
+.shelf-folder { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 10px; border-radius: 8px; font-size: 12.5px; }
+.shelf-folder:hover { background: var(--hover); }
+.shelf-folder span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shelf-empty { padding: 48px 16px; text-align: center; color: var(--tx3); }
+.shelf-sec h3 { margin: 6px 0 12px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--tx3); }
+.shelf-sec h3 .n { margin-left: 4px; font-weight: 400; }
+.shelf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 22px 18px; }
+.book { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--tx); text-align: left; }
+.book-cover { position: relative; display: block; width: 100%; aspect-ratio: 2 / 3; overflow: hidden; border-radius: 6px; background: var(--hover); box-shadow: 0 1px 2px rgb(0 0 0 / 0.18), 0 4px 14px rgb(0 0 0 / 0.12); transition: transform 0.12s, box-shadow 0.12s; }
+.book:hover .book-cover { transform: translateY(-2px); box-shadow: 0 2px 4px rgb(0 0 0 / 0.2), 0 10px 24px rgb(0 0 0 / 0.18); }
+.book:focus-visible .book-cover { outline: 2px solid var(--acc); outline-offset: 2px; }
+.book-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.book-plain { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 12px; color: #fff; font-family: Georgia, serif; font-size: 14px; line-height: 1.3; text-align: center; overflow: hidden; }
+.book-prog { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgb(0 0 0 / 0.35); }
+.book-prog span { display: block; height: 100%; background: var(--acc); }
+.book-t { font-size: 13px; font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.book-a { margin-top: -3px; font-size: 12px; color: var(--tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:root.skin .home .shelf-find, :root.skin .home .shelf-folders { background: color-mix(in srgb, var(--surface) 92%, transparent); }

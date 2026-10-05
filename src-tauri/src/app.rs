@@ -327,6 +327,35 @@ pub fn forward_files(app: &tauri::AppHandle, files: Vec<String>) {
     }
 }
 
+/// A book's title, author and pages, and its first page as a cover (`covers/<fp>.jpg` in the
+/// cache, served as paginaut://…/cover?f=<fp>): for the shelf of e-books and comics, on Android and Windows.
+#[tauri::command]
+pub async fn book_cover(app: tauri::AppHandle, state: State<'_, AppState>, path: String, fp: String) -> Res<serde_json::Value> {
+    if fp.is_empty() || !fp.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("no fingerprint".into());
+    }
+    let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("covers");
+    let engine = state.engine.clone();
+    blocking(move || {
+        let info = engine.open(&path)?;
+        let cover = (|| -> Result<bool, String> {
+            if info.needs_password || info.page_count == 0 {
+                return Ok(false);
+            }
+            // About 360 px wide: sharp in a three-across grid on a phone, and in the Windows shelf's tiles.
+            let dpi = (72.0 * 360.0 / info.first_size[0].max(1.0)).clamp(12.0, 300.0);
+            let jpg = engine.doc(info.doc_id)?.page_image(0, 0, "jpg", dpi)?;
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            std::fs::write(dir.join(format!("{fp}.jpg")), jpg).map_err(|e| e.to_string())?;
+            Ok(true)
+        })()
+        .unwrap_or(false);
+        engine.close(info.doc_id);
+        Ok(serde_json::json!({ "title": info.title, "author": info.author, "pages": info.page_count, "cover": cover }))
+    })
+    .await
+}
+
 // ---------------------------------------------------------------- paginaut:// protocol
 
 fn query(uri: &str) -> HashMap<String, String> {
@@ -356,7 +385,7 @@ pub fn protocol<R: tauri::Runtime>(ctx: UriSchemeContext<'_, R>, request: Reques
     let state = ctx.app_handle().state::<AppState>();
     let uri = request.uri().to_string();
     let q = query(&uri);
-    // A book's cover for the Android shelf (mobile.rs book_cover): covers/<fingerprint>.jpg.
+    // A book's cover for the shelf (book_cover): covers/<fingerprint>.jpg.
     if request.uri().path() == "/cover" {
         let f = q.get("f").filter(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_hexdigit()));
         let file = f.and_then(|f| Some(ctx.app_handle().path().app_cache_dir().ok()?.join("covers").join(format!("{f}.jpg"))));

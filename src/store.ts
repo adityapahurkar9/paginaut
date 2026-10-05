@@ -11,7 +11,7 @@ import { History, identity, isIdentity, type Edits } from "./edits";
 
 // ---------------------------------------------------------------- persistence
 
-function load<T>(key: string, fallback: T): T {
+export function load<T>(key: string, fallback: T): T {
   try {
     const v = localStorage.getItem(key);
     return v ? { ...fallback, ...JSON.parse(v) } : fallback;
@@ -20,7 +20,7 @@ function load<T>(key: string, fallback: T): T {
   }
 }
 
-function save(key: string, value: unknown) {
+export function save(key: string, value: unknown) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
