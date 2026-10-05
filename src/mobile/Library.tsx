@@ -1,10 +1,22 @@
-// The first screen: open a file, or carry on with one read before.
+// The first screen: open a file, or carry on with one read before (Recent); and the shelf of
+// every e-book and comic (E-books, Comics).
+import { signal } from "@preact/signals";
 import { useState } from "preact/hooks";
 import { FolderOpen, Settings, X } from "lucide-preact";
 import { Logo } from "../ui/Logo";
 import { openRecent, pickAndOpen } from "./open";
 import { openSheet } from "./Sheets";
 import { progressOf, recent, unlist, type ReadRecord } from "./records";
+import { shelf, shelfOn } from "./shelf";
+import { ShelfPane } from "./ShelfView";
+import { load, save } from "./state";
+
+type Tab = "recent" | "ebook" | "comic";
+const tab = signal<Tab>(load<Tab>("paginaut.m.tab", "recent"));
+function setTab(t: Tab) {
+  tab.value = t;
+  save("paginaut.m.tab", t);
+}
 
 const FORMAT_COLORS: Record<string, string> = {
   PDF: "#2f5bd3",
@@ -30,8 +42,13 @@ function ago(t: number) {
 }
 
 export function Library() {
-  const list = recent.value;
-  const [removing, setRemoving] = useState<string | null>(null);
+  const t = tab.value;
+  const count = (k: "ebook" | "comic") => (shelfOn.value ? shelf.value.filter((it) => it.kind === k).length : 0);
+  const tabs: [Tab, string, number][] = [
+    ["recent", "Recent", 0],
+    ["ebook", "E-books", count("ebook")],
+    ["comic", "Comics", count("comic")],
+  ];
   return (
     <div class="lib">
       <header class="lib-head">
@@ -41,6 +58,24 @@ export function Library() {
           <Settings size={22} />
         </button>
       </header>
+      <div class="lib-tabs" role="tablist">
+        {tabs.map(([id, label, n]) => (
+          <button key={id} role="tab" aria-selected={t === id} class={t === id ? "on" : ""} onClick={() => setTab(id)}>
+            {label}
+            {n > 0 && <span class="n">{n}</span>}
+          </button>
+        ))}
+      </div>
+      {t === "recent" ? <RecentPane /> : <ShelfPane kind={t} key={t} />}
+    </div>
+  );
+}
+
+function RecentPane() {
+  const list = recent.value;
+  const [removing, setRemoving] = useState<string | null>(null);
+  return (
+    <>
 
       <button class="open-card" onClick={() => void pickAndOpen()}>
         <span class="open-ic">
@@ -67,7 +102,7 @@ export function Library() {
           <p>Files you open show up here, and open again where you left off.</p>
         </div>
       )}
-    </div>
+    </>
   );
 }
 

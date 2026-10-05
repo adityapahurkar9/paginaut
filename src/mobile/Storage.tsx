@@ -6,6 +6,7 @@ import { back } from "./nav";
 import { CACHE_LIMIT, copyState, dropCopy, forgetAll, records, refreshStorage, storage, tidyCache } from "./records";
 import { say } from "./state";
 import { native } from "./native";
+import { ShelfAccess } from "./ShelfView";
 
 export function sizeText(n: number) {
   if (n < 1024 * 1024) return `${Math.max(0.1, n / 1024 / 1024).toFixed(1)} MB`;
@@ -136,6 +137,8 @@ export function StorageSheet() {
             <span class="row-label">{confirm === "records" ? `Tap again to forget ${recs.length} files` : "Forget positions and bookmarks"}</span>
           </button>
         )}
+        <div class="store-sep" />
+        <ShelfAccess />
       </div>
     </>
   );

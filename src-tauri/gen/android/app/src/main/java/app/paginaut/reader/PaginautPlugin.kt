@@ -416,6 +416,170 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
+  // ------------------------------------------------------------ the shelf
+
+  /** Scans run apart from opening files (a whole phone takes a while). */
+  private val scanner = Executors.newSingleThreadExecutor()
+
+  /** Asks for a folder for the shelf (Android's own picker); Paginaut keeps access to it. */
+  @Command
+  fun addFolder(invoke: Invoke) {
+    try {
+      startActivityForResult(invoke, Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), "folderPicked")
+    } catch (e: ActivityNotFoundException) {
+      invoke.reject("No folder picker is available on this device.")
+    }
+  }
+
+  @ActivityCallback
+  fun folderPicked(invoke: Invoke, result: ActivityResult) {
+    val uri = result.data?.data
+    if (result.resultCode != Activity.RESULT_OK || uri == null) return invoke.resolve(JSObject())
+    try {
+      activity.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    } catch (_: SecurityException) {
+      return invoke.reject("Android didn't let Paginaut keep this folder. Try another one.")
+    }
+    invoke.resolve(JSObject().put("uri", uri.toString()).put("name", folderName(uri)))
+  }
+
+  /** Stops listing a folder on the shelf (Paginaut gives its access back). */
+  @Command
+  fun removeFolder(invoke: Invoke) {
+    val uri = invoke.getArgs().getString("uri", null) ?: return invoke.resolve()
+    try {
+      activity.contentResolver.releasePersistableUriPermission(Uri.parse(uri), Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    } catch (_: SecurityException) {
+    }
+    invoke.resolve()
+  }
+
+  /**
+   * Where "All files access" is turned on or off: Android's own page for it (Android 11 and later),
+   * or, before that, its permission prompt (or the app's settings page, to turn it off).
+   */
+  @Command
+  fun allFilesAccess(invoke: Invoke) {
+    val pkg = Uri.fromParts("package", activity.packageName, null)
+    try {
+      if (Build.VERSION.SDK_INT >= 30) {
+        activity.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, pkg))
+      } else if (!allFiles()) {
+        activity.requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), 41)
+      } else {
+        activity.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg))
+      }
+    } catch (e: ActivityNotFoundException) {
+      activity.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg))
+    }
+    invoke.resolve()
+  }
+
+  /** What each file looked like when last scanned, so unchanged ones aren't read again. */
+  private data class Seen(val size: Long, val mtime: Long, val fp: String)
+
+  private val indexFile by lazy { File(activity.filesDir, "shelf-index.json") }
+
+  private fun loadIndex(): MutableMap<String, Seen> = try {
+    val o = org.json.JSONObject(indexFile.readText())
+    o.keys().asSequence().associateWith { k -> o.getJSONArray(k).let { Seen(it.getLong(0), it.getLong(1), it.getString(2)) } }.toMutableMap()
+  } catch (_: Exception) {
+    mutableMapOf()
+  }
+
+  /**
+   * The e-books and comics in the folders chosen for the shelf, and (with all-files access) anywhere
+   * on the phone: `{ items: [{ id, name, size, mtime, fp, kind }] }`. `id` opens it with `reopen`.
+   * Each file's fingerprint (to know it whichever way it was opened before) is read once.
+   */
+  @Command
+  fun scanBooks(invoke: Invoke) {
+    scanner.execute {
+      val before = loadIndex()
+      val now = HashMap<String, Seen>()
+      val items = JSONArray()
+      val fps = HashSet<String>()
+      fun add(id: String, name: String, size: Long, mtime: Long, fp: () -> String) {
+        val kind = shelfKind(name) ?: return
+        val seen = before[id]?.takeIf { it.size == size && it.mtime == mtime } ?: Seen(size, mtime, fp())
+        now[id] = seen
+        // The same book in two places (a chosen folder inside the phone's storage) is listed once.
+        if (seen.fp.isNotEmpty() && !fps.add(seen.fp)) return
+        items.put(JSObject().put("id", id).put("name", name).put("size", size).put("mtime", mtime).put("fp", seen.fp).put("kind", kind))
+      }
+      try {
+        if (allFiles()) {
+          val root = Environment.getExternalStorageDirectory()
+          fun walk(dir: File, depth: Int) {
+            val list = dir.listFiles() ?: return
+            for (f in list) {
+              if (f.name.startsWith(".")) continue
+              if (f.isDirectory) {
+                // Android's own folders (other apps' data) are off limits anyway.
+                if (depth < 12 && !(depth == 0 && f.name == "Android")) walk(f, depth + 1)
+              } else add(Uri.fromFile(f).toString(), f.name, f.length(), f.lastModified()) { fingerprint(f) }
+            }
+          }
+          walk(root, 0)
+        }
+        val cr = activity.contentResolver
+        for (p in cr.persistedUriPermissions) {
+          if (!p.isReadPermission || !DocumentsContract.isTreeUri(p.uri)) continue
+          val tree = p.uri
+          fun walk(docId: String, depth: Int) {
+            val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
+            val cols = arrayOf(
+              DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+              DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            )
+            val found = ArrayList<Array<Any?>>()
+            try {
+              cr.query(children, cols, null, null, null)?.use { c ->
+                while (c.moveToNext()) found.add(arrayOf(c.getString(0), c.getString(1), c.getString(2), if (c.isNull(3)) -1L else c.getLong(3), if (c.isNull(4)) 0L else c.getLong(4)))
+              }
+            } catch (_: Exception) {
+              return
+            }
+            for ((id, name, mime, size, mtime) in found) {
+              val n = name as? String ?: continue
+              if (n.startsWith(".")) continue
+              if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                if (depth < 12) walk(id as String, depth + 1)
+              } else if (shelfKind(n) != null) {
+                val uri = DocumentsContract.buildDocumentUriUsingTree(tree, id as String)
+                add(uri.toString(), n, size as Long, mtime as Long) {
+                  try {
+                    cr.openFileDescriptor(uri, "r")?.use { fingerprint(it.fileDescriptor) } ?: ""
+                  } catch (_: Exception) {
+                    ""
+                  }
+                }
+              }
+            }
+          }
+          try {
+            walk(DocumentsContract.getTreeDocumentId(tree), 0)
+          } catch (_: Exception) {
+          }
+        }
+        try {
+          indexFile.writeText(org.json.JSONObject(now.mapValues { (_, s) -> JSONArray(listOf(s.size, s.mtime, s.fp)) }).toString())
+        } catch (_: Exception) {
+        }
+        invoke.resolve(JSObject().put("items", items))
+      } catch (e: Exception) {
+        invoke.reject("Couldn't look for books: ${e.message ?: e.javaClass.simpleName}")
+      }
+    }
+  }
+
+  /** E-book or comic, by extension (what the shelf lists); null for anything else. */
+  private fun shelfKind(name: String): String? = when (name.substringAfterLast('.', "").lowercase()) {
+    "epub", "mobi", "fb2", "fbz" -> "ebook"
+    "cbz", "cbr", "cbt" -> "comic"
+    else -> null
+  }
+
   // ------------------------------------------------------------ sharing and printing
 
   @Command

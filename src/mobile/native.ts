@@ -1,5 +1,6 @@
 // Android's side (PaginautPlugin.kt, through src-tauri/src/mobile.rs): files, sharing, printing, system bars.
 import { invoke } from "@tauri-apps/api/core";
+import type { BookMeta, ShelfItem } from "./shelf";
 
 /** A document ready for the engine; empty when nothing was picked or sent. */
 export interface Picked {
@@ -44,6 +45,14 @@ export const native = {
   storage: () => invoke<Storage>("storage"),
   /** Deletes these copies from the cache. */
   dropCopies: (paths: string[]) => invoke<void>("drop_copies", { paths }).catch(() => {}),
+  /** Asks for a folder for the shelf (empty if none was chosen). */
+  addFolder: () => invoke<{ uri?: string; name?: string }>("add_folder"),
+  removeFolder: (uri: string) => invoke<void>("remove_folder", { uri }),
+  /** Shows where "All files access" is turned on or off. */
+  allFilesAccess: () => invoke<void>("all_files_access"),
+  scanBooks: () => invoke<{ items: ShelfItem[] }>("scan_books"),
+  /** Title, author and pages of a book, and its cover made (by its fingerprint). */
+  bookCover: (path: string, fp: string) => invoke<BookMeta>("book_cover", { path, fp }),
   /** What the page must keep clear of (bars, camera cutout, keyboard), in CSS px. */
   safeArea: () => invoke<{ top: number; right: number; bottom: number; left: number }>("safe_area"),
 };

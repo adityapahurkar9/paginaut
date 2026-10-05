@@ -10,6 +10,7 @@ import { checkIntent, passwordAsk, savePosition } from "./open";
 import { Reader } from "./Reader";
 import { Sheets } from "./Sheets";
 import { tidyCache } from "./records";
+import { scanShelf } from "./shelf";
 import { busy, chrome, doc, isDark, searching, settings, sheet, toast } from "./state";
 
 function App() {
@@ -99,12 +100,13 @@ effect(() => {
 // Files from other apps ("Open with", Share): at start, whenever the app comes back, and when
 // Android hands one over while it's open (PaginautPlugin.onNewIntent calls this).
 void checkIntent();
+void scanShelf();
 (window as unknown as { paginautIntent: () => void }).paginautIntent = () => void checkIntent();
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     void checkIntent();
-    // Access may have changed meanwhile (all-files access turned off, say).
-    if (!doc.value) void tidyCache();
+    // Access may have changed meanwhile (all-files access turned on or off, say), and books come and go.
+    if (!doc.value) void tidyCache().then(() => scanShelf());
   }
   else savePosition();
 });

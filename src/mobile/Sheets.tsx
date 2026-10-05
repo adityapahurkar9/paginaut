@@ -9,6 +9,7 @@ import { native } from "./native";
 import { back, pushLayer } from "./nav";
 import { bookmarksOf, refreshStorage, storage, toggleBookmark, unlistAll } from "./records";
 import { sizeText, StorageSheet } from "./Storage";
+import { ShelfSheet } from "./ShelfView";
 import { doc, errorText, isTablet, mode, page, say, settings, sheet, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
 import { startReading } from "./speech";
 import { goTo } from "./views";
@@ -92,6 +93,7 @@ export function Sheets() {
         {s === "more" && d && <MoreSheet />}
         {s === "settings" && <SettingsSheet />}
         {s === "storage" && <StorageSheet />}
+        {s === "shelf" && <ShelfSheet />}
       </div>
     </div>
   );

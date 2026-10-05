@@ -356,6 +356,23 @@ pub fn protocol<R: tauri::Runtime>(ctx: UriSchemeContext<'_, R>, request: Reques
     let state = ctx.app_handle().state::<AppState>();
     let uri = request.uri().to_string();
     let q = query(&uri);
+    // A book's cover for the Android shelf (mobile.rs book_cover): covers/<fingerprint>.jpg.
+    if request.uri().path() == "/cover" {
+        let f = q.get("f").filter(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_hexdigit()));
+        let file = f.and_then(|f| Some(ctx.app_handle().path().app_cache_dir().ok()?.join("covers").join(format!("{f}.jpg"))));
+        return match file.and_then(|p| std::fs::read(p).ok()) {
+            Some(b) => {
+                let resp = Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "image/jpeg")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(b)
+                    .unwrap();
+                responder.respond(resp)
+            }
+            None => respond(responder, StatusCode::NOT_FOUND, Vec::new()),
+        };
+    }
     let num = |k: &str| q.get(k).and_then(|v| v.parse::<f64>().ok());
     let (Some(doc), Some(page), Some(scale)) = (num("d"), num("p"), num("s")) else {
         return respond(responder, StatusCode::BAD_REQUEST, b"bad render request".to_vec());

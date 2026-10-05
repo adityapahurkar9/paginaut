@@ -92,7 +92,11 @@ fo_ctx *fo_ctx_new_private(size_t store_bytes)
 	fo_ctx *c = calloc(1, sizeof *c);
 	if (!c)
 		return NULL;
-	c->ctx = fz_new_context(NULL, NULL, store_bytes);
+	/* Its own store, but the same locks as every other context: MuPDF keeps some state in globals
+	 * guarded by them (HarfBuzz's allocator context, taken under the FreeType lock while HTML is
+	 * laid out). With no locks, an e-book laid out here and another on a render thread at the
+	 * same time crashed. */
+	c->ctx = fz_new_context(NULL, &g_locks_ctx, store_bytes);
 	if (!c->ctx)
 	{
 		free(c);
