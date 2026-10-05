@@ -7,6 +7,7 @@ import { pushLayer } from "./nav";
 import { progressOf, storage } from "./records";
 import { addFolder, COVER_BASE, openShelf, removeFolder, scanning, scanShelf, sections, shelf, shelfOn, type ShelfItem, type Shelved } from "./shelf";
 import { load, save, sheet } from "./state";
+import { SortToggle, type SortState } from "./SortToggle";
 
 type Sort = "title" | "author" | "added";
 const NOUN = { ebook: "e-books", comic: "comics" } as const;
@@ -32,10 +33,10 @@ function ago(t: number) {
 }
 
 export function ShelfPane({ kind }: { kind: ShelfItem["kind"] }) {
-  const [sort, setSortState] = useState<Sort>(load<Sort>("paginaut.m.shelfsort", "title"));
-  const setSort = (s: Sort) => {
+  const [sort, setSortState] = useState<SortState<Sort>>(load<SortState<Sort>>("paginaut.m.shelfsort2", { key: "title", desc: false }));
+  const setSort = (s: SortState<Sort>) => {
     setSortState(s);
-    save("paginaut.m.shelfsort", s);
+    save("paginaut.m.shelfsort2", s);
   };
   const pull = usePullToScan();
   if (!storage.value) return null;
@@ -55,13 +56,15 @@ export function ShelfPane({ kind }: { kind: ShelfItem["kind"] }) {
             <>
               <div class="shelf-head">
                 <h2>{reading.length || finished.length ? "Not started" : `All ${NOUN[kind]}`}</h2>
-                <div class="seg shelf-sort" role="radiogroup" aria-label="Sort by">
-                  {(["title", "author", "added"] as Sort[]).map((s) => (
-                    <button key={s} role="radio" aria-checked={sort === s} class={sort === s ? "on" : ""} onClick={() => setSort(s)}>
-                      {s === "title" ? "Title" : s === "author" ? "Author" : "Added"}
-                    </button>
-                  ))}
-                </div>
+                <SortToggle<Sort>
+                  value={sort}
+                  onChange={setSort}
+                  order={[
+                    ["title", "Title", false],
+                    ["author", "Author", false],
+                    ["added", "Added", true],
+                  ]}
+                />
               </div>
               <Grid list={rest} />
             </>

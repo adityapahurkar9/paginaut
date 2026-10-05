@@ -54,12 +54,18 @@ export function shelved(it: ShelfItem, list: ReadRecord[], m: Record<string, Boo
 }
 
 /** Shelf books of a kind, sorted into being read (latest first), not started, and finished. */
-export function sections(kind: ShelfItem["kind"], sort: "title" | "author" | "added") {
+export function sections(kind: ShelfItem["kind"], sort: { key: "title" | "author" | "added"; desc: boolean }) {
   const list = records.value;
   const m = metas.value;
   const all = shelf.value.filter((it) => it.kind === kind).map((it) => shelved(it, list, m));
+  const sign = sort.desc ? -1 : 1;
   const by = (a: Shelved, b: Shelved) =>
-    sort === "added" ? b.it.mtime - a.it.mtime : sort === "author" ? (a.author || "~").localeCompare(b.author || "~") || a.title.localeCompare(b.title) : a.title.localeCompare(b.title);
+    sign *
+    (sort.key === "added"
+      ? a.it.mtime - b.it.mtime
+      : sort.key === "author"
+        ? (a.author || "~").localeCompare(b.author || "~") || a.title.localeCompare(b.title)
+        : a.title.localeCompare(b.title));
   const reading = all.filter((s) => s.r && inProgress(s.r)).sort((a, b) => b.r!.at - a.r!.at);
   const finished = all.filter((s) => s.r && isFinished(s.r)).sort(by);
   const rest = all.filter((s) => !reading.includes(s) && !finished.includes(s)).sort(by);

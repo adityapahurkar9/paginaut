@@ -29,6 +29,9 @@ function useDragDown(open: Sheet) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // The same sheet element shows the next sheet (Storage back to Settings): not left pulled away.
+    el.style.transition = "";
+    el.style.transform = "";
     let y0 = 0, t0 = 0, dy = 0, live = false, maybe = false;
     const scrollerAt = (t: EventTarget | null) => (t as HTMLElement | null)?.closest?.<HTMLElement>(".sheet-scroll") ?? null;
     const start = (e: TouchEvent) => {

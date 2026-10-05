@@ -7,6 +7,7 @@ import { CACHE_LIMIT, copyState, dropCopy, forgetAll, records, refreshStorage, s
 import { say } from "./state";
 import { native } from "./native";
 import { ShelfAccess } from "./ShelfView";
+import { SortToggle, type SortState } from "./SortToggle";
 
 export function sizeText(n: number) {
   if (n < 1024 * 1024) return `${Math.max(0.1, n / 1024 / 1024).toFixed(1)} MB`;
@@ -29,7 +30,7 @@ const iconFor = (name: string) => {
 type Sort = "size" | "date" | "name";
 
 export function StorageSheet() {
-  const [sort, setSort] = useState<Sort>("size");
+  const [sort, setSort] = useState<SortState<Sort>>({ key: "size", desc: true });
   const [confirm, setConfirm] = useState<"copies" | "records" | null>(null);
   useEffect(() => void refreshStorage(), []);
   const st = storage.value;
@@ -39,7 +40,8 @@ export function StorageSheet() {
     const r = byCopy.get(c.path);
     return { ...c, r, at: r?.at ?? c.at, name: r?.name ?? c.name };
   });
-  copies.sort((a, b) => (sort === "size" ? b.size - a.size : sort === "date" ? b.at - a.at : a.name.localeCompare(b.name)));
+  const sign = sort.desc ? -1 : 1;
+  copies.sort((a, b) => sign * (sort.key === "size" ? a.size - b.size : sort.key === "date" ? a.at - b.at : a.name.localeCompare(b.name)));
   const total = copies.reduce((n, c) => n + c.size, 0);
 
   return (
@@ -61,17 +63,19 @@ export function StorageSheet() {
           <span style={{ width: `${Math.min(100, (total / CACHE_LIMIT) * 100)}%` }} />
         </div>
         <p class="hint store-why">
-          Files sent from other apps (WhatsApp, mail, Files) can only be read once, so Paginaut keeps a copy to open them again from Recent. Short files go after a week; when space runs out, the
-          biggest files you aren't reading go first.
+          Apps like WhatsApp, mail and Files lend Paginaut a file only while it's open. So that Recent can open it again, a copy is kept in Paginaut's cache, here on this phone (nothing is
+          sent anywhere). Copies of short files are removed after a week; when the cache is full, the biggest files you aren't reading go first.
         </p>
         {copies.length > 0 && (
-          <div class="seg store-sort" role="radiogroup" aria-label="Sort by">
-            {(["size", "date", "name"] as Sort[]).map((s) => (
-              <button key={s} role="radio" aria-checked={sort === s} class={sort === s ? "on" : ""} onClick={() => setSort(s)}>
-                {s === "size" ? "Size" : s === "date" ? "Date" : "Name"}
-              </button>
-            ))}
-          </div>
+          <SortToggle<Sort>
+            value={sort}
+            onChange={setSort}
+            order={[
+              ["name", "Name", false],
+              ["date", "Date", true],
+              ["size", "Size", true],
+            ]}
+          />
         )}
         {copies.length === 0 ? (
           <p class="hint">No copies kept. Files picked in Paginaut are read where they are.</p>
