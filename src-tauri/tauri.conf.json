@@ -40,7 +40,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../native/tessdata/*.traineddata": "tessdata/"
+      "../native/tessdata/*.traineddata": "tessdata/",
+      "../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md"
     },
     "windows": {
       "webviewInstallMode": {

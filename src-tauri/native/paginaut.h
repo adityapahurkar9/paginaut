@@ -80,6 +80,8 @@ int fo_text_highlight(fo_ctx *c, fo_text *t, const float bounds[4], float ax, fl
 int fo_text_snap(fo_ctx *c, fo_text *t, const float bounds[4], float ax, float ay, float bx, float by, int mode, float *out);
 char *fo_text_copy(fo_ctx *c, fo_text *t, const float bounds[4], float ax, float ay, float bx, float by);
 /* Character ranges [from, to) (word 3, paragraph 4 or page 5 near a point), drawn and copied exactly. */
+void po_allow_scripts(int on);
+void po_set_temp_dir(const char *dir);
 int fo_text_snap_range(fo_ctx *c, fo_text *t, const float bounds[4], float x, float y, int mode, int *from, int *to);
 int fo_text_range_quads(fo_ctx *c, fo_text *t, const float bounds[4], int from, int to, float *out, int max);
 char *fo_text_range_copy(fo_ctx *c, fo_text *t, int from, int to);

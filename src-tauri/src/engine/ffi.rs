@@ -98,6 +98,7 @@ extern "C" {
     pub fn fo_text_range_copy(c: *mut fo_ctx, t: *mut fo_text, from: c_int, to: c_int) -> *mut c_char;
     pub fn fo_text_all(c: *mut fo_ctx, t: *mut fo_text) -> *mut c_char;
     pub fn po_set_temp_dir(dir: *const c_char);
+    pub fn po_allow_scripts(on: c_int);
     pub fn fo_text_char_count(c: *mut fo_ctx, t: *mut fo_text) -> c_int;
     pub fn fo_text_search_json(c: *mut fo_ctx, t: *mut fo_text, bounds: *const c_float, needle: *const c_char) -> *mut c_char;
     pub fn fo_text_match_json(c: *mut fo_ctx, t: *mut fo_text, bounds: *const c_float, needle: *const c_char, flags: c_int, snippets: c_int) -> *mut c_char;

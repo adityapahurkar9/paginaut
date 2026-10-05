@@ -11,6 +11,8 @@ use tauri::plugin::{Builder as PluginBuilder, PluginHandle, TauriPlugin};
 use tauri::{Manager, Runtime, State, Wry};
 
 pub fn run() {
+    // A viewer fills in no forms: PDF scripts (form calculations, formatting) stay off.
+    crate::engine::mupdf::allow_scripts(false);
     let engine = crate::engine::Engine::new(crate::worker_count(), crate::store_bytes()).expect("MuPDF failed to start");
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -53,6 +55,7 @@ pub fn run() {
             stop_speaking,
             prune_cache,
             share_text,
+            release,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Paginaut")
@@ -118,8 +121,14 @@ async fn reopen(native: State<'_, Native<Wry>>, uri: String) -> Res<Value> {
 }
 
 #[tauri::command]
-async fn share(native: State<'_, Native<Wry>>, path: String) -> Res<()> {
-    call(&native, "share", json!({ "path": path })).await.map(|_| ())
+async fn share(native: State<'_, Native<Wry>>, path: String, source: Option<String>) -> Res<()> {
+    call(&native, "share", json!({ "path": path, "source": source })).await.map(|_| ())
+}
+
+/// A big file read in place (or copied for one visit) is let go once its document has closed.
+#[tauri::command]
+async fn release(native: State<'_, Native<Wry>>, path: String) -> Res<()> {
+    call(&native, "release", json!({ "path": path })).await.map(|_| ())
 }
 
 #[tauri::command]

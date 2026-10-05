@@ -1277,6 +1277,11 @@ impl Drop for List {
     }
 }
 
+/// Whether PDF form scripts run (calculated fields, formatting, validation). Off in the Android viewer.
+pub fn allow_scripts(on: bool) {
+    unsafe { po_allow_scripts(on as c_int) };
+}
+
 /// Where comic books packed as solid RAR archives are unpacked while open (native/cbr.c). Copies left
 /// by an earlier run that didn't close them are removed.
 pub fn set_temp_dir(dir: &std::path::Path) {

@@ -11,6 +11,13 @@
 /* RAR comic books (cbr.c). */
 void po_register_rar(fz_context *ctx);
 
+/* Whether PDF form scripts run (the Android viewer turns them off: it fills in no forms). */
+static int g_scripts = 1;
+void po_allow_scripts(int on)
+{
+	g_scripts = on;
+}
+
 #ifdef _WIN32
 #include <windows.h>
 static CRITICAL_SECTION g_locks[FZ_LOCK_MAX];
@@ -221,6 +228,97 @@ static char *os_path(fz_context *ctx, const char *path)
 #endif
 }
 
+#ifdef __ANDROID__
+#include <errno.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+/*
+ * A big file Android lends, read where it is (PaginautPlugin.openDirect): the path is a link, named
+ * like the file, to /proc/self/fd/N, Android's handle to it. Opening the link again is refused (the
+ * app has no storage permission, only the handle), so the file is read through the handle itself:
+ * with positioned reads, as several threads read the same document and the handle's offset is shared.
+ */
+typedef struct
+{
+	int fd;
+	unsigned char buf[16384];
+} lent_file;
+
+static int next_lent(fz_context *ctx, fz_stream *stm, size_t max)
+{
+	lent_file *f = stm->state;
+	ssize_t n = pread(f->fd, f->buf, sizeof f->buf, (off_t)stm->pos);
+	if (n < 0)
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "read error: %s", strerror(errno));
+	stm->rp = f->buf;
+	stm->wp = f->buf + n;
+	stm->pos += n;
+	if (n == 0)
+		return EOF;
+	return *stm->rp++;
+}
+
+/* fz_seek has made SEEK_CUR into SEEK_SET already. */
+static void seek_lent(fz_context *ctx, fz_stream *stm, int64_t offset, int whence)
+{
+	lent_file *f = stm->state;
+	if (whence == SEEK_END)
+	{
+		struct stat st;
+		if (fstat(f->fd, &st) < 0)
+			fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot seek: %s", strerror(errno));
+		offset += st.st_size;
+	}
+	if (offset < 0)
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot seek before the start");
+	stm->pos = offset;
+	stm->rp = f->buf;
+	stm->wp = f->buf;
+}
+
+static void drop_lent(fz_context *ctx, void *state)
+{
+	lent_file *f = state;
+	close(f->fd);
+	fz_free(ctx, f);
+}
+
+/* The handle behind a link to /proc/self/fd/N, or -1 for an ordinary file. */
+static int lent_handle(const char *path)
+{
+	char target[64];
+	ssize_t n = readlink(path, target, sizeof target - 1);
+	if (n <= 0)
+		return -1;
+	target[n] = 0;
+	if (strncmp(target, "/proc/self/fd/", 14))
+		return -1;
+	return atoi(target + 14);
+}
+
+static fz_stream *open_lent(fz_context *ctx, int handle)
+{
+	lent_file *f;
+	fz_stream *stm;
+	/* A handle of its own (this document's to close), reading the same file. */
+	int fd = dup(handle);
+	if (fd < 0)
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot read the file: %s", strerror(errno));
+	fz_try(ctx)
+		f = fz_malloc_struct(ctx, lent_file);
+	fz_catch(ctx)
+	{
+		close(fd);
+		fz_rethrow(ctx);
+	}
+	f->fd = fd;
+	stm = fz_new_stream(ctx, f, next_lent, drop_lent);
+	stm->seek = seek_lent;
+	return stm;
+}
+#endif
+
 fo_doc *fo_open(fo_ctx *c, const char *path)
 {
 	fz_document *doc = NULL;
@@ -229,6 +327,23 @@ fo_doc *fo_open(fo_ctx *c, const char *path)
 	fz_try(CTX)
 	{
 		p = os_path(CTX, path);
+#ifdef __ANDROID__
+		{
+			int handle = lent_handle(p);
+			if (handle >= 0)
+			{
+				fz_stream *stm = open_lent(CTX, handle);
+				fz_try(CTX)
+					/* The link's name tells MuPDF the kind of file. */
+					doc = fz_open_document_with_stream(CTX, p, stm);
+				fz_always(CTX)
+					fz_drop_stream(CTX, stm);
+				fz_catch(CTX)
+					fz_rethrow(CTX);
+				break;
+			}
+		}
+#endif
 		doc = fz_open_document(CTX, p);
 	}
 	fz_always(CTX)
@@ -1010,8 +1125,8 @@ int fo_pdf_forms_init(fo_ctx *c, fo_doc *d, int *xfa)
 		*xfa = pdf_dict_get(CTX, form, PDF_NAME(XFA)) != NULL;
 		/* The journal gives undo/redo for form and annotation edits. */
 		pdf_enable_journal(CTX, pdf);
-		/* Form scripts: calculated totals, number/date formatting, validation. */
-		if (n > 0)
+		/* Form scripts: calculated totals, number/date formatting, validation (not in the viewer). */
+		if (n > 0 && g_scripts)
 			pdf_enable_js(CTX, pdf);
 	}
 	fz_catch(CTX)

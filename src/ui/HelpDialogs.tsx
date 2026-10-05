@@ -60,9 +60,10 @@ export function About() {
       <div class="about-rows">
         <div><span>Engine</span><span>MuPDF 1.28.5 (native, multi-threaded)</span></div>
         <div><span>Text recognition</span><span>Tesseract 5 (Apache-2.0), models from tessdata 4.1.0</span></div>
+        <div><span>RAR comics</span><span>unarr (LGPL-3.0) for RAR 4, libarchive (BSD) for RAR 5</span></div>
         <div><span>App</span><span>Tauri 2 · WebView2</span></div>
         <div><span>Threads</span><span>{navigator.hardwareConcurrency} logical processors</span></div>
-        <div><span>Licence</span><span>AGPL-3.0 (MuPDF's licence)</span></div>
+        <div><span>Licence</span><span>AGPL-3.0 (MuPDF's licence). Notices: THIRD-PARTY-NOTICES.md, installed with the app</span></div>
       </div>
       <Updates />
     </>

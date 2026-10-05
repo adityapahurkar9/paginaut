@@ -1,13 +1,17 @@
 /*
- * RAR archives for MuPDF, so comic books packed with RAR (CBR) open like CBZ ones: an archive
- * handler on libarchive's RAR and RAR5 readers (vendored in native/libarchive, only those
- * formats). After MuPDF's own libarchive handler (source/fitz/unlibarchive.c), which MuPDF's
- * build leaves out; this one has its own names, as MuPDF's libraries carry stubs of those.
+ * RAR archives for MuPDF, so comic books packed with RAR (CBR) open like CBZ ones. Two readers,
+ * each where the other can't go:
+ *   RAR 1.5 to 4: unarr (native/unarr, LGPL; from The Unarchiver), which reads solid archives.
+ *   RAR 5: libarchive's reader (native/libarchive, BSD), the only one there is under a free licence.
+ * Both read forwards only. A plain archive is cheap to step through (data is skipped by seeking),
+ * so its pages are read from it directly. A solid one is one compressed stream, where reaching a
+ * page means unpacking everything before it: its entries are unpacked once, while they're listed,
+ * into a temporary file that pages are then read from. That file is deleted however the app ends:
+ * on Windows it's opened delete-on-close (the system deletes it when the last handle goes, crash
+ * or not); elsewhere it's unlinked as soon as it's made, so it has no name to leave behind.
  *
- * libarchive reads forwards only. A plain archive is cheap to step through (each entry's data is
- * skipped by seeking), so pages are read from it directly. A solid one is one compressed stream:
- * reaching a page means unpacking everything before it, so its entries are unpacked once, while
- * they're listed, into a temporary file that pages are then read from.
+ * After MuPDF's own libarchive handler (source/fitz/unlibarchive.c), which MuPDF's build leaves
+ * out; this one has its own names, as MuPDF's libraries carry stubs of those.
  */
 #include <mupdf/fitz.h>
 #include <stdio.h>
@@ -16,14 +20,20 @@
 
 #include "libarchive/archive.h"
 #include "libarchive/archive_entry.h"
+#include "unarr/unarr.h"
+
+/* unarr's way to read from a stream of our own (common/unarr-imp.h, not in its public header). */
+typedef void (*ar_stream_close_fn)(void *data);
+typedef size_t (*ar_stream_read_fn)(void *data, void *buffer, size_t count);
+typedef bool (*ar_stream_seek_fn)(void *data, off64_t offset, int origin);
+typedef off64_t (*ar_stream_tell_fn)(void *data);
+ar_stream *ar_open_stream(void *data, ar_stream_close_fn close, ar_stream_read_fn read, ar_stream_seek_fn seek, ar_stream_tell_fn tell);
 
 #ifdef _WIN32
-#define temp_open(p) ((FILE *)fz_fopen_utf8((p), "w+b"))
-#define temp_remove(p) fz_remove_utf8(p)
+#define temp_open(p) ((FILE *)fz_fopen_utf8((p), "w+bD"))
 #define temp_seek(f, o) _fseeki64((f), (o), SEEK_SET)
 #else
 #define temp_open(p) fopen((p), "w+b")
-#define temp_remove(p) remove(p)
 #define temp_seek(f, o) fseeko((f), (off_t)(o), SEEK_SET)
 #endif
 
@@ -33,21 +43,25 @@ typedef struct
 	char *name;
 	/* Where its data is in the temporary file (solid archives). */
 	int64_t at;
+	/* RAR 4: where its header is, for unarr to go back to. */
+	off64_t offset;
 } rar_entry;
 
 typedef struct
 {
 	fz_archive super;
-	/* Reading the archive itself (plain archives); opened on the first read. */
+	int v5;
+	/* RAR 5: reading the archive (plain archives; opened on the first read), and entries read past. */
 	struct archive *archive;
-	/* Entries read past so far (libarchive reads forwards only). */
 	int current;
+	/* RAR 4: unarr's reader. */
+	ar_stream *ustream;
+	ar_archive *uarch;
 	int count, max;
 	rar_entry *entries;
 	/* A solid archive's entries, unpacked (NULL for plain archives, or with nowhere to put them). */
 	FILE *unpacked;
-	char *unpacked_path;
-	fz_context *ctx; /* while libarchive calls back */
+	fz_context *ctx; /* while a reader calls back */
 	uint8_t block[4096];
 } rar_archive;
 
@@ -68,7 +82,9 @@ void po_set_temp_dir(const char *dir)
 	temp_dir = d;
 }
 
-static la_ssize_t rar_read(struct archive *a, void *data, const void **buf)
+/* ---------------------------------------------------------------- RAR 5: libarchive's callbacks */
+
+static la_ssize_t la_read(struct archive *a, void *data, const void **buf)
 {
 	rar_archive *arch = data;
 	fz_context *ctx = arch->ctx;
@@ -91,7 +107,7 @@ static la_ssize_t rar_read(struct archive *a, void *data, const void **buf)
 	return ret;
 }
 
-static la_int64_t rar_skip(struct archive *a, void *data, la_int64_t skip)
+static la_int64_t la_skip(struct archive *a, void *data, la_int64_t skip)
 {
 	rar_archive *arch = data;
 	fz_context *ctx = arch->ctx;
@@ -110,7 +126,7 @@ static la_int64_t rar_skip(struct archive *a, void *data, la_int64_t skip)
 	return moved;
 }
 
-static la_int64_t rar_seek(struct archive *a, void *data, la_int64_t offset, int whence)
+static la_int64_t la_seek(struct archive *a, void *data, la_int64_t offset, int whence)
 {
 	rar_archive *arch = data;
 	fz_context *ctx = arch->ctx;
@@ -128,25 +144,24 @@ static la_int64_t rar_seek(struct archive *a, void *data, la_int64_t offset, int
 	return pos;
 }
 
-static int rar_close(struct archive *a, void *data)
+static int la_close(struct archive *a, void *data)
 {
 	return ARCHIVE_OK; /* the stream goes with the fz_archive */
 }
 
-/* Starts reading from the beginning; nonzero on failure. */
-static int rar_begin(fz_context *ctx, rar_archive *arch)
+/* Starts reading a RAR 5 archive from the beginning; nonzero on failure. */
+static int la_begin(fz_context *ctx, rar_archive *arch)
 {
 	int r;
 	if (arch->archive)
 		archive_read_free(arch->archive);
 	fz_seek(ctx, arch->super.file, 0, SEEK_SET);
 	arch->archive = archive_read_new();
-	archive_read_support_format_rar(arch->archive);
 	archive_read_support_format_rar5(arch->archive);
 	arch->ctx = ctx;
-	r = archive_read_set_seek_callback(arch->archive, rar_seek);
+	r = archive_read_set_seek_callback(arch->archive, la_seek);
 	if (r == ARCHIVE_OK)
-		r = archive_read_open2(arch->archive, arch, NULL, rar_read, rar_skip, rar_close);
+		r = archive_read_open2(arch->archive, arch, NULL, la_read, la_skip, la_close);
 	arch->ctx = NULL;
 	if (r != ARCHIVE_OK)
 	{
@@ -156,6 +171,71 @@ static int rar_begin(fz_context *ctx, rar_archive *arch)
 	arch->current = 0;
 	return r != ARCHIVE_OK;
 }
+
+/* An entry header (or skip) read: ARCHIVE_WARN is fine (e.g. a name that can't be converted to UTF-8). */
+#define LA_OK(r) ((r) == ARCHIVE_OK || (r) == ARCHIVE_WARN)
+
+/* ---------------------------------------------------------------- RAR 4: unarr's stream */
+
+static void ua_close(void *data)
+{
+	/* the stream goes with the fz_archive */
+}
+
+static size_t ua_read(void *data, void *buffer, size_t count)
+{
+	rar_archive *arch = data;
+	fz_context *ctx = arch->ctx;
+	size_t n = 0;
+	fz_try(ctx)
+		n = fz_read(ctx, arch->super.file, buffer, count);
+	fz_catch(ctx)
+		return 0;
+	return n;
+}
+
+static bool ua_seek(void *data, off64_t offset, int origin)
+{
+	rar_archive *arch = data;
+	fz_context *ctx = arch->ctx;
+	fz_try(ctx)
+		fz_seek(ctx, arch->super.file, offset, origin);
+	fz_catch(ctx)
+		return false;
+	return true;
+}
+
+static off64_t ua_tell(void *data)
+{
+	rar_archive *arch = data;
+	fz_context *ctx = arch->ctx;
+	off64_t pos = -1;
+	fz_try(ctx)
+		pos = fz_tell(ctx, arch->super.file);
+	fz_catch(ctx)
+		return -1;
+	return pos;
+}
+
+/* Unpacks the current RAR 4 entry, `n` bytes, `chunk` bytes at a time, to `out` (a buffer) or `f`. */
+static int ua_unpack(rar_archive *arch, size_t n, unsigned char *out, FILE *f, unsigned char *chunk, size_t chunk_size)
+{
+	while (n > 0)
+	{
+		size_t k = n < chunk_size ? n : chunk_size;
+		unsigned char *dst = out ? out : chunk;
+		if (!ar_entry_uncompress(arch->uarch, dst, k))
+			return -1;
+		if (out)
+			out += k;
+		else if (fwrite(chunk, 1, k, f) != k)
+			return 1;
+		n -= k;
+	}
+	return 0;
+}
+
+/* ---------------------------------------------------------------- recognising */
 
 /* RAR 1.5 to 4 ("Rar!\x1a\x07\x00") and RAR 5 ("Rar!\x1a\x07\x01\x00"). */
 static int recognize_rar(fz_context *ctx, fz_stream *file)
@@ -168,7 +248,6 @@ static int recognize_rar(fz_context *ctx, fz_stream *file)
 		return 0;
 	return sig[6] == 0 || (sig[6] == 1 && sig[7] == 0);
 }
-
 
 /* Reads a variable-length RAR 5 number at h[*i]. */
 static uint64_t vint(const unsigned char *h, size_t n, size_t *i)
@@ -214,18 +293,7 @@ static int rar_is_solid(fz_context *ctx, fz_stream *file)
 	return 0;
 }
 
-static void drop_unpacked(rar_archive *arch)
-{
-	if (arch->unpacked)
-		fclose(arch->unpacked);
-	arch->unpacked = NULL;
-	if (arch->unpacked_path)
-	{
-		temp_remove(arch->unpacked_path);
-		free(arch->unpacked_path);
-	}
-	arch->unpacked_path = NULL;
-}
+/* ---------------------------------------------------------------- the fz_archive */
 
 static void drop_rar(fz_context *ctx, fz_archive *arch_)
 {
@@ -233,7 +301,12 @@ static void drop_rar(fz_context *ctx, fz_archive *arch_)
 	int i;
 	if (arch->archive)
 		archive_read_free(arch->archive);
-	drop_unpacked(arch);
+	if (arch->uarch)
+		ar_close_archive(arch->uarch);
+	if (arch->ustream)
+		ar_close(arch->ustream);
+	if (arch->unpacked)
+		fclose(arch->unpacked);
 	for (i = 0; i < arch->count; i++)
 		fz_free(ctx, arch->entries[i].name);
 	fz_free(ctx, arch->entries);
@@ -266,32 +339,42 @@ static int count_rar_entries(fz_context *ctx, fz_archive *arch)
 	return ((rar_archive *)arch)->count;
 }
 
-/* An entry header (or skip) read: ARCHIVE_WARN is fine (e.g. a name that can't be converted to UTF-8). */
-#define RAR_OK(r) ((r) == ARCHIVE_OK || (r) == ARCHIVE_WARN)
-
-static fz_buffer *read_rar_entry(fz_context *ctx, fz_archive *arch_, const char *name)
+static fz_buffer *read_unpacked(fz_context *ctx, rar_archive *arch, rar_entry *e)
 {
-	rar_archive *arch = (rar_archive *)arch_;
+	fz_buffer *buf = fz_new_buffer(ctx, e->len ? e->len : 1);
+	if (temp_seek(arch->unpacked, e->at) != 0 || fread(buf->data, 1, e->len, arch->unpacked) != e->len)
+	{
+		fz_drop_buffer(ctx, buf);
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot read an unpacked RAR entry");
+	}
+	buf->len = e->len;
+	return buf;
+}
+
+/* RAR 4: unarr goes to the entry's header (in a solid archive, unpacking from the start again). */
+static fz_buffer *read_v4(fz_context *ctx, rar_archive *arch, rar_entry *e)
+{
+	fz_buffer *buf = fz_new_buffer(ctx, e->len ? e->len : 1);
+	int ok;
+	arch->ctx = ctx;
+	ok = ar_parse_entry_at(arch->uarch, e->offset) && ua_unpack(arch, e->len, buf->data, NULL, NULL, e->len ? e->len : 1) == 0;
+	arch->ctx = NULL;
+	if (!ok)
+	{
+		fz_drop_buffer(ctx, buf);
+		fz_throw(ctx, FZ_ERROR_LIBRARY, "cannot unpack a RAR entry");
+	}
+	buf->len = e->len;
+	return buf;
+}
+
+/* RAR 5: libarchive steps forwards to the entry (going back starts over; data is skipped by seeking). */
+static fz_buffer *read_v5(fz_context *ctx, rar_archive *arch, int idx)
+{
 	struct archive_entry *entry;
 	fz_buffer *buf = NULL;
-	int idx = find_entry(arch, name);
-	if (idx < 0)
-		return NULL;
-	if (arch->unpacked)
-	{
-		rar_entry *e = &arch->entries[idx];
-		buf = fz_new_buffer(ctx, e->len ? e->len : 1);
-		if (temp_seek(arch->unpacked, e->at) != 0 || fread(buf->data, 1, e->len, arch->unpacked) != e->len)
-		{
-			fz_drop_buffer(ctx, buf);
-			fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot read an unpacked RAR entry");
-		}
-		buf->len = e->len;
-		return buf;
-	}
-	/* Pages are mostly read in order; going back means starting over (cheap: data is skipped by seeking). */
 	if (!arch->archive || arch->current > idx)
-		if (rar_begin(ctx, arch))
+		if (la_begin(ctx, arch))
 			fz_throw(ctx, FZ_ERROR_LIBRARY, "cannot reopen the RAR archive");
 	fz_var(buf);
 	arch->ctx = ctx;
@@ -302,11 +385,11 @@ static fz_buffer *read_rar_entry(fz_context *ctx, fz_archive *arch_, const char 
 		while (arch->current < idx)
 		{
 			int r = archive_read_next_header(arch->archive, &entry);
-			if (!RAR_OK(r) || !RAR_OK(archive_read_data_skip(arch->archive)))
+			if (!LA_OK(r) || !LA_OK(archive_read_data_skip(arch->archive)))
 				fz_throw(ctx, FZ_ERROR_LIBRARY, "cannot skip over a RAR entry");
 			arch->current++;
 		}
-		if (!RAR_OK(archive_read_next_header(arch->archive, &entry)))
+		if (!LA_OK(archive_read_next_header(arch->archive, &entry)))
 			fz_throw(ctx, FZ_ERROR_LIBRARY, "cannot read a RAR entry");
 		arch->current++;
 		size = arch->entries[idx].len;
@@ -330,6 +413,17 @@ static fz_buffer *read_rar_entry(fz_context *ctx, fz_archive *arch_, const char 
 	return buf;
 }
 
+static fz_buffer *read_rar_entry(fz_context *ctx, fz_archive *arch_, const char *name)
+{
+	rar_archive *arch = (rar_archive *)arch_;
+	int idx = find_entry(arch, name);
+	if (idx < 0)
+		return NULL;
+	if (arch->unpacked)
+		return read_unpacked(ctx, arch, &arch->entries[idx]);
+	return arch->v5 ? read_v5(ctx, arch, idx) : read_v4(ctx, arch, &arch->entries[idx]);
+}
+
 static fz_stream *open_rar_entry(fz_context *ctx, fz_archive *arch, const char *name)
 {
 	fz_buffer *buf = read_rar_entry(ctx, arch, name);
@@ -345,28 +439,138 @@ static fz_stream *open_rar_entry(fz_context *ctx, fz_archive *arch, const char *
 	return stm;
 }
 
-/* Starts a temporary file for a solid archive's entries (none if there's nowhere to put it). */
-static void begin_unpacked(rar_archive *arch)
+/* A temporary file for a solid archive's entries (none if there's nowhere to put it). */
+static FILE *begin_unpacked(rar_archive *arch)
 {
 	char path[1024];
-	size_t n;
+	FILE *f;
 	if (!temp_dir)
-		return;
+		return NULL;
 	snprintf(path, sizeof path, "%s/paginaut-rar-%p.tmp", temp_dir, (void *)arch);
-	arch->unpacked = temp_open(path);
-	if (!arch->unpacked)
-		return;
-	n = strlen(path) + 1;
-	arch->unpacked_path = malloc(n);
-	if (arch->unpacked_path)
-		memcpy(arch->unpacked_path, path, n);
+	f = temp_open(path);
+#ifndef _WIN32
+	/* Nameless from now on: it goes when it's closed, or when the app ends however it ends. */
+	if (f)
+		remove(path);
+#endif
+	return f;
+}
+
+static rar_entry *add_entry(fz_context *ctx, rar_archive *arch, const char *name, size_t len)
+{
+	rar_entry *e;
+	if (arch->count == arch->max)
+	{
+		arch->max = arch->max ? arch->max * 2 : 64;
+		arch->entries = fz_realloc(ctx, arch->entries, sizeof *arch->entries * arch->max);
+	}
+	e = &arch->entries[arch->count++];
+	e->name = fz_strdup(ctx, name);
+	e->len = len;
+	e->at = 0;
+	e->offset = 0;
+	return e;
+}
+
+/* Gives up the temporary file (out of space): pages come from the archive itself after all. */
+static void drop_unpacked(rar_archive *arch)
+{
+	if (arch->unpacked)
+		fclose(arch->unpacked);
+	arch->unpacked = NULL;
+}
+
+/* RAR 4 through unarr: lists the entries, unpacking a solid archive's as it goes. */
+static void list_v4(fz_context *ctx, rar_archive *arch, unsigned char *chunk, size_t chunk_size)
+{
+	int64_t at = 0;
+	arch->ustream = ar_open_stream(arch, ua_close, ua_read, ua_seek, ua_tell);
+	if (!arch->ustream)
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "out of memory");
+	fz_seek(ctx, arch->super.file, 0, SEEK_SET);
+	arch->ctx = ctx;
+	arch->uarch = ar_open_rar_archive(arch->ustream);
+	if (!arch->uarch)
+		fz_throw(ctx, FZ_ERROR_FORMAT, "cannot open the RAR archive");
+	while (ar_parse_entry(arch->uarch))
+	{
+		const char *name = ar_entry_get_name(arch->uarch);
+		rar_entry *e = add_entry(ctx, arch, name ? name : "", ar_entry_get_size(arch->uarch));
+		e->offset = ar_entry_get_offset(arch->uarch);
+		if (arch->unpacked && *e->name)
+		{
+			int r = ua_unpack(arch, e->len, NULL, arch->unpacked, chunk, chunk_size);
+			if (r < 0)
+				fz_throw(ctx, FZ_ERROR_FORMAT, "cannot unpack a RAR entry");
+			if (r > 0)
+				drop_unpacked(arch);
+			e->at = at;
+			at += (int64_t)e->len;
+		}
+	}
+	if (!ar_at_eof(arch->uarch))
+		fz_throw(ctx, FZ_ERROR_FORMAT, "damaged RAR archive");
+	arch->ctx = NULL;
+}
+
+/* RAR 5 through libarchive: lists the entries, unpacking a solid archive's as it goes. */
+static void list_v5(fz_context *ctx, rar_archive *arch, unsigned char *chunk, size_t chunk_size)
+{
+	int64_t at = 0;
+	if (la_begin(ctx, arch))
+		fz_throw(ctx, FZ_ERROR_FORMAT, "cannot open the RAR archive");
+	arch->ctx = ctx;
+	for (;;)
+	{
+		struct archive_entry *entry;
+		const char *path;
+		rar_entry *e;
+		int r = archive_read_next_header(arch->archive, &entry);
+		if (r == ARCHIVE_EOF)
+			break;
+		if (!LA_OK(r))
+			fz_throw(ctx, FZ_ERROR_FORMAT, "damaged RAR archive: %s", archive_error_string(arch->archive));
+		path = archive_entry_pathname_utf8(entry);
+		if (!path)
+			path = archive_entry_pathname(entry);
+		/* Directories are entries to libarchive too: listed nameless, to keep positions in step. */
+		if (!path || archive_entry_filetype(entry) == AE_IFDIR)
+			path = "";
+		e = add_entry(ctx, arch, path, *path ? (size_t)archive_entry_size(entry) : 0);
+		if (arch->unpacked && *path)
+		{
+			la_ssize_t got;
+			size_t len = 0;
+			while ((got = archive_read_data(arch->archive, chunk, chunk_size)) > 0)
+			{
+				if (fwrite(chunk, 1, (size_t)got, arch->unpacked) != (size_t)got)
+					break;
+				len += (size_t)got;
+			}
+			if (got < 0)
+				fz_throw(ctx, FZ_ERROR_FORMAT, "cannot unpack a RAR entry: %s", archive_error_string(arch->archive));
+			if (got > 0)
+			{
+				drop_unpacked(arch);
+				continue;
+			}
+			e->len = len;
+			e->at = at;
+			at += (int64_t)len;
+		}
+	}
+	arch->ctx = NULL;
+	/* Read from the start again when a page is wanted (never, when it's all unpacked). */
+	archive_read_free(arch->archive);
+	arch->archive = NULL;
 }
 
 static fz_archive *open_rar(fz_context *ctx, fz_stream *file)
 {
 	rar_archive *arch = fz_new_derived_archive(ctx, file, rar_archive);
 	unsigned char *chunk = NULL;
-	int64_t at = 0;
+	const size_t chunk_size = 1 << 16;
+	unsigned char sig[8] = { 0 };
 	arch->super.format = "rar";
 	arch->super.count_entries = count_rar_entries;
 	arch->super.list_entry = list_rar_entry;
@@ -377,67 +581,17 @@ static fz_archive *open_rar(fz_context *ctx, fz_stream *file)
 	fz_var(chunk);
 	fz_try(ctx)
 	{
+		fz_seek(ctx, file, 0, SEEK_SET);
+		fz_read(ctx, file, sig, 8);
+		arch->v5 = sig[6] == 1;
 		if (rar_is_solid(ctx, file))
-		{
-			begin_unpacked(arch);
-			if (arch->unpacked)
-				chunk = fz_malloc(ctx, 1 << 16);
-		}
-		if (rar_begin(ctx, arch))
-			fz_throw(ctx, FZ_ERROR_FORMAT, "cannot open the RAR archive");
-		/* List the entries (their names as UTF-8), unpacking a solid archive's as we go. */
-		arch->ctx = ctx;
-		for (;;)
-		{
-			struct archive_entry *entry;
-			const char *path;
-			rar_entry *e;
-			int r = archive_read_next_header(arch->archive, &entry);
-			if (r == ARCHIVE_EOF)
-				break;
-			if (!RAR_OK(r))
-				fz_throw(ctx, FZ_ERROR_FORMAT, "damaged RAR archive: %s", archive_error_string(arch->archive));
-			path = archive_entry_pathname_utf8(entry);
-			if (!path)
-				path = archive_entry_pathname(entry);
-			/* Directories are entries to libarchive too: listed nameless, to keep positions in step. */
-			if (!path || archive_entry_filetype(entry) == AE_IFDIR)
-				path = "";
-			if (arch->count == arch->max)
-			{
-				arch->max = arch->max ? arch->max * 2 : 64;
-				arch->entries = fz_realloc(ctx, arch->entries, sizeof *arch->entries * arch->max);
-			}
-			e = &arch->entries[arch->count++];
-			e->name = fz_strdup(ctx, path);
-			e->len = *path ? (size_t)archive_entry_size(entry) : 0;
-			e->at = at;
-			if (arch->unpacked && *path)
-			{
-				la_ssize_t got;
-				size_t len = 0;
-				while ((got = archive_read_data(arch->archive, chunk, 1 << 16)) > 0)
-				{
-					if (fwrite(chunk, 1, (size_t)got, arch->unpacked) != (size_t)got)
-						break;
-					len += (size_t)got;
-				}
-				if (got < 0)
-					fz_throw(ctx, FZ_ERROR_FORMAT, "cannot unpack a RAR entry: %s", archive_error_string(arch->archive));
-				if (got > 0)
-				{
-					/* Out of space: pages come from the archive itself after all. */
-					drop_unpacked(arch);
-					continue;
-				}
-				e->len = len;
-				at += (int64_t)len;
-			}
-		}
-		arch->ctx = NULL;
-		/* Read from the start again when a page is wanted (never, when it's all unpacked). */
-		archive_read_free(arch->archive);
-		arch->archive = NULL;
+			arch->unpacked = begin_unpacked(arch);
+		if (arch->unpacked)
+			chunk = fz_malloc(ctx, chunk_size);
+		if (arch->v5)
+			list_v5(ctx, arch, chunk, chunk_size);
+		else
+			list_v4(ctx, arch, chunk, chunk_size);
 		if (arch->unpacked)
 			fflush(arch->unpacked);
 	}

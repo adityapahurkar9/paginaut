@@ -73,9 +73,10 @@ export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
   const saved = at?.mode === "book" && !isTablet ? "read" : at?.mode;
   mode.value = saved ?? (info.reflowable ? "read" : "pages");
   chrome.value = true;
-  doc.value = { info, name, uri, path: p.path };
+  doc.value = { info, name, uri, path: p.path, direct: p.direct };
   startPosition = at ? { page: page.value, frac: at.frac } : { page: 0, frac: 0 };
-  remember({ uri, name, path: p.path, format: kind(info, name), pages: info.pageCount, page: page.value, frac: startPosition.frac, mode: mode.value, at: Date.now() });
+  // Big files read in place aren't kept, so Recent couldn't open them again.
+  if (!p.direct) remember({ uri, name, path: p.path, format: kind(info, name), pages: info.pageCount, page: page.value, frac: startPosition.frac, mode: mode.value, at: Date.now() });
   // One history entry for the reader, replaced (not stacked) when another file opens from it.
   if (!wasOpen) pushLayer(closeCurrent);
   return true;
@@ -87,7 +88,7 @@ export let startPosition = { page: 0, frac: 0 };
 /** Saves where you are in the open document (on page turns, leaving, and when the app goes to the background). */
 export function savePosition() {
   const d = doc.value;
-  if (!d) return;
+  if (!d || d.direct) return;
   const pos = positionOf();
   const prev = recent.value.find((r) => r.uri === d.uri);
   remember({
@@ -113,7 +114,12 @@ export function closeCurrent() {
   doc.value = null;
   sheet.value = null;
   searching.value = false;
-  void api.close(d.info.docId).catch(() => {});
+  void api
+    .close(d.info.docId)
+    .catch(() => {})
+    .then(() => {
+      if (d.direct) void native.release(d.path);
+    });
 }
 
 /** The reader's back arrow. */

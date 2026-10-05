@@ -144,6 +144,8 @@ export interface OpenDoc {
   name: string;
   uri: string;
   path: string;
+  /** A big file read in place: not kept, not in Recent, let go when it closes. */
+  direct?: boolean;
 }
 
 export const doc = signal<OpenDoc | null>(null);

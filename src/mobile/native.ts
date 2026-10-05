@@ -7,6 +7,8 @@ export interface Picked {
   name?: string;
   /** Where it came from (content://…), to open it again from Recent. */
   uri?: string;
+  /** A big file read in place (or copied for this visit): not kept, so not listed in Recent. */
+  direct?: boolean;
 }
 
 export const native = {
@@ -14,7 +16,10 @@ export const native = {
   /** A file another app sent ("Open with", Share), once. */
   takeIntent: () => invoke<Picked>("take_intent"),
   reopen: (uri: string) => invoke<Picked>("reopen", { uri }),
-  share: (path: string) => invoke<void>("share", { path }),
+  /** `source`: where it came from, shared instead when the file is read in place. */
+  share: (path: string, source?: string) => invoke<void>("share", { path, source }),
+  /** Lets go of a big file read in place once its document has closed. */
+  release: (path: string) => invoke<void>("release", { path }).catch(() => {}),
   shareText: (text: string) => invoke<void>("share_text", { text }),
   /** Android's print dialog; documents other than PDFs are written as a PDF first. */
   print: (doc: number, path: string, title: string, pdf: boolean) => invoke<void>("print", { doc, path, title, pdf }),

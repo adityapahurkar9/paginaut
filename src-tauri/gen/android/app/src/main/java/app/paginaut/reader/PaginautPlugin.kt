@@ -15,6 +15,9 @@ import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import android.provider.OpenableColumns
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.webkit.MimeTypeMap
@@ -54,6 +57,8 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
 
   override fun load(webView: WebView) {
     this.webView = webView
+    // Big files read in place last time: their links (and any one-visit copies) go.
+    File(activity.cacheDir, "direct").deleteRecursively()
     pending = docUri(activity.intent)
     // Android 15 and later always draw the app behind the status and navigation bars. The page keeps
     // clear of them, the camera cutout and the keyboard itself, from the sizes passed here as CSS
@@ -147,11 +152,13 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
   private fun copyThenResolve(invoke: Invoke, uri: Uri) {
     io.execute {
       try {
-        val (file, name) = copyToCache(uri)
+        val (file, name, isDirect) = copyToCache(uri)
         invoke.resolve(JSObject().apply {
           put("path", file.absolutePath)
           put("name", name)
           put("uri", uri.toString())
+          // Read in place (a big file): not kept, so not for Recent.
+          put("direct", isDirect)
         })
       } catch (e: SecurityException) {
         // Lent by another app for one visit: the copy made then is what there is (counted as opened).
@@ -170,12 +177,54 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
+  /** Big files read in place (path to the link to the file), or copied for one visit (null). */
+  private val direct = HashMap<String, ParcelFileDescriptor?>()
+
+  /**
+   * A big file read where it is: Android's handle to it stays open, and a link named like the file
+   * (MuPDF tells formats by extension) points at it through /proc/self/fd. Null when the source
+   * can't be read at random (a stream from a cloud app, say).
+   */
+  private fun openDirect(uri: Uri, name: String, dir: File): File? {
+    val pfd = activity.contentResolver.openFileDescriptor(uri, "r") ?: return null
+    try {
+      Os.lseek(pfd.fileDescriptor, 0, OsConstants.SEEK_SET)
+    } catch (e: ErrnoException) {
+      pfd.close()
+      return null
+    }
+    val link = File(dir, name)
+    try {
+      Os.symlink("/proc/self/fd/${pfd.fd}", link.absolutePath)
+    } catch (e: ErrnoException) {
+      pfd.close()
+      return null
+    }
+    synchronized(direct) { direct[link.absolutePath] = pfd }
+    return link
+  }
+
+  /** Lets go of a big file read in place, or deletes its one-visit copy (the document has closed). */
+  @Command
+  fun release(invoke: Invoke) {
+    val path = invoke.getArgs().getString("path", null) ?: return invoke.resolve()
+    val known = synchronized(direct) { direct.containsKey(path) }
+    if (known) {
+      synchronized(direct) { direct.remove(path) }?.close()
+      File(path).parentFile?.deleteRecursively()
+    }
+    invoke.resolve()
+  }
+
   /** The copy kept for a source, if there is one (not a half-made one, nor a PDF made for printing). */
   private fun cachedCopy(uri: Uri): File? =
     File(activity.cacheDir, "docs/" + sha1(uri.toString()).take(16)).listFiles()
       ?.firstOrNull { it.isFile && it.name != ".part" && !it.name.endsWith(".print.pdf") }
 
-  private fun copyToCache(uri: Uri): Pair<File, String> {
+  /** A document for MuPDF: its file, its name, and whether it is read in place / for this visit only. */
+  private data class Opened(val file: File, val name: String, val direct: Boolean)
+
+  private fun copyToCache(uri: Uri): Opened {
     val cr = activity.contentResolver
     var name: String? = null
     var size = -1L
@@ -199,12 +248,25 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
       val ext = cr.getType(uri)?.let { MimeTypeMap.getSingleton().getExtensionFromMimeType(it) }
       if (ext != null) display = "$display.$ext"
     }
+    // Big files (a quarter of the cache or more) aren't kept: read in place, or failing that copied
+    // for this visit only. Either way they stay out of Recent.
+    if (size > DIRECT_FROM) {
+      val dir = File(activity.cacheDir, "direct/" + sha1(uri.toString()).take(16))
+      dir.deleteRecursively()
+      dir.mkdirs()
+      openDirect(uri, display, dir)?.let { return Opened(it, display, true) }
+      val out = File(dir, display)
+      val input = cr.openInputStream(uri) ?: throw IllegalStateException("the file is empty")
+      input.use { i -> FileOutputStream(out).use { o -> i.copyTo(o, 1 shl 16) } }
+      synchronized(direct) { direct[out.absolutePath] = null }
+      return Opened(out, display, true)
+    }
     val dir = File(activity.cacheDir, "docs/" + sha1(uri.toString()).take(16))
     val out = File(dir, display)
     if (size >= 0 && out.isFile && out.length() == size) {
       // Opened again: the copy counts as recent (trimCache drops the least recently opened first).
       dir.setLastModified(System.currentTimeMillis())
-      return Pair(out, display)
+      return Opened(out, display, false)
     }
     // Read the source before dropping the old copy: if it can't be read any more (a file another
     // app lent us for one visit), the copy is what Recent opens instead.
@@ -215,7 +277,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     dir.listFiles()?.forEach { if (it != tmp) it.delete() }
     if (!tmp.renameTo(out)) throw IllegalStateException("couldn't store a copy")
     trimCache(dir)
-    return Pair(out, display)
+    return Opened(out, display, false)
   }
 
   /**
@@ -254,7 +316,10 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     val args = invoke.getArgs()
     val path = args.getString("path", null) ?: return invoke.reject("No file given.")
     val file = File(path)
-    val uri = try {
+    // A big file read in place is shared from where it is (its link isn't a file to hand on).
+    val source = args.getString("source", null)
+    val inPlace = synchronized(direct) { direct.containsKey(path) }
+    val uri = if (inPlace && source != null) Uri.parse(source) else try {
       FileProvider.getUriForFile(activity, activity.packageName + ".fileprovider", file)
     } catch (e: IllegalArgumentException) {
       return invoke.reject("This file can't be shared.")
@@ -466,6 +531,8 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
 
   companion object {
     private const val CACHE_LIMIT = 512L shl 20
+    /** Files this big are read in place rather than copied into the cache. */
+    private const val DIRECT_FROM = CACHE_LIMIT / 4
 
     /** What the picker offers: PDF, XPS, e-books, comics, Markdown, pictures (and unnamed files, as many comics are). */
     val MIME_TYPES = arrayOf(

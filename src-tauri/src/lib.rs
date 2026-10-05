@@ -190,12 +190,31 @@ pub fn run() {
     mobile::run();
 }
 
+/// The temporary files the app makes (copies for Office conversion and printing, attachments and
+/// signed revisions opened in other apps), removed when it quits and again when it starts. One still
+/// open in another app can't be removed then (Windows keeps it while it's in use): the next start
+/// takes it. (Unpacked RAR comics go by themselves: native/cbr.c opens them delete-on-close.)
+#[cfg(desktop)]
+fn clear_temp() {
+    let tmp = std::env::temp_dir();
+    let _ = std::fs::remove_dir_all(tmp.join("Paginaut"));
+    let _ = std::fs::remove_dir_all(tmp.join("paginaut-libreoffice"));
+    if let Ok(list) = std::fs::read_dir(&tmp) {
+        for e in list.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            // Copies of documents (engine::temp_path), for Office (office/com.rs), RAR leftovers of older versions.
+            if name.starts_with("paginaut-") && (name.ends_with(".pdf") || name.starts_with("paginaut-office-") || name.ends_with(".tmp")) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+}
+
 #[cfg(desktop)]
 fn run_desktop() {
     #[cfg(windows)]
     migrate_from_folio();
     let engine = engine::Engine::new(worker_count(), store_bytes()).expect("MuPDF failed to start");
-    engine::mupdf::set_temp_dir(&std::env::temp_dir());
     let converter = engine.clone();
     let args: Vec<String> = std::env::args().collect();
     let launch = app::files_from_args(&args, None);
@@ -348,6 +367,10 @@ fn run_desktop() {
             memory_level,
         ])
         .setup(move |app| {
+            // Only the one instance gets here (a second one hands its files over and quits first):
+            // what earlier runs left in the temp folder can go.
+            clear_temp();
+            engine::mupdf::set_temp_dir(&std::env::temp_dir());
             // OCR models: English, Hindi and Marathi ship with the app; more are
             // downloaded into the local (not roaming) data folder.
             let builtin = app.path().resource_dir().map(|d| d.join("tessdata")).unwrap_or_default();
@@ -377,6 +400,11 @@ fn run_desktop() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Paginaut");
+        .build(tauri::generate_context!())
+        .expect("error while running Paginaut")
+        .run(|_, event| {
+            if let tauri::RunEvent::Exit = event {
+                clear_temp();
+            }
+        });
 }

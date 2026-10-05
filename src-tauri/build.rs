@@ -13,7 +13,7 @@ const MUPDF_LIBS: &[&str] = &[
     "libzxing",
 ];
 
-/// libarchive's sources for reading RAR archives from memory (native/libarchive holds just these).
+/// libarchive's sources for reading RAR 5 archives (native/libarchive holds just these).
 const LIBARCHIVE: &[&str] = &[
     "archive_acl.c",
     "archive_blake2s_ref.c",
@@ -22,12 +22,10 @@ const LIBARCHIVE: &[&str] = &[
     "archive_entry.c",
     "archive_entry_sparse.c",
     "archive_entry_xattr.c",
-    "archive_ppmd7.c",
     "archive_random.c",
     "archive_rb.c",
     "archive_read.c",
     "archive_read_open_memory.c",
-    "archive_read_support_format_rar.c",
     "archive_read_support_format_rar5.c",
     "archive_string.c",
     "archive_string_sprintf.c",
@@ -36,8 +34,34 @@ const LIBARCHIVE: &[&str] = &[
     "archive_virtual.c",
 ];
 
-/// Comic books packed with RAR (CBR): libarchive's RAR readers and the MuPDF archive handler on them.
+/// unarr's sources for RAR 1.5 to 4, solid archives included (native/unarr holds just these).
+const UNARR: &[&str] = &[
+    "common/conv.c",
+    "common/crc32.c",
+    "common/custalloc.c",
+    "common/stream.c",
+    "common/unarr.c",
+    "rar/filter-rar.c",
+    "rar/huffman-rar.c",
+    "rar/parse-rar.c",
+    "rar/rar.c",
+    "rar/rarvm.c",
+    "rar/uncompress-rar.c",
+    "lzmasdk/Ppmd7.c",
+    "lzmasdk/Ppmd7Dec.c",
+    "lzmasdk/Ppmd7aDec.c",
+];
+
+/// Comic books packed with RAR (CBR): unarr for RAR 4, libarchive for RAR 5, and the MuPDF archive
+/// handler on both (native/cbr.c).
 fn rar(mupdf: &Path, windows: bool) {
+    let unarr = Path::new("native/unarr");
+    let mut u = cc::Build::new();
+    for f in UNARR {
+        u.file(unarr.join(f));
+    }
+    u.include(unarr).define("NDEBUG", None).opt_level(2).warnings(false).compile("paginaut_unarr");
+
     let dir = Path::new("native/libarchive");
     let mut b = cc::Build::new();
     for f in LIBARCHIVE {
@@ -58,6 +82,7 @@ fn rar(mupdf: &Path, windows: bool) {
         .compile("paginaut_rar");
     println!("cargo:rerun-if-changed=native/cbr.c");
     println!("cargo:rerun-if-changed=native/libarchive");
+    println!("cargo:rerun-if-changed=native/unarr");
 }
 
 fn main() {
