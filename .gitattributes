@@ -3,3 +3,4 @@ src-tauri/tests/fixtures/** -text
 
 # Shell scripts run on Linux (and in WSL): Linux line endings in every checkout.
 *.sh text eol=lf
+*.desktop text eol=lf

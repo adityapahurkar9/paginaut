@@ -41,6 +41,7 @@ case "$step" in
   check) sync; cd "$dir" && npm run build --silent && (cd src-tauri && cargo check) ;;
   build) sync; cd "$dir" && npx tauri build --debug --no-bundle ;;
   run) sync; cd "$dir" && npx tauri build --debug --no-bundle && ./src-tauri/target/debug/paginaut "${@:2}" ;;
-  bundle) sync; cd "$dir" && npx tauri build --bundles deb,appimage ;;
+  # AppImage tools run unpacked: no FUSE in WSL or containers.
+  bundle) sync; cd "$dir" && APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 npx tauri build --bundles deb,appimage ;;
   *) echo "unknown step: $step" >&2; exit 1 ;;
 esac
