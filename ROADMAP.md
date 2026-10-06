@@ -683,7 +683,7 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
 - [x] Logo #4 redrawn as assets/icon.svg (also the Windows icon); Android adaptive and themed icons
       (assets/android-icons.py)
 - [ ] Release signing key (the user's), store listing, AAB upload; source made public first (AGPL)
-- [ ] CBR comics (needs libarchive in MuPDF)
+- [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
 ### 0.8.6: natural voices and printing
 - [x] Natural offline voices (Piper) for read aloud, downloaded in Settings › Read aloud (Phase 2's list)
