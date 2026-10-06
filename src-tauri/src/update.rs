@@ -189,8 +189,9 @@ pub fn download(dir: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u
 }
 
 /// Starts the update: Windows' installer (passive, restarting Paginaut when done), the new AppImage in place of
-/// this one, or the .deb in the software installer. True when the caller should quit now (not for a .deb: the
-/// software installer asks first, and Paginaut stays open meanwhile).
+/// this one, or the .deb installed by apt. True when the caller should quit now; false when the .deb was handed
+/// to the software installer instead and Paginaut stays open meanwhile. Waits (for apt): call it off the window's
+/// thread.
 #[cfg(not(windows))]
 pub fn run_installer(installer: &Path) -> Result<bool, String> {
     use std::os::unix::fs::PermissionsExt;
@@ -205,14 +206,67 @@ pub fn run_installer(installer: &Path) -> Result<bool, String> {
                 format!("Couldn't replace {}: {e}", current.display())
             })?;
             let _ = std::fs::remove_file(installer);
-            std::process::Command::new(&current).spawn().map_err(|e| format!("Couldn't start the new Paginaut: {e}"))?;
+            restart_after_exit(&current)?;
             Ok(true)
         }
         _ => {
-            // GNOME Software, KDE Discover, gdebi…: whichever opens .deb files.
+            // apt installs it, after the system's own password prompt (polkit, through pkexec): Ubuntu 22.04's
+            // software store (and the archive manager some systems open .debs with) can't install a .deb file.
+            let (pkexec, apt) = (Path::new("/usr/bin/pkexec"), Path::new("/usr/bin/apt-get"));
+            if pkexec.is_file() && apt.is_file() {
+                // Where this program is, read before apt replaces it (Linux then reports it "(deleted)").
+                let me = std::env::current_exe().map_err(|e| e.to_string())?;
+                let status = std::process::Command::new(pkexec)
+                    .arg(apt)
+                    .args(["install", "-y", "--allow-downgrades"])
+                    .arg(installer)
+                    .status()
+                    .map_err(|e| format!("Couldn't start the installation: {e}"))?;
+                return match status.code() {
+                    Some(0) => {
+                        let _ = std::fs::remove_file(installer);
+                        restart_after_exit(&me)?;
+                        Ok(true)
+                    }
+                    // 126: the password prompt was dismissed; 127: not authorised.
+                    Some(126 | 127) => Err("stopped".into()),
+                    _ => Err(format!("apt couldn't install the update ({status}). In a terminal: sudo apt install {}", installer.display())),
+                };
+            }
+            // No polkit: whichever app opens .deb files (GNOME Software, KDE Discover, gdebi…).
             std::process::Command::new("xdg-open").arg(installer).spawn().map_err(|e| format!("Couldn't open the software installer: {e}"))?;
             Ok(false)
         }
+    }
+}
+
+/// Starts `program` once this process has gone: started any sooner, it would find this copy still running
+/// and hand itself over to it (single instance) instead of opening.
+#[cfg(not(windows))]
+fn restart_after_exit(program: &Path) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    let script = format!("while kill -0 {} 2>/dev/null; do sleep 0.2; done; exec \"$0\"", std::process::id());
+    let mut cmd = std::process::Command::new("/bin/sh");
+    cmd.args(["-c", &script]).arg(program).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    // Its own session: not stopped along with this one.
+    // SAFETY: setsid is async-signal-safe, the only call between fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc_setsid();
+            Ok(())
+        });
+    }
+    cmd.spawn().map(|_| ()).map_err(|e| format!("Couldn't start the new Paginaut: {e}"))
+}
+
+#[cfg(not(windows))]
+fn libc_setsid() {
+    extern "C" {
+        fn setsid() -> i32;
+    }
+    // SAFETY: no arguments; failure (already a session leader) changes nothing.
+    unsafe {
+        setsid();
     }
 }
 

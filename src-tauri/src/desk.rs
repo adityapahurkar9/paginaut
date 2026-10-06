@@ -1258,7 +1258,8 @@ pub async fn update_install(app: tauri::AppHandle, on_event: Channel<DownloadEve
         })
     })
     .await?;
-    if crate::update::run_installer(&installer)? {
+    // (On Linux this waits for apt, after the password prompt.)
+    if blocking(move || crate::update::run_installer(&installer)).await? {
         app.exit(0);
         return Ok(true);
     }

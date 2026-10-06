@@ -495,17 +495,58 @@ MimeType={};
         Ok(id.to_string())
     }
 
-    fn default_for(mime: &str) -> Option<String> {
-        let out = Command::new("xdg-mime").args(["query", "default", mime]).output().ok()?;
-        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    /// Every type's default app, read from the mimeapps.list files as the XDG spec orders them (the
+    /// desktop's own first, then the user's, the system's, and the old defaults.list): what `xdg-mime query
+    /// default` answers, without starting it once per type (47 of them).
+    fn mime_defaults() -> std::collections::HashMap<String, String> {
+        let env_dirs = |var: &str, fallback: &str| -> Vec<PathBuf> {
+            std::env::var(var).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| fallback.into()).split(':').filter(|d| !d.is_empty()).map(PathBuf::from).collect()
+        };
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let config_home = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| home.as_ref().map(|h| h.join(".config")));
+        let desktops: Vec<String> = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').filter(|d| !d.is_empty()).map(|d| d.to_lowercase()).collect();
+        let apps: Vec<PathBuf> = data_dirs().into_iter().map(|d| d.join("applications")).collect();
+        let config: Vec<PathBuf> = config_home.into_iter().chain(env_dirs("XDG_CONFIG_DIRS", "/etc/xdg")).collect();
+        defaults_in(&config, &apps, &desktops)
+    }
+
+    /// `mime_defaults` for these config folders, applications folders and desktops (lowercase).
+    fn defaults_in(config: &[PathBuf], apps: &[PathBuf], desktops: &[String]) -> std::collections::HashMap<String, String> {
+        let mut files = Vec::new();
+        for dir in config.iter().chain(apps) {
+            files.extend(desktops.iter().map(|d| dir.join(format!("{d}-mimeapps.list"))));
+            files.push(dir.join("mimeapps.list"));
+        }
+        files.extend(apps.iter().map(|d| d.join("defaults.list")));
+        let installed = |id: &str| apps.iter().any(|d| d.join(id).is_file());
+        let mut out = std::collections::HashMap::new();
+        for f in files {
+            let Ok(text) = std::fs::read_to_string(&f) else { continue };
+            let mut in_defaults = false;
+            for line in text.lines().map(str::trim) {
+                if line.starts_with('[') {
+                    in_defaults = line == "[Default Applications]";
+                    continue;
+                }
+                let Some((mime, ids)) = line.split_once('=').filter(|_| in_defaults) else { continue };
+                if out.contains_key(mime.trim()) {
+                    continue;
+                }
+                if let Some(id) = ids.split(';').map(str::trim).find(|id| !id.is_empty() && installed(id)) {
+                    out.insert(mime.trim().to_string(), id.to_string());
+                }
+            }
+        }
+        out
     }
 
     pub fn status(_: &Names, exe: &Path) -> Vec<KindStatus> {
         let me = desktop_id(exe);
+        let defaults = mime_defaults();
         KINDS
             .iter()
             .map(|k| {
-                let ours = k.mimes.iter().filter(|m| me.is_some() && default_for(m) == me).count();
+                let ours = k.mimes.iter().filter(|m| me.is_some() && defaults.get(**m) == me.as_ref()).count();
                 KindStatus {
                     id: k.id,
                     name: k.name,
@@ -538,6 +579,36 @@ MimeType={};
     /// No system page to open: `register` sets the default itself.
     pub fn open_settings(_: &Names) -> Result<(), String> {
         Err("On Linux, Paginaut sets itself as the default directly: tick the types above.".into())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        /// The XDG order: the desktop's own list, then the user's, then the system's; apps not installed skipped.
+        #[test]
+        fn reads_mimeapps_lists_in_order() {
+            let root = std::env::temp_dir().join(format!("paginaut-mimeapps-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let (config, sys, apps) = (root.join("config"), root.join("xdg"), root.join("share/applications"));
+            for d in [&config, &sys, &apps] {
+                std::fs::create_dir_all(d).unwrap();
+            }
+            for id in ["paginaut.desktop", "evince.desktop", "okular.desktop"] {
+                std::fs::write(apps.join(id), "[Desktop Entry]\n").unwrap();
+            }
+            std::fs::write(config.join("gnome-mimeapps.list"), "[Default Applications]\napplication/epub+zip=paginaut.desktop\n").unwrap();
+            std::fs::write(
+                config.join("mimeapps.list"),
+                "[Added Associations]\napplication/pdf=okular.desktop;\n[Default Applications]\napplication/epub+zip=evince.desktop\napplication/pdf=gone.desktop;paginaut.desktop;\n",
+            )
+            .unwrap();
+            std::fs::write(sys.join("mimeapps.list"), "[Default Applications]\napplication/pdf=evince.desktop\nimage/vnd.djvu=evince.desktop\n").unwrap();
+            let d = super::defaults_in(&[config, sys], &[apps], &["gnome".to_string()]);
+            assert_eq!(d.get("application/epub+zip").map(String::as_str), Some("paginaut.desktop"));
+            assert_eq!(d.get("application/pdf").map(String::as_str), Some("paginaut.desktop"));
+            assert_eq!(d.get("image/vnd.djvu").map(String::as_str), Some("evince.desktop"));
+            assert_eq!(d.get("text/plain"), None);
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 }
 

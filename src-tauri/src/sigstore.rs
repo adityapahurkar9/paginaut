@@ -83,7 +83,10 @@ mod dpapi {
     use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
     use std::sync::OnceLock;
 
-    const MAGIC: &[u8; 4] = b"PGS1";
+    /// The file's first bytes say where its key is: the keyring, or the key file. Only `protect` makes a key:
+    /// reading never does, so a keyring that's locked or not started yet can't lead to a second key.
+    const IN_KEYRING: &[u8; 4] = b"PGS1";
+    const IN_FILE: &[u8; 4] = b"PGS2";
     static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
     /// Where the key file goes when there's no keyring (the signatures' folder).
@@ -91,54 +94,99 @@ mod dpapi {
         let _ = DIR.set(dir.to_path_buf());
     }
 
-    fn key() -> Result<[u8; 32], String> {
-        let fresh = || {
-            let mut k = [0u8; 32];
-            getrandom::fill(&mut k).map_err(|e| e.to_string())?;
-            Ok::<_, String>(k)
-        };
-        if let Ok(entry) = keyring::Entry::new("Paginaut", "saved signatures") {
-            match entry.get_secret() {
-                Ok(k) if k.len() == 32 => return Ok(k.try_into().unwrap_or([0; 32])),
-                Err(keyring::Error::NoEntry) => {
-                    let k = fresh()?;
-                    if entry.set_secret(&k).is_ok() {
-                        return Ok(k);
-                    }
-                }
-                _ => {}
+    fn fresh() -> Result<[u8; 32], String> {
+        let mut k = [0u8; 32];
+        getrandom::fill(&mut k).map_err(|e| e.to_string())?;
+        Ok(k)
+    }
+
+    /// The key in the desktop's keyring (made when `make` and there is none).
+    fn keyring_key(make: bool) -> Result<[u8; 32], String> {
+        let entry = keyring::Entry::new("Paginaut", "saved signatures").map_err(|e| format!("The desktop's keyring isn't available ({e})."))?;
+        match entry.get_secret() {
+            Ok(k) => k.try_into().map_err(|_| "The key for your saved signatures in the desktop's keyring is damaged.".to_string()),
+            Err(keyring::Error::NoEntry) if make => {
+                let k = fresh()?;
+                entry.set_secret(&k).map_err(|e| format!("The desktop's keyring didn't keep the key ({e})."))?;
+                Ok(k)
             }
+            Err(keyring::Error::NoEntry) => Err("The key for your saved signatures isn't in the desktop's keyring any more.".into()),
+            Err(e) => Err(format!("The desktop's keyring couldn't be opened ({e}): unlock it, then try again.")),
         }
+    }
+
+    /// The key kept in a file only this account can read (made when `make` and there is none).
+    fn file_key(make: bool) -> Result<[u8; 32], String> {
         let file = DIR.get().ok_or("no folder for the key")?.join("signatures.key");
         if let Ok(k) = std::fs::read(&file) {
-            if k.len() == 32 {
-                return Ok(k.try_into().unwrap_or([0; 32]));
-            }
+            return k.try_into().map_err(|_| "The key file for your saved signatures is damaged.".to_string());
+        }
+        if !make {
+            return Err("The key file for your saved signatures is missing.".into());
         }
         let k = fresh()?;
-        {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&file).map_err(|e| e.to_string())?;
-            f.write_all(&k).map_err(|e| e.to_string())?;
-        }
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&file).map_err(|e| e.to_string())?;
+        f.write_all(&k).map_err(|e| e.to_string())?;
         Ok(k)
     }
 
     pub fn protect(data: &[u8]) -> Result<Vec<u8>, String> {
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key()?));
+        // The keyring when it answers; otherwise (a bare window manager) the key file.
+        let (magic, key) = match keyring_key(true) {
+            Ok(k) => (IN_KEYRING, k),
+            Err(_) => (IN_FILE, file_key(true)?),
+        };
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
         let mut nonce = [0u8; 12];
         getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
         let sealed = cipher.encrypt(Nonce::from_slice(&nonce), data).map_err(|_| "couldn't encrypt the signatures".to_string())?;
-        Ok([&MAGIC[..], &nonce, &sealed].concat())
+        Ok([&magic[..], &nonce, &sealed].concat())
     }
 
     pub fn unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
-        let Some(rest) = data.strip_prefix(&MAGIC[..]) else { return Ok(data.to_vec()) };
+        let (keys, rest) = if let Some(rest) = data.strip_prefix(&IN_FILE[..]) {
+            (vec![file_key(false)], rest)
+        } else if let Some(rest) = data.strip_prefix(&IN_KEYRING[..]) {
+            // (0.8.11 marked key-file ones PGS1 too: that key is tried next.)
+            (vec![keyring_key(false), file_key(false)], rest)
+        } else {
+            return Ok(data.to_vec());
+        };
         if rest.len() < 12 {
             return Err("The saved signatures are damaged.".into());
         }
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key()?));
-        cipher.decrypt(Nonce::from_slice(&rest[..12]), &rest[12..]).map_err(|_| "The saved signatures can't be read with this account's key.".into())
+        let mut why = String::new();
+        for key in keys {
+            match key {
+                Ok(k) => {
+                    if let Ok(plain) = ChaCha20Poly1305::new(Key::from_slice(&k)).decrypt(Nonce::from_slice(&rest[..12]), &rest[12..]) {
+                        return Ok(plain);
+                    }
+                }
+                Err(e) if why.is_empty() => why = e,
+                Err(_) => {}
+            }
+        }
+        Err(if why.is_empty() { "The saved signatures can't be read with this account's key.".into() } else { why })
+    }
+}
+
+/// Linux: sealed and opened again, whichever key is at hand (in WSL, without a keyring, the key file).
+#[cfg(all(test, not(windows)))]
+mod tests {
+    #[test]
+    fn round_trip() {
+        let dir = std::env::temp_dir().join(format!("paginaut-sigstore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        super::dpapi::set_dir(&dir);
+        let sealed = super::dpapi::protect(b"[1,2,3]").unwrap();
+        assert!(sealed.starts_with(b"PGS"));
+        assert_eq!(super::dpapi::unprotect(&sealed).unwrap(), b"[1,2,3]");
+        // Plain JSON (never sealed) reads as it is.
+        assert_eq!(super::dpapi::unprotect(b"[]").unwrap(), b"[]");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

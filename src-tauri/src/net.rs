@@ -213,6 +213,9 @@ mod other {
 
     /// Downloads over HTTPS (following redirects to other HTTPS servers), handing each piece to `sink`.
     /// Returns the size.
+    /// How long a download may go without a byte arriving.
+    const IDLE: Duration = Duration::from_secs(60);
+
     pub fn fetch(g: Get, sink: &mut dyn FnMut(&[u8]) -> Result<(), String>) -> Result<u64, String> {
         let offline = |e: ureq::Error| format!("Couldn't download (are you online?): {e}");
         let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
@@ -231,7 +234,7 @@ mod other {
         if g.from > 0 {
             req = req.header("Range", format!("bytes={}-", g.from));
         }
-        let mut resp = req.call().map_err(offline)?;
+        let resp = req.call().map_err(offline)?;
         let status = resp.status().as_u16();
         match status {
             200 if g.from > 0 => return Err(RESTART.into()),
@@ -249,19 +252,42 @@ mod other {
         if expect > g.max {
             return Err("The download was larger than expected.".into());
         }
-        let mut reader = resp.body_mut().with_config().limit(g.max.saturating_add(1)).reader();
-        let mut buf = vec![0u8; 256 << 10];
+        // Read on a thread of its own: ureq has no timeout for a connection that goes quiet midway, and a read
+        // stuck on it would leave Stop unanswered. Here the wait is checked every half second; a reader left
+        // stuck ends with its connection.
+        let mut reader = resp.into_body().into_with_config().limit(g.max.saturating_add(1)).reader();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Vec<u8>, String>>(4);
+        std::thread::spawn(move || {
+            let mut buf = vec![0u8; 256 << 10];
+            loop {
+                let piece = reader.read(&mut buf).map(|n| buf[..n].to_vec()).map_err(|e| e.to_string());
+                let end = !matches!(&piece, Ok(p) if !p.is_empty());
+                if tx.send(piece).is_err() || end {
+                    break;
+                }
+            }
+        });
         let mut total = g.from;
         let mut window = (std::time::Instant::now(), total);
+        let mut heard = std::time::Instant::now();
         loop {
             if g.cancel.load(Ordering::Acquire) {
                 return Err("stopped".into());
             }
-            let read = reader.read(&mut buf).map_err(|e| format!("Couldn't download (are you online?): {e}"))?;
-            if read == 0 {
+            let piece = match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(p) => p.map_err(|e| format!("Couldn't download (are you online?): {e}"))?,
+                // Nothing for a minute (as WinHTTP's receive timeout on Windows).
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if heard.elapsed() >= IDLE => {
+                    return Err("Couldn't download (are you online?): the server stopped sending.".into())
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err("Couldn't download: the connection closed.".into()),
+            };
+            if piece.is_empty() {
                 break;
             }
-            total += read as u64;
+            heard = std::time::Instant::now();
+            total += piece.len() as u64;
             let secs = window.0.elapsed().as_secs();
             if secs >= 30 {
                 if g.min_rate > 0 && (total - window.1) / secs < g.min_rate {
@@ -272,7 +298,7 @@ mod other {
             if total > expect {
                 return Err("The download was larger than expected.".into());
             }
-            sink(&buf[..read])?;
+            sink(&piece)?;
             (g.progress)(total, expect);
         }
         if (g.expect.is_some() || length.is_some()) && total != expect {

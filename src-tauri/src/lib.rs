@@ -196,10 +196,34 @@ pub fn run() {
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
+    #[cfg(target_os = "linux")]
+    private_temp();
     #[cfg(desktop)]
     run_desktop();
     #[cfg(mobile)]
     mobile::run();
+}
+
+/// Linux: temporary files go in a folder only this user can open (~/.cache/paginaut/tmp), not the /tmp every
+/// account shares, where the names Paginaut uses (print copies, rebuilt books, the update being installed)
+/// could be made in advance by someone else. Windows' temp folder is the user's own already. Set here, before
+/// any thread starts, so every `std::env::temp_dir()` (and the programs Paginaut starts) uses it; a TMPDIR
+/// someone chose themselves is kept.
+#[cfg(target_os = "linux")]
+fn private_temp() {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    use std::path::PathBuf;
+    let chosen = std::env::var_os("TMPDIR").filter(|t| !t.is_empty() && !["/tmp", "/tmp/", "/var/tmp", "/var/tmp/"].contains(&t.to_string_lossy().as_ref()));
+    if chosen.is_some() {
+        return;
+    }
+    let cache = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).filter(|p| p.is_absolute()).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")));
+    let Some(dir) = cache.map(|c| c.join("paginaut").join("tmp")) else { return };
+    if std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).is_err() {
+        return;
+    }
+    let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    std::env::set_var("TMPDIR", &dir);
 }
 
 /// The temporary files the app makes (copies for Office conversion and printing, attachments and
