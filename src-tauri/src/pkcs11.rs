@@ -180,18 +180,39 @@ pub fn sign(t: &TokenCert, pin: Option<&str>, data: &[u8]) -> Result<(Vec<u8>, b
     r
 }
 
-/// ECDSA's r and s as DER: SEQUENCE { INTEGER r, INTEGER s }.
+/// ECDSA's r and s as DER: SEQUENCE { INTEGER r, INTEGER s } (P-521's is longer than 127 bytes: a long-form length).
 fn ecdsa_der(r: &[u8], s: &[u8]) -> Vec<u8> {
+    let tlv = |tag: u8, body: Vec<u8>| {
+        let mut out = vec![tag];
+        if body.len() < 0x80 {
+            out.push(body.len() as u8);
+        } else {
+            let len: Vec<u8> = body.len().to_be_bytes().into_iter().skip_while(|&b| b == 0).collect();
+            out.push(0x80 | len.len() as u8);
+            out.extend(len);
+        }
+        out.extend(body);
+        out
+    };
     let int = |v: &[u8]| {
         let v: Vec<u8> = v.iter().copied().skip_while(|&b| b == 0).collect();
         let mut body = if v.first().is_some_and(|&b| b & 0x80 != 0) { vec![0] } else { Vec::new() };
         body.extend(if v.is_empty() { vec![0] } else { v });
-        let mut out = vec![0x02, body.len() as u8];
-        out.extend(body);
-        out
+        tlv(0x02, body)
     };
-    let body = [int(r), int(s)].concat();
-    let mut out = vec![0x30, body.len() as u8];
-    out.extend(body);
-    out
+    tlv(0x30, [int(r), int(s)].concat())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ecdsa_lengths() {
+        // P-256: short lengths; a high bit gets a leading zero.
+        let d = super::ecdsa_der(&[0x80; 32], &[0x01; 32]);
+        assert_eq!(&d[..4], &[0x30, 2 + 33 + 2 + 32, 0x02, 33]);
+        // P-521 (66-byte r and s): the sequence needs a long-form length.
+        let d = super::ecdsa_der(&[0xff; 66], &[0xff; 66]);
+        assert_eq!(&d[..3], &[0x30, 0x81, 2 * (2 + 67)]);
+        assert_eq!(d.len(), 3 + 2 * (2 + 67));
+    }
 }

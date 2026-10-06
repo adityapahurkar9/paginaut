@@ -33,6 +33,8 @@ pub struct CertSummary {
     /// or email). Others (e.g. self-signed ones apps make for themselves) are
     /// only shown on request.
     pub likely: bool,
+    /// Linux: the token has its own keypad, so its PIN isn't typed into Paginaut.
+    pub pinpad: bool,
 }
 
 /// Result of checking one signature's CMS blob against the bytes it covers.
@@ -250,6 +252,7 @@ mod imp {
             provider,
             current: nb <= now && now <= na,
             likely: for_documents(c),
+            pinpad: false,
         }
     }
 
@@ -879,13 +882,13 @@ mod imp {
     use openssl::asn1::{Asn1Time, Asn1TimeRef};
     use openssl::hash::{hash, MessageDigest};
     use openssl::nid::Nid;
-    use openssl::ocsp::{OcspCertId, OcspCertStatus, OcspRequest, OcspResponse, OcspResponseStatus};
+    use openssl::ocsp::{OcspCertId, OcspCertStatus, OcspFlag, OcspRequest, OcspResponse, OcspResponseStatus};
     use openssl::pkcs12::Pkcs12;
     use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
     use openssl::pkey::{PKey, Private};
     use openssl::stack::Stack;
     use openssl::x509::store::{X509Store, X509StoreBuilder};
-    use openssl::x509::verify::X509VerifyParam;
+    use openssl::x509::verify::{X509VerifyFlags, X509VerifyParam};
     use openssl::x509::{X509NameRef, X509Ref, X509};
     use std::ffi::{c_char, c_int, c_long, c_uint, c_void};
 
@@ -1013,6 +1016,7 @@ mod imp {
             hardware,
             current: not_before <= t && t <= not_after,
             likely: !self_signed,
+            pinpad: false,
         }
     }
 
@@ -1030,7 +1034,7 @@ mod imp {
 
     /// The certificates on the DSC tokens and smart cards plugged in (certificate files are opened one by one).
     pub fn list() -> Result<Vec<CertSummary>, String> {
-        Ok(crate::pkcs11::certificates().iter().map(|t| summarize(&t.cert, &t.label, true)).collect())
+        Ok(crate::pkcs11::certificates().iter().map(|t| CertSummary { pinpad: t.pinpad, ..summarize(&t.cert, &t.label, true) }).collect())
     }
 
     /// Where a certificate's key is: in memory (a certificate file), or on a token (with the PIN to give it).
@@ -1074,7 +1078,15 @@ mod imp {
         pub fn from_pfx(path: &str, password: &str) -> Result<Cert, String> {
             let der = std::fs::read(path).map_err(|e| format!("Couldn't read the certificate file: {e}"))?;
             let p12 = Pkcs12::from_der(&der).map_err(|_| "This isn't a certificate file (.pfx or .p12).".to_string())?;
-            let parsed = p12.parse2(password).map_err(|_| "Wrong password for the certificate file.".to_string())?;
+            legacy_ciphers();
+            let parsed = p12.parse2(password).map_err(|e| {
+                // OpenSSL 3 without its legacy part can't decrypt RC2 (older Windows exports, many CAs' files).
+                if e.errors().iter().any(|x| x.reason().is_some_and(|r| r.contains("unsupported"))) {
+                    "This certificate file is encrypted the old way (RC2), which this system's OpenSSL can't read. Export it again with AES (or TripleDES), or install the OpenSSL legacy module.".to_string()
+                } else {
+                    "Wrong password for the certificate file.".to_string()
+                }
+            })?;
             let cert = parsed.cert.ok_or("The file has no certificate.")?;
             let key = parsed.pkey.ok_or("The file has no private key: it can't sign.")?;
             let chain = parsed.ca.map(|s| s.into_iter().collect()).unwrap_or_default();
@@ -1084,7 +1096,7 @@ mod imp {
         pub fn summary(&self) -> CertSummary {
             match &self.key {
                 Key::File(_) => summarize(&self.cert, "Certificate file", false),
-                Key::Token(t, _) => summarize(&self.cert, &t.label, true),
+                Key::Token(t, _) => CertSummary { pinpad: t.pinpad, ..summarize(&self.cert, &t.label, true) },
             }
         }
 
@@ -1177,6 +1189,18 @@ mod imp {
             );
             Ok(der(0x30, &[oid(OID_SIGNED_DATA), der(0xa0, &signed_data)].concat()))
         }
+    }
+
+    /// OpenSSL 3's legacy ciphers (RC2, used by many .pfx files), loaded once beside the default ones. Debian's
+    /// and Ubuntu's libssl3 ship the module; without it, such files get a clear message instead.
+    fn legacy_ciphers() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            if let Ok(p) = openssl::provider::Provider::try_load(None, "legacy", true) {
+                // Kept loaded for the rest of the run.
+                std::mem::forget(p);
+            }
+        });
     }
 
     /// UTCTime for `t` (seconds since 1970): YYMMDDHHMMSSZ.
@@ -1394,8 +1418,24 @@ mod imp {
                 return Ok(unknown("The issuer's revocation service couldn't answer.".into()));
             }
             let basic = resp.basic().map_err(err)?;
+            // The answer counts only when signed by the issuer (or a responder it appointed for this): OCSP
+            // travels over plain HTTP, where anyone in between could answer "good".
+            let mut trust = X509StoreBuilder::new().map_err(err)?;
+            trust.set_default_paths().map_err(err)?;
+            let mut chain = Stack::<X509>::new().map_err(err)?;
+            for c in &certs {
+                let _ = trust.add_cert(c.clone());
+                chain.push(c.clone()).map_err(err)?;
+            }
+            // The issuer itself is the anchor here (its own authority may not be one this system trusts).
+            trust.set_flags(X509VerifyFlags::PARTIAL_CHAIN).map_err(err)?;
+            if basic.verify(&chain, &trust.build(), OcspFlag::empty()).is_err() {
+                return Ok(unknown("The revocation answer wasn't signed by the certificate's issuer, so it was ignored.".into()));
+            }
             let id = OcspCertId::from_cert(MessageDigest::sha1(), &signer, issuer).map_err(err)?;
             Ok(match basic.find_status(&id) {
+                // An old answer (replayed, or from a stale cache) says nothing about now.
+                Some(s) if s.check_validity(300, None).is_err() => unknown("The issuer's revocation answer is out of date.".into()),
                 Some(s) if s.status == OcspCertStatus::GOOD => Revocation { status: "good".into(), detail: "The issuer says the certificate hasn't been revoked.".into() },
                 Some(s) if s.status == OcspCertStatus::REVOKED => Revocation { status: "revoked".into(), detail: "The issuer has revoked the certificate.".into() },
                 _ => unknown("The issuer doesn't know this certificate.".into()),
@@ -1439,6 +1479,58 @@ mod linux_tests {
         // The signing-certificate-v2 attribute is in: its OID's bytes appear in the signature.
         let oid = [0x06, 0x0b, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x10, 0x02, 0x2f];
         assert!(cms.windows(oid.len()).any(|w| w == oid));
+        // A file encrypted the old way (RC2 and 3DES, as older Windows exports): it opens, and a wrong
+        // password is still called that.
+        let old = dir.join("old.p12");
+        run(&["pkcs12", "-export", "-legacy", "-inkey", key.to_str().unwrap(), "-in", crt.to_str().unwrap(), "-out", old.to_str().unwrap(), "-passout", "pass:secret"]);
+        assert_eq!(super::Cert::from_pfx(old.to_str().unwrap(), "secret").map(|c| c.summary().name).ok().as_deref(), Some("Paginaut Test Signer"));
+        assert_eq!(super::Cert::from_pfx(old.to_str().unwrap(), "wrong").err().as_deref(), Some("Wrong password for the certificate file."));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Revocation answers from a local OCSP responder (openssl ocsp): believed when the issuer signed them,
+    /// ignored when someone else did. Runs with PAGINAUT_OCSP_TEST=1 (it opens ports 18321 and 18322).
+    #[test]
+    fn ocsp_answers_must_be_the_issuers() {
+        if std::env::var_os("PAGINAUT_OCSP_TEST").is_none() {
+            return;
+        }
+        let dir = std::env::temp_dir().join("paginaut-ocsp-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = |n: &str| dir.join(n).to_str().unwrap().to_string();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("openssl").args(args).output().unwrap();
+            assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let ca = |name: &str| {
+            run(&["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", &p(&format!("{name}.key")), "-out", &p(&format!("{name}.pem")), "-days", "30", "-subj", &format!("/CN={name}"), "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=keyCertSign,cRLSign,digitalSignature"]);
+        };
+        ca("Issuer");
+        ca("Impostor");
+        let check = |port: u16, responder: &str| -> String {
+            std::fs::write(p("ext.cnf"), format!("authorityInfoAccess=OCSP;URI:http://127.0.0.1:{port}\n")).unwrap();
+            run(&["req", "-newkey", "rsa:2048", "-nodes", "-keyout", &p("s.key"), "-out", &p("s.csr"), "-subj", "/CN=Signer"]);
+            run(&["x509", "-req", "-in", &p("s.csr"), "-CA", &p("Issuer.pem"), "-CAkey", &p("Issuer.key"), "-CAcreateserial", "-out", &p("s.pem"), "-days", "30", "-extfile", &p("ext.cnf")]);
+            let serial = run(&["x509", "-in", &p("s.pem"), "-noout", "-serial"]).trim().trim_start_matches("serial=").to_string();
+            std::fs::write(p("index.txt"), format!("V\t301231000000Z\t\t{serial}\tunknown\t/CN=Signer\n")).unwrap();
+            run(&["pkcs12", "-export", "-inkey", &p("s.key"), "-in", &p("s.pem"), "-certfile", &p("Issuer.pem"), "-out", &p("s.p12"), "-passout", "pass:x"]);
+            let mut server = std::process::Command::new("openssl")
+                .args(["ocsp", "-index", &p("index.txt"), "-port", &port.to_string(), "-rsigner", &p(&format!("{responder}.pem")), "-rkey", &p(&format!("{responder}.key")), "-CA", &p("Issuer.pem"), "-nrequest", "1"])
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            let cms = super::Cert::from_pfx(&p("s.p12"), "x").unwrap().sign(b"signed bytes", 0).unwrap();
+            let r = super::revocation(&cms);
+            let _ = server.kill();
+            let _ = server.wait();
+            println!("{responder}: {} ({})", r.status, r.detail);
+            r.status
+        };
+        assert_eq!(check(18321, "Issuer"), "good");
+        assert_eq!(check(18322, "Impostor"), "unknown");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

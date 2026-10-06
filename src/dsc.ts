@@ -23,6 +23,8 @@ export interface CertSummary {
   current: boolean;
   /** Looks meant for signing documents (others are hidden until asked for). */
   likely: boolean;
+  /** Linux: the token has its own keypad (the PIN is typed there, not here). */
+  pinpad: boolean;
 }
 
 export interface SigCheck {
@@ -256,9 +258,14 @@ async function finish(tab: Tab, setup: SignSetup, src: number, rect?: number[], 
   const flags = SHOW_LABELS | SHOW_TEXT_NAME | (setup.showDate ? SHOW_DATE : 0) | (setup.image ? 0 : SHOW_GRAPHIC_NAME);
   // Linux: the token's PIN is typed here (Windows' drivers ask in their own window); kept for this signature only.
   let pin: string | null = null;
-  if (onLinux && setup.cert.hardware && !setup.pfx) {
-    pin = await askSecret("Token PIN", `The PIN of the token holding ${setup.cert.name}'s certificate. Tokens lock after a few wrong tries.`, "PIN", "Sign");
-    if (pin === null) return showToast("Not signed.");
+  if (onLinux && setup.cert.hardware && !setup.cert.pinpad && !setup.pfx) {
+    // An empty PIN would only use up one of the token's tries.
+    let text = `The PIN of the token holding ${setup.cert.name}'s certificate. Tokens lock after a few wrong tries.`;
+    while (!pin) {
+      pin = await askSecret("Token PIN", text, "PIN", "Sign");
+      if (pin === null) return showToast("Not signed.");
+      text = "Type the token's PIN first (nothing was sent to the token).";
+    }
   }
   const sign = (timestamp: boolean) =>
     invoke<DocInfo>("sign_document", {
@@ -280,7 +287,10 @@ async function finish(tab: Tab, setup: SignSetup, src: number, rect?: number[], 
       },
     });
   tab.saving.value = true;
-  showToast(setup.cert.hardware && !onLinux ? "Signing… if your token asks for its PIN, type it in the token's window." : "Signing…", 60000);
+  showToast(
+    !setup.cert.hardware || setup.pfx ? "Signing…" : !onLinux ? "Signing… if your token asks for its PIN, type it in the token's window." : setup.cert.pinpad ? "Signing… type the PIN on the token's keypad." : "Signing…",
+    60000,
+  );
   try {
     let saved: DocInfo;
     try {
