@@ -329,15 +329,18 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
 export async function saveRepaired(tab: Tab, pdf: boolean) {
   const info = tab.info.value;
   if (!info?.repaired) return;
+  // As a PDF it's an ordinary Save as PDF: comments, filled-in fields and page changes go with it, and the tab
+  // then shows the saved PDF.
+  if (pdf) return void save(tab);
   const stem = baseName(tab.path).replace(/\.[^.]+$/, "");
   const target = await saveDialog({
-    title: pdf ? "Save as PDF" : "Save as a repaired e-book",
-    defaultPath: tab.path.replace(/[^\\/]+$/, pdf ? `${stem}.pdf` : `${stem} (repaired).epub`),
-    filters: [pdf ? { name: "PDF", extensions: ["pdf"] } : { name: "EPUB e-book", extensions: ["epub"] }],
+    title: "Save as a repaired e-book",
+    defaultPath: tab.path.replace(/[^\\/]+$/, `${stem} (repaired).epub`),
+    filters: [{ name: "EPUB e-book", extensions: ["epub"] }],
   });
   if (!target) return;
   try {
-    await api.saveRepaired(info.docId, target, pdf);
+    await api.saveRepaired(info.docId, target, false);
     showToast(`Saved ${baseName(target)}`, 4000);
   } catch (err) {
     showToast(`Couldn't save: ${err}`, 5000);

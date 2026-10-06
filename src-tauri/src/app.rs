@@ -345,7 +345,18 @@ pub async fn book_cover(app: tauri::AppHandle, state: State<'_, AppState>, path:
     let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("covers");
     let engine = state.engine.clone();
     blocking(move || {
-        let info = engine.open(&path)?;
+        // A book drawn again from its EPUB (pdfhtml.rs): only its first page is drawn for this.
+        let preview = crate::engine::book_preview(&path);
+        let opened = engine.open(preview.as_ref().map_or(path.as_str(), |p| p.pdf.as_str()));
+        let info = match opened {
+            Ok(info) => info,
+            Err(e) => {
+                if let Some(p) = &preview {
+                    let _ = std::fs::remove_file(&p.pdf);
+                }
+                return Err(e);
+            }
+        };
         let cover = (|| -> Result<bool, String> {
             if info.needs_password || info.page_count == 0 {
                 return Ok(false);
@@ -359,7 +370,14 @@ pub async fn book_cover(app: tauri::AppHandle, state: State<'_, AppState>, path:
         })()
         .unwrap_or(false);
         engine.close(info.doc_id);
-        Ok(serde_json::json!({ "title": info.title, "author": info.author, "pages": info.page_count, "cover": cover }))
+        let (title, author, pages) = match preview {
+            Some(p) => {
+                let _ = std::fs::remove_file(&p.pdf);
+                (p.title, p.author, p.pages)
+            }
+            None => (info.title, info.author, info.page_count),
+        };
+        Ok(serde_json::json!({ "title": title, "author": author, "pages": pages, "cover": cover }))
     })
     .await
 }

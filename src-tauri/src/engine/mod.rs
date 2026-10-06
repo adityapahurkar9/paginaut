@@ -4,6 +4,7 @@ pub mod ffi;
 pub mod mupdf;
 pub mod ocr;
 mod pdfhtml;
+pub use pdfhtml::Preview as BookPreview;
 pub mod pool;
 pub mod table;
 
@@ -213,6 +214,12 @@ pub struct DocInfo {
     /// An EPUB made from a PDF, shown as the PDF it was made from (pdfhtml.rs; `converted` says from
     /// which file); `save_repaired` makes a flowing EPUB of it.
     pub repaired: bool,
+}
+
+/// For the shelf's cover: an EPUB made from a PDF (pdfhtml.rs) as a PDF of its first page alone, with its title,
+/// author and pages (the caller removes the PDF). None for any other file, which opens as it is.
+pub fn book_preview(path: &str) -> Option<BookPreview> {
+    pdfhtml::preview(path, &mupdf::temp_dir())
 }
 
 /// A file to take pages from (all of them unless `pages` lists some, 0-based).

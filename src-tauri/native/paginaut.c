@@ -8777,7 +8777,8 @@ static void pinned_field(const char **s, const char *end, char *buf, size_t n)
  * Writes a PDF at `out` from the pages of a pdf2htmlEX EPUB, as pdfhtml.rs describes them in `script`, one
  * instruction per line (fields split by tabs; positions in CSS pixels, y measured down from the page's top):
  *   P w h                      a new page
- *   F id entry                 font `id` is the EPUB's file `entry`
+ *   F id entry std             font `id` is the EPUB's file `entry`, or (none given, or unreadable) the standard
+ *                              font `std` (Times-Roman, Helvetica-Bold…)
  *   I entry x y w h            a picture
  *   G id rgba abcd xy fs ls ws cont text
  *                              text in font `id`: colour and alpha; the line's matrix (CSS orientation); its
@@ -8833,27 +8834,34 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 			else if (op == 'F')
 			{
 				int id;
+				char std[64];
 				pinned_field(&s, end, field, sizeof field);
 				id = atoi(field);
 				pinned_field(&s, end, field, sizeof field);
+				pinned_field(&s, end, std, sizeof std);
+				if (!std[0])
+					fz_strlcpy(std, "Times-Roman", sizeof std);
 				if (id >= 0 && id < MAX_FONTS && !fonts[id])
 				{
-					fz_try(CTX)
+					if (field[0])
 					{
-						buf = fz_read_archive_entry(CTX, zip, field);
-						fonts[id] = fz_new_font_from_buffer(CTX, NULL, buf, 0, 0);
+						fz_try(CTX)
+						{
+							buf = fz_read_archive_entry(CTX, zip, field);
+							fonts[id] = fz_new_font_from_buffer(CTX, NULL, buf, 0, 0);
+						}
+						fz_always(CTX)
+						{
+							fz_drop_buffer(CTX, buf);
+							buf = NULL;
+						}
+						fz_catch(CTX)
+							fz_report_error(CTX);
 					}
-					fz_always(CTX)
-					{
-						fz_drop_buffer(CTX, buf);
-						buf = NULL;
-					}
-					fz_catch(CTX)
-					{
-						/* A font FreeType can't read: the lines keep their places in a standard one. */
-						fz_report_error(CTX);
-						fonts[id] = fz_new_base14_font(CTX, "Times-Roman");
-					}
+					/* A font the book doesn't carry, or one FreeType can't read: the lines keep their places,
+					 * and their text, in the nearest standard one. */
+					if (!fonts[id])
+						fonts[id] = fz_new_base14_font(CTX, std);
 				}
 			}
 			else if (op == 'I' && dev)

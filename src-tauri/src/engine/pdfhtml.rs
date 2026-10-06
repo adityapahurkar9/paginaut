@@ -19,28 +19,83 @@ use std::path::{Path, PathBuf};
 const MIN_PICTURE: usize = 20_000;
 
 /// The PDF the book was made from (drawn again in `temp`), when `path` is an EPUB made by pdf2htmlEX;
-/// None for any other file. Made once per file and run (see `clear`).
+/// None for any other file. Made once per file and run (see `clear`); a second open of the same book
+/// while it's being made waits for it.
 pub fn as_pdf(path: &str, temp: &Path) -> Option<String> {
+    let key = book_key(path)?;
+    let out = temp.join(format!("paginaut-book-{key:016x}.pdf"));
+    if out.exists() {
+        return Some(out.to_string_lossy().into_owned());
+    }
+    let lock = {
+        let mut building = BUILDING.lock();
+        match building.iter().find(|(k, _)| *k == key) {
+            Some((_, l)) => l.clone(),
+            None => {
+                let l = std::sync::Arc::new(parking_lot::Mutex::new(()));
+                building.push((key, l.clone()));
+                l
+            }
+        }
+    };
+    let _one = lock.lock();
+    if out.exists() {
+        return Some(out.to_string_lossy().into_owned());
+    }
+    let script = Pinned::script(&Source::read(path)?, usize::MAX)?;
+    let part = part_file(temp, "book", key);
+    let made = super::mupdf::pinned_pdf(path, &script, &part.to_string_lossy()).is_ok() && std::fs::rename(&part, &out).is_ok();
+    if !made {
+        let _ = std::fs::remove_file(&part);
+    }
+    BUILDING.lock().retain(|(k, _)| *k != key);
+    made.then(|| out.to_string_lossy().into_owned())
+}
+
+/// A book being made, and the lock a second open of it waits on.
+static BUILDING: parking_lot::Mutex<Vec<(u64, std::sync::Arc<parking_lot::Mutex<()>>)>> = parking_lot::Mutex::new(Vec::new());
+
+/// What a rebuilt book is known by: its path, size and date (a changed file is made again).
+fn book_key(path: &str) -> Option<u64> {
     if !path.to_ascii_lowercase().ends_with(".epub") {
         return None;
     }
     let meta = std::fs::metadata(path).ok()?;
     let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
-    let key = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        (path, meta.len(), mtime).hash(&mut h);
-        h.finish()
-    };
-    let out = temp.join(format!("paginaut-book-{key:016x}.pdf"));
-    if out.exists() {
-        return Some(out.to_string_lossy().into_owned());
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (path, meta.len(), mtime).hash(&mut h);
+    Some(h.finish())
+}
+
+/// A file being written, named for no one else to write at the same time.
+fn part_file(temp: &Path, what: &str, key: u64) -> PathBuf {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    temp.join(format!("paginaut-{what}-{key:016x}-{}-{n}.part", std::process::id()))
+}
+
+/// For the shelf: a pdf2htmlEX book's first page alone as a PDF (in `temp`, removed by the caller), its title,
+/// author and number of pages. Drawing one page is quick; the whole book is made only when it's opened.
+pub struct Preview {
+    pub pdf: String,
+    pub title: String,
+    pub author: String,
+    pub pages: usize,
+}
+
+pub fn preview(path: &str, temp: &Path) -> Option<Preview> {
+    let key = book_key(path)?;
+    let src = Source::read(path)?;
+    let script = Pinned::script(&src, 1)?;
+    let part = part_file(temp, "cover", key);
+    if super::mupdf::pinned_pdf(path, &script, &part.to_string_lossy()).is_err() {
+        let _ = std::fs::remove_file(&part);
+        return None;
     }
-    let script = Pinned::script(path)?;
-    let part = temp.join(format!("paginaut-book-{key:016x}.part"));
-    super::mupdf::pinned_pdf(path, &script, &part.to_string_lossy()).ok()?;
-    std::fs::rename(&part, &out).ok()?;
-    Some(out.to_string_lossy().into_owned())
+    let pdf = part.with_extension("pdf");
+    std::fs::rename(&part, &pdf).ok()?;
+    Some(Preview { pdf: pdf.to_string_lossy().into_owned(), title: element_text(&src.opf, "dc:title"), author: element_text(&src.opf, "dc:creator"), pages: src.page_count() })
 }
 
 /// Whether `path` (a document's file) is a book drawn again here.
@@ -60,7 +115,7 @@ pub fn title_author(path: &str) -> (String, String) {
 
 /// An ordinary, flowing EPUB at `target` made from the pdf2htmlEX EPUB at `path`.
 pub fn repaired_epub(path: &str, target: &str) -> Result<(), String> {
-    let book = Book::read(path).ok_or("This e-book isn't one made from a PDF.")?;
+    let book = Source::read(path).map(|s| Book::read(path, &s)).ok_or("This e-book isn't one made from a PDF.")?;
     let dir = Path::new(target).with_extension("parts");
     book.write(&dir).map_err(|e| e.to_string())?;
     let packed = pack(&dir, target);
@@ -145,7 +200,8 @@ fn crc32(data: &[u8]) -> u32 {
 pub fn clear(temp: &Path) {
     if let Ok(list) = std::fs::read_dir(temp) {
         for e in list.flatten() {
-            if e.file_name().to_string_lossy().starts_with("paginaut-book-") {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with("paginaut-book-") || name.starts_with("paginaut-cover-") {
                 let _ = if e.path().is_dir() { std::fs::remove_dir_all(e.path()) } else { std::fs::remove_file(e.path()) };
             }
         }
@@ -161,28 +217,47 @@ struct Css {
 }
 
 impl Css {
+    /// Reads a stylesheet (or a `<style>` element's text): rules for single classes, @font-face, and what's
+    /// inside @media blocks for the screen; @media print blocks are skipped whole, wherever they are
+    /// (pdf2htmlEX's base CSS has one in the middle).
     fn read(&mut self, css: &str, dir: &str) {
-        let css = css.split("@media print").next().unwrap_or(css);
+        // (Old pages wrap a <style>'s text in an HTML comment.)
+        let css = strip_comments(css).replace("<!--", "").replace("-->", "");
+        self.read_rules(&css, dir);
+    }
+
+    fn read_rules(&mut self, css: &str, dir: &str) {
         let mut rest = css;
         while let Some(open) = rest.find('{') {
-            let head = rest[..open].trim();
-            let Some(close) = rest[open..].find('}') else { break };
-            let body = &rest[open + 1..open + close];
-            rest = &rest[open + close + 1..];
-            if head.ends_with("@font-face") {
+            // What comes before a rule may end an earlier statement (`@charset "utf-8";`).
+            let head = rest[..open].rsplit(';').next().unwrap_or("").trim();
+            let Some(len) = block_len(&rest[open..]) else { break };
+            let body = &rest[open + 1..open + len];
+            rest = &rest[open + len + 1..];
+            if let Some(media) = head.strip_prefix("@media") {
+                let media = media.to_ascii_lowercase();
+                if !media.contains("print") || media.contains("screen") || media.contains("all") {
+                    self.read_rules(body, dir);
+                }
+                continue;
+            }
+            if head == "@font-face" {
                 let family = decl(body, "font-family").map(|f| f.trim_matches(['"', '\''])).unwrap_or("");
-                let url = body.find("url(").and_then(|i| body[i + 4..].split(')').next()).map(|u| u.trim_matches(['"', '\'']));
+                let url = body.find("url(").and_then(|i| body[i + 4..].split(')').next()).map(|u| u.trim().trim_matches(['"', '\'']));
                 if let (false, Some(url)) = (family.is_empty(), url) {
                     self.fonts.insert(family.to_string(), resolve(dir, url));
                 }
                 continue;
             }
-            // A rule's selectors ("…}.x1d" after a previous rule): only single classes matter here.
-            let sel = head.rsplit(['}', ';']).next().unwrap_or(head).trim();
-            if let Some(name) = sel.strip_prefix('.') {
-                if name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-                    self.rules.entry(name.to_string()).or_default().push_str(body);
-                    self.rules.get_mut(name).map(|r| r.push(';'));
+            if head.starts_with('@') {
+                continue;
+            }
+            // Only single classes matter here (".x1d", or each of ".a,.b").
+            for sel in head.split(',') {
+                if let Some(name) = sel.trim().strip_prefix('.').filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')) {
+                    let r = self.rules.entry(name.to_string()).or_default();
+                    r.push_str(body);
+                    r.push(';');
                 }
             }
         }
@@ -218,6 +293,127 @@ impl Css {
     }
 }
 
+/// The length of the block opening at `s[0]` (a `{`), up to its matching `}`.
+fn block_len(s: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, b) in s.bytes().enumerate() {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn strip_comments(css: &str) -> std::borrow::Cow<'_, str> {
+    if !css.contains("/*") {
+        return css.into();
+    }
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(i) = rest.find("/*") {
+        out.push_str(&rest[..i]);
+        rest = rest[i + 2..].find("*/").map_or("", |e| &rest[i + 2 + e + 2..]);
+    }
+    out.push_str(rest);
+    out.into()
+}
+
+/// The text of every `<style>` element in a page.
+fn style_elements(page: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = page;
+    while let Some(i) = rest.find("<style") {
+        let Some(open) = rest[i..].find('>').map(|e| i + e + 1) else { break };
+        let close = rest[open..].find("</style>").map_or(rest.len(), |e| open + e);
+        out.push(&rest[open..close]);
+        rest = &rest[close..];
+    }
+    out
+}
+
+/// A pdf2htmlEX EPUB as read for drawing again or for flowing: its zip entries, package file, pages (each
+/// spine entry and its text) and CSS (linked and in `<style>` elements). None for any other EPUB.
+struct Source {
+    names: HashSet<String>,
+    opf: String,
+    pages: Vec<(String, String)>,
+    css: Css,
+}
+
+impl Source {
+    fn read(path: &str) -> Option<Source> {
+        let names: HashSet<String> = zip_list(path).ok()?.into_iter().collect();
+        let text = |entry: &str| zip_read(path, entry).ok().flatten().map(|b| String::from_utf8_lossy(&b).into_owned());
+        let container = text("META-INF/container.xml")?;
+        let opf_entry = tags(&container, "rootfile").into_iter().find_map(|t| attr(t, "full-path"))?.to_string();
+        let opf = text(&opf_entry)?;
+        let base = folder(&opf_entry).to_string();
+        let manifest: HashMap<&str, &str> = tags(&opf, "item").into_iter().filter_map(|t| Some((attr(t, "id")?, attr(t, "href")?))).collect();
+        let spine: Vec<String> = tags(&opf, "itemref").into_iter().filter_map(|t| manifest.get(attr(t, "idref")?)).map(|h| resolve(&base, h)).collect();
+        // Only books whose first pages are pinned (checked before reading the rest).
+        if !spine.iter().take(3).filter_map(|e| text(e)).any(|p| is_pinned(&p)) {
+            return None;
+        }
+        let mut css = Css::default();
+        let mut css_read = HashSet::new();
+        let pages: Vec<(String, String)> = spine.iter().filter_map(|e| Some((e.clone(), text(e)?))).collect();
+        for (entry, page) in &pages {
+            for link in tags(page, "link") {
+                if let Some(href) = attr(link, "href").filter(|h| h.ends_with(".css")) {
+                    let e = resolve(folder(entry), href);
+                    if css_read.insert(e.clone()) {
+                        if let Some(s) = text(&e) {
+                            css.read(&s, folder(&e));
+                        }
+                    }
+                }
+            }
+            for style in style_elements(page) {
+                css.read(style, folder(entry));
+            }
+        }
+        Some(Source { names, opf, pages, css })
+    }
+
+    /// The book's pages (pdf2htmlEX's `pf` boxes).
+    fn page_count(&self) -> usize {
+        self.pages.iter().map(|(_, p)| tags(p, "div").iter().filter(|t| attr(t, "class").is_some_and(|c| c.split_whitespace().next() == Some("pf"))).count()).sum()
+    }
+}
+
+/// A standard font in place of one the book names but doesn't carry: its kind (serif, sans serif or fixed
+/// width), weight and slant.
+fn standard_font(rule: Option<&str>) -> &'static str {
+    let get = |prop: &str| rule.and_then(|r| decl(r, prop)).unwrap_or("").to_ascii_lowercase();
+    let family = get("font-family");
+    let weight = get("font-weight");
+    let bold = weight.contains("bold") || weight.parse::<u32>().is_ok_and(|w| w >= 600);
+    let slant = matches!(get("font-style").as_str(), "italic" | "oblique");
+    let fixed = ["mono", "courier", "consol"].iter().any(|k| family.contains(k));
+    let sans = !fixed && ["sans", "arial", "helvetica", "verdana", "calibri"].iter().any(|k| family.contains(k));
+    match (fixed, sans, bold, slant) {
+        (true, _, false, false) => "Courier",
+        (true, _, true, false) => "Courier-Bold",
+        (true, _, false, true) => "Courier-Oblique",
+        (true, _, true, true) => "Courier-BoldOblique",
+        (_, true, false, false) => "Helvetica",
+        (_, true, true, false) => "Helvetica-Bold",
+        (_, true, false, true) => "Helvetica-Oblique",
+        (_, true, true, true) => "Helvetica-BoldOblique",
+        (_, _, false, false) => "Times-Roman",
+        (_, _, true, false) => "Times-Bold",
+        (_, _, false, true) => "Times-Italic",
+        (_, _, true, true) => "Times-BoldItalic",
+    }
+}
+
 /// The value of `prop: value` among a rule's declarations (the last one given).
 fn decl<'a>(body: &'a str, prop: &str) -> Option<&'a str> {
     body.split(';').filter_map(|d| d.split_once(':')).filter(|(k, _)| k.trim() == prop).map(|(_, v)| v.trim()).last()
@@ -243,58 +439,37 @@ struct Pinned<'a> {
     css: &'a Css,
     out: String,
     fonts: HashMap<String, usize>,
+    /// Pages still to draw (the shelf's cover needs one).
+    pages_left: usize,
 }
 
 impl Pinned<'_> {
-    fn script(path: &str) -> Option<String> {
-        let names: HashSet<String> = zip_list(path).ok()?.into_iter().collect();
-        let text = |entry: &str| zip_read(path, entry).ok().flatten().map(|b| String::from_utf8_lossy(&b).into_owned());
-        let container = text("META-INF/container.xml")?;
-        let opf_entry = tags(&container, "rootfile").into_iter().find_map(|t| attr(t, "full-path"))?.to_string();
-        let opf = text(&opf_entry)?;
-        let base = folder(&opf_entry).to_string();
-        let manifest: HashMap<&str, &str> = tags(&opf, "item").into_iter().filter_map(|t| Some((attr(t, "id")?, attr(t, "href")?))).collect();
-        let spine: Vec<String> = tags(&opf, "itemref").into_iter().filter_map(|t| manifest.get(attr(t, "idref")?)).map(|h| resolve(&base, h)).collect();
-        if !spine.iter().take(3).filter_map(|e| text(e)).any(|p| is_pinned(&p)) {
-            return None;
-        }
-        let mut css = Css::default();
-        let mut css_read = HashSet::new();
-        let pages: Vec<(String, String)> = spine.iter().filter_map(|e| Some((e.clone(), text(e)?))).collect();
-        for (entry, page) in &pages {
-            for link in tags(page, "link") {
-                if let Some(href) = attr(link, "href").filter(|h| h.ends_with(".css")) {
-                    let e = resolve(folder(entry), href);
-                    if css_read.insert(e.clone()) {
-                        if let Some(s) = text(&e) {
-                            css.read(&s, folder(&e));
-                        }
-                    }
-                }
-            }
-            if let Some(i) = page.find("<style") {
-                if let Some(end) = page[i..].find("</style>") {
-                    css.read(&page[i..i + end], folder(entry));
-                }
-            }
-        }
-        let mut p = Pinned { css: &css, out: String::new(), fonts: HashMap::new() };
+    /// The instructions for the book's first `max_pages` pages; None when none could be drawn.
+    fn script(src: &Source, max_pages: usize) -> Option<String> {
+        let mut p = Pinned { css: &src.css, out: String::new(), fonts: HashMap::new(), pages_left: max_pages };
         let mut drawn = 0;
-        for (entry, page) in &pages {
-            drawn += p.page(page, folder(entry), &names) as usize;
+        for (entry, page) in &src.pages {
+            if p.pages_left == 0 {
+                break;
+            }
+            drawn += p.page(page, folder(entry), &src.names) as usize;
         }
         (drawn > 0).then_some(p.out)
     }
 
-    fn font_id(&mut self, family: &str) -> Option<usize> {
-        if let Some(&id) = self.fonts.get(family) {
-            return Some(id);
+    /// The id of the font a line's ff class names: its file in the EPUB (as the class's font-family, or the
+    /// class's own name, names it), and the standard font to use when there's none or it can't be read.
+    fn font_id(&mut self, class: &str) -> usize {
+        if let Some(&id) = self.fonts.get(class) {
+            return id;
         }
-        let file = self.css.fonts.get(family)?;
+        let rule = self.css.rules.get(class).map(String::as_str);
+        let family = rule.and_then(|r| decl(r, "font-family")).map(|f| f.split(',').next().unwrap_or("").trim().trim_matches(['"', '\'']));
+        let file = family.and_then(|f| self.css.fonts.get(f)).or_else(|| self.css.fonts.get(class)).map_or("", String::as_str);
         let id = self.fonts.len();
-        let _ = writeln!(self.out, "F\t{id}\t{file}");
-        self.fonts.insert(family.to_string(), id);
-        Some(id)
+        let _ = writeln!(self.out, "F\t{id}\t{file}\t{}", standard_font(rule));
+        self.fonts.insert(class.to_string(), id);
+        id
     }
 
     fn style(&self, classes: &str, base: &Style) -> Style {
@@ -358,9 +533,10 @@ impl Pinned<'_> {
                     let first = classes.split_whitespace().next().unwrap_or("");
                     if first == "pf" {
                         let (w, h) = (at(classes, "w", "width"), at(classes, "h", "height"));
-                        if w <= 0.0 || h <= 0.0 {
+                        if w <= 0.0 || h <= 0.0 || self.pages_left == 0 {
                             return started;
                         }
+                        self.pages_left -= 1;
                         page_h = h;
                         started = true;
                         let _ = writeln!(self.out, "P\t{w} {h}");
@@ -449,7 +625,7 @@ impl Pinned<'_> {
             return;
         }
         let text = std::mem::take(run);
-        let Some(id) = self.font_id(&st.font) else { return };
+        let id = self.font_id(&st.font);
         // Hidden text keeps its place for searching and copying, unseen.
         let alpha = if self.css.hidden(&st.font) { 0.0 } else { st.color[3] };
         let [r, g, b, _] = st.color;
@@ -642,40 +818,6 @@ fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-/// The numbers pdf2htmlEX's classes stand for: `.x1d{left:72px}`, `.y69{bottom:540px}`,
-/// `.fsb{font-size:40px}`, `.m2{transform:matrix(0.25,…)}` (screen rules only, not the print ones).
-fn read_css(css: &str, into: &mut HashMap<String, f32>) {
-    let css = css.split("@media print").next().unwrap_or(css);
-    let mut rest = css;
-    while let Some(i) = rest.find('.') {
-        rest = &rest[i + 1..];
-        let name_end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(rest.len());
-        let name = &rest[..name_end];
-        let after = &rest[name_end..];
-        if name.is_empty() || !after.starts_with('{') {
-            continue;
-        }
-        let Some(close) = after.find('}') else { break };
-        let body = &after[1..close];
-        let px = |prop: &str| {
-            body.split(';').find_map(|d| d.trim().strip_prefix(prop)?.trim_start().strip_prefix(':')?.trim().strip_suffix("px")?.parse::<f32>().ok())
-        };
-        let value = match name.as_bytes()[0] {
-            b'x' => px("left"),
-            b'y' => px("bottom"),
-            b'f' if name.starts_with("fs") => px("font-size"),
-            b'm' => body.find("matrix(").and_then(|i| {
-                let v: Vec<f32> = body[i + 7..].split([',', ')']).take(2).filter_map(|n| n.trim().parse().ok()).collect();
-                (v.len() == 2).then(|| (v[0] * v[0] + v[1] * v[1]).sqrt())
-            }),
-            _ => None,
-        };
-        if let Some(v) = value {
-            into.insert(name.to_string(), v);
-        }
-        rest = &after[close..];
-    }
-}
 
 /// A pdf2htmlEX page: pinned pages (`class="pf …"`) of pinned lines (`class="t …"`).
 fn is_pinned(page: &str) -> bool {
@@ -684,42 +826,8 @@ fn is_pinned(page: &str) -> bool {
 }
 
 impl Book {
-    fn read(path: &str) -> Option<Book> {
-        let names: HashSet<String> = zip_list(path).ok()?.into_iter().collect();
-        let text = |entry: &str| zip_read(path, entry).ok().flatten().map(|b| String::from_utf8_lossy(&b).into_owned());
-        let container = text("META-INF/container.xml")?;
-        let opf_entry = tags(&container, "rootfile").into_iter().find_map(|t| attr(t, "full-path"))?.to_string();
-        let opf = text(&opf_entry)?;
-        let base = folder(&opf_entry).to_string();
-        let manifest: HashMap<&str, &str> = tags(&opf, "item").into_iter().filter_map(|t| Some((attr(t, "id")?, attr(t, "href")?))).collect();
-        let spine: Vec<String> = tags(&opf, "itemref").into_iter().filter_map(|t| manifest.get(attr(t, "idref")?)).map(|h| resolve(&base, h)).collect();
-        // Only books whose first pages are pinned.
-        if !spine.iter().take(3).filter_map(|e| text(e)).any(|p| is_pinned(&p)) {
-            return None;
-        }
-        let mut css = HashMap::new();
-        let mut css_read = HashSet::new();
-        let mut pages = Vec::new();
-        for entry in &spine {
-            let Some(page) = text(entry) else { continue };
-            let dir = folder(entry);
-            for link in tags(&page, "link") {
-                if let Some(href) = attr(link, "href").filter(|h| h.ends_with(".css")) {
-                    let e = resolve(dir, href);
-                    if css_read.insert(e.clone()) {
-                        if let Some(s) = text(&e) {
-                            read_css(&s, &mut css);
-                        }
-                    }
-                }
-            }
-            if let Some(i) = page.find("<style") {
-                if let Some(end) = page[i..].find("</style>") {
-                    read_css(&page[i..i + end], &mut css);
-                }
-            }
-            pages.push(read_page(&page, dir, &css, &names));
-        }
+    fn read(path: &str, src: &Source) -> Book {
+        let pages: Vec<Page> = src.pages.iter().map(|(entry, page)| read_page(page, folder(entry), &src.css, &src.names)).collect();
         let mut pictures = Vec::new();
         let blocks = assemble(pages, &mut |entry: &str| {
             let bytes = zip_read(path, entry).ok().flatten()?;
@@ -728,7 +836,8 @@ impl Book {
                 pictures.len() - 1
             })
         });
-        Some(Book { title: element_text(&opf, "dc:title"), creator: element_text(&opf, "dc:creator"), language: element_text(&opf, "dc:language"), blocks, pictures })
+        let opf = &src.opf;
+        Book { title: element_text(opf, "dc:title"), creator: element_text(opf, "dc:creator"), language: element_text(opf, "dc:language"), blocks, pictures }
     }
 
     fn write(&self, dir: &Path) -> std::io::Result<()> {
@@ -788,7 +897,7 @@ impl Book {
     }
 }
 
-fn read_page(page: &str, dir: &str, css: &HashMap<String, f32>, names: &HashSet<String>) -> Page {
+fn read_page(page: &str, dir: &str, css: &Css, names: &HashSet<String>) -> Page {
     let pictures = tags(page, "img").into_iter().filter_map(|t| attr(t, "src")).map(|s| resolve(dir, s)).filter(|e| names.contains(e)).collect();
     let mut lines = Vec::new();
     let mut from = 0;
@@ -802,9 +911,11 @@ fn read_page(page: &str, dir: &str, css: &HashMap<String, f32>, names: &HashSet<
         if text.is_empty() {
             continue;
         }
-        let get = |prefix: &str| classes.split_whitespace().filter(|c| c.len() > prefix.len() && c.starts_with(prefix) && c[prefix.len()..].bytes().all(|b| b.is_ascii_hexdigit())).find_map(|c| css.get(c).copied());
-        let size = get("fs").unwrap_or(0.0) * get("m").unwrap_or(1.0);
-        lines.push(Line { text, x: get("x").unwrap_or(0.0), y: get("y").unwrap_or(0.0), size: (size * 100.0).round() / 100.0 });
+        let px = |prefix: &str, prop: &str| class_of(classes, prefix).and_then(|c| css.px(c, prop));
+        // The size the line is seen at: its type size times its matrix's scale.
+        let scale = class_of(classes, "m").and_then(|c| css.matrix(c)).map_or(1.0, |m| (m[0] * m[0] + m[1] * m[1]).sqrt());
+        let size = px("fs", "font-size").unwrap_or(0.0) * scale;
+        lines.push(Line { text, x: px("x", "left").unwrap_or(0.0), y: px("y", "bottom").unwrap_or(0.0), size: (size * 100.0).round() / 100.0 });
     }
     Page { lines, pictures }
 }
@@ -976,12 +1087,33 @@ mod tests {
 
     #[test]
     fn css_numbers() {
-        let mut m = HashMap::new();
-        read_css(".x1d{left:72.5px;}.y69{bottom:540px;}.fsb{font-size:40px;}.m2{transform:matrix(0.25,0,0,0.25,0,0);}@media print{.x1d{left:9pt;}}", &mut m);
-        assert_eq!(m["x1d"], 72.5);
-        assert_eq!(m["y69"], 540.0);
-        assert_eq!(m["fsb"], 40.0);
-        assert!((m["m2"] - 0.25).abs() < 1e-6);
+        let mut c = Css::default();
+        // A print block in the middle (as in pdf2htmlEX's base CSS), a comment, a screen block and a group.
+        c.read("/*! pdf2htmlEX {x} */.x1d{left:72.5px;}@media print{.x1d{left:9pt;}.pf{margin:0}}.y69{bottom:540px;}@media screen{.fsb{font-size:40px;}}.m2,.m3{transform:matrix(0.25,0,0,0.25,0,0);}@font-face{font-family:ff1;src:url(f1.woff)format(\"woff\");}", "OEBPS/");
+        assert_eq!(c.px("x1d", "left"), Some(72.5));
+        assert_eq!(c.px("y69", "bottom"), Some(540.0));
+        assert_eq!(c.px("fsb", "font-size"), Some(40.0));
+        assert_eq!(c.matrix("m3"), Some([0.25, 0.0, 0.0, 0.25]));
+        assert_eq!(c.fonts.get("ff1").map(String::as_str), Some("OEBPS/f1.woff"));
+    }
+
+    #[test]
+    fn every_style_element() {
+        let page = "<head><style type=\"text/css\">.a{left:1px}</style><style>@media print{.b{left:9pt}}.b{left:2px}</style></head>";
+        let mut c = Css::default();
+        for s in style_elements(page) {
+            c.read(s, "");
+        }
+        assert_eq!(c.px("a", "left"), Some(1.0));
+        assert_eq!(c.px("b", "left"), Some(2.0));
+    }
+
+    #[test]
+    fn standard_fonts() {
+        assert_eq!(standard_font(None), "Times-Roman");
+        assert_eq!(standard_font(Some("font-family:sans-serif;font-weight:bold")), "Helvetica-Bold");
+        assert_eq!(standard_font(Some("font-family:\"Courier New\";font-style:italic")), "Courier-Oblique");
+        assert_eq!(standard_font(Some("font-family:Georgia,serif;font-weight:700")), "Times-Bold");
     }
 
     #[test]
@@ -1017,5 +1149,82 @@ mod tests {
         assert!(names.iter().any(|n| n == "book.xhtml"));
         let e = super::super::mupdf::Document::open(&epub.to_string_lossy()).expect("opens");
         assert_eq!(e.metadata("format").as_deref(), Some("EPUB"));
+        // The shelf's preview: the first page alone, the whole book's count.
+        let t0 = std::time::Instant::now();
+        let p = preview(&path, &temp).expect("a preview");
+        println!("preview in {:?}: {:?} by {:?}, {} pages", t0.elapsed(), p.title, p.author, p.pages);
+        let one = super::super::mupdf::Document::open(&p.pdf).expect("opens");
+        assert_eq!(one.page_count().ok(), Some(1));
+        assert_eq!(Some(p.pages), doc.page_count().ok());
+        // Pages to look at (PAGINAUT_PDFHTML_PAGES=0,5,…), through the engine as the app opens the book.
+        if let Ok(list) = std::env::var("PAGINAUT_PDFHTML_PAGES") {
+            let engine = super::super::Engine::new(1, 64 << 20).expect("engine");
+            let info = engine.open(&path).expect("opens through the engine");
+            assert!(info.repaired);
+            for i in list.split(',').filter_map(|n| n.trim().parse::<usize>().ok()) {
+                let png = engine.doc(info.doc_id).unwrap().page_image(i, 0, "png", 110.0).expect("draws");
+                std::fs::write(temp.join(format!("page-{i}.png")), png).unwrap();
+            }
+            println!("pages drawn in {}", temp.display());
+        }
+    }
+
+    /// A book whose CSS is only in `<style>` elements (pdf2htmlEX's default), with a print block in the middle
+    /// of the first one, and a line in a font it doesn't carry: the line is drawn, in a standard font, and its
+    /// text can be found.
+    #[test]
+    fn styles_inside_and_a_font_not_carried() {
+        let _ = super::super::mupdf::init(64 << 20);
+        let temp = std::env::temp_dir().join(format!("paginaut-pdfhtml-styles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let dir = temp.join("book");
+        std::fs::create_dir_all(dir.join("META-INF")).unwrap();
+        std::fs::write(dir.join("mimetype"), "application/epub+zip").unwrap();
+        std::fs::write(
+            dir.join("META-INF/container.xml"),
+            r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("content.opf"),
+            r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title></metadata><manifest><item id="p1" href="page.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="p1"/></spine></package>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("page.xhtml"),
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style type="text/css">.pf{position:relative}@media print{.pf{margin:0}}.t{position:absolute}</style><style type="text/css">.ff1{font-family:sans-serif;font-weight:bold;visibility:visible;}.fs0{font-size:24px;}.fc0{color:rgb(0,0,0);}.m0{transform:matrix(1,0,0,1,0,0);}.x0{left:50px;}.y0{bottom:300px;}.w0{width:400px;}.h0{height:400px;}</style></head><body><div class="pf w0 h0"><div class="t m0 x0 y0 ff1 fs0 fc0">Hello <span class="_ _0"> </span>pinned world</div></div></body></html>"#,
+        )
+        .unwrap();
+        let epub = temp.join("styles.epub");
+        pack(&dir, &epub.to_string_lossy()).unwrap();
+        let pdf = as_pdf(&epub.to_string_lossy(), &temp).expect("drawn as a PDF");
+        let doc = super::super::mupdf::Document::open(&pdf).unwrap();
+        let page = doc.load_page(0).unwrap();
+        let b = page.bounds().unwrap();
+        assert_eq!([b[2] - b[0], b[3] - b[1]], [400.0, 400.0]);
+        let text = page.display_list(0).unwrap().text().unwrap();
+        assert!(!text.search(&b, "Hello").unwrap().is_empty());
+        assert!(!text.search(&b, "pinned world").unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// Two opens of one book at once: one build, both get the same whole PDF.
+    #[test]
+    fn real_book_twice() {
+        let Ok(path) = std::env::var("PAGINAUT_PDFHTML") else { return };
+        let _ = super::super::mupdf::init(64 << 20);
+        let temp = std::env::temp_dir().join("paginaut-pdfhtml-twice");
+        let _ = std::fs::remove_dir_all(&temp);
+        let _ = std::fs::create_dir_all(&temp);
+        let both: Vec<Option<String>> = std::thread::scope(|s| {
+            let a = s.spawn(|| as_pdf(&path, &temp));
+            let b = s.spawn(|| as_pdf(&path, &temp));
+            vec![a.join().unwrap(), b.join().unwrap()]
+        });
+        assert!(both[0].is_some() && both[0] == both[1]);
+        let doc = super::super::mupdf::Document::open(both[0].as_ref().unwrap()).expect("a whole PDF");
+        assert!(doc.page_count().unwrap() > 1);
+        // No half-made files left.
+        assert!(std::fs::read_dir(&temp).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().ends_with(".part")));
     }
 }
