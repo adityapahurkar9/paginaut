@@ -2,10 +2,11 @@
 // where the shelf looks (chosen folders, all-files access).
 import { useRef, useState } from "preact/hooks";
 import { BookOpen, Folder, FolderPlus, Images, RefreshCw, X } from "lucide-preact";
+import { coverUrl } from "../api";
 import { native } from "./native";
 import { pushLayer } from "./nav";
 import { progressOf, storage } from "./records";
-import { addFolder, COVER_BASE, openShelf, removeFolder, scanning, scanShelf, sections, shelf, shelfOn, type ShelfItem, type Shelved } from "./shelf";
+import { addFolder, openShelf, removeFolder, scanning, scanShelf, sections, shelf, shelfOn, type ShelfItem, type Shelved } from "./shelf";
 import { load, save, sheet } from "./state";
 import { SortToggle, type SortState } from "./SortToggle";
 
@@ -101,7 +102,7 @@ function Tile({ s, progress }: { s: Shelved; progress?: boolean }) {
   return (
     <button class="tile" onClick={() => void openShelf(s.it)} title={s.it.name}>
       <span class="cover" style={s.m?.cover ? undefined : { background: bg, color: fg }}>
-        {s.m?.cover ? <img src={`${COVER_BASE}?f=${s.it.fp}`} alt="" loading="lazy" /> : <span class="cover-t">{s.title}</span>}
+        {s.m?.cover ? <img src={coverUrl(s.it.fp)} alt="" loading="lazy" /> : <span class="cover-t">{s.title}</span>}
       </span>
       {progress && (
         <span class="tile-bar">

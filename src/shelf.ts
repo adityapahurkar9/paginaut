@@ -34,8 +34,6 @@ interface Place {
   at: number;
 }
 
-export const COVER_BASE = /Windows|Android/.test(navigator.userAgent) ? "http://paginaut.localhost/cover" : "paginaut://localhost/cover";
-
 /** The folders looked in; null until changed: Documents, Downloads and the Desktop. */
 export const shelfFolders = signal<string[] | null>(load("paginaut.shelf.folders", { list: null as string[] | null }).list);
 export const shelf = signal<ShelfItem[]>(load("paginaut.shelf", { list: [] as ShelfItem[] }).list);

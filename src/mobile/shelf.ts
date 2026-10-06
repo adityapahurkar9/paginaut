@@ -38,7 +38,6 @@ export const shelfOn = computed(() => {
   return !!st && (st.allFiles || st.folders.length > 0);
 });
 
-export const COVER_BASE = /Windows|Android/.test(navigator.userAgent) ? "http://paginaut.localhost/cover" : "paginaut://localhost/cover";
 
 /** The record of a book on the shelf (opened before, here or sent by another app). */
 export function recordFor(it: ShelfItem, list: ReadRecord[] = records.value): ReadRecord | undefined {

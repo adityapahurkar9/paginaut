@@ -2,8 +2,9 @@
 // parts: being read, the rest, and finished. Search, sort, and the folders looked in.
 import { useEffect, useState } from "preact/hooks";
 import { FolderPlus, RefreshCw, Search, X } from "lucide-preact";
+import { coverUrl } from "../api";
 import { SortToggle, type SortState } from "../mobile/SortToggle";
-import { addFolder, COVER_BASE, defaultFolders, metas, openBook, removeFolder, scanIfStale, scanning, scanShelf, sections, shelf, shelfFolders, type ShelfKind, type ShelfSort, type Shelved } from "../shelf";
+import { addFolder, defaultFolders, metas, openBook, removeFolder, scanIfStale, scanning, scanShelf, sections, shelf, shelfFolders, type ShelfKind, type ShelfSort, type Shelved } from "../shelf";
 
 const SORT_KEY = "paginaut.shelf.sort";
 function loadSort(): SortState<ShelfSort> {
@@ -132,7 +133,7 @@ function Tile({ b }: { b: Shelved }) {
   return (
     <button class="book" onClick={() => openBook(b.it)} title={b.it.path}>
       <span class="book-cover" style={m?.cover ? undefined : { background: `hsl(${hue(b.it.fp || b.it.name)} 32% 38%)` }}>
-        {m?.cover ? <img src={`${COVER_BASE}?f=${b.it.fp}`} alt="" loading="lazy" draggable={false} /> : <span class="book-plain">{b.title}</span>}
+        {m?.cover ? <img src={coverUrl(b.it.fp)} alt="" loading="lazy" draggable={false} /> : <span class="book-plain">{b.title}</span>}
         {b.progress !== null && (
           <span class="book-prog" aria-label={`${Math.round(b.progress * 100)}% read`}>
             <span style={{ width: `${Math.max(3, b.progress * 100)}%` }} />

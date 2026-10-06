@@ -620,8 +620,11 @@ let nextId = 1;
 /** Ids for cancellable requests (renders, searches). Never 0 (reserved for "anonymous"). */
 export const newId = () => nextId++;
 
-/** Base URL of the custom pixel protocol (Windows and Android serve custom schemes over http://<scheme>.localhost). */
-const RENDER_BASE = /Windows|Android/.test(navigator.userAgent) ? "http://paginaut.localhost/render" : "paginaut://localhost/render";
+/** Base URL of Paginaut's own protocol (Windows and Android serve custom schemes over http://<scheme>.localhost). */
+export const PROTOCOL_BASE = /Windows|Android/.test(navigator.userAgent) ? "http://paginaut.localhost" : "paginaut://localhost";
+const RENDER_BASE = `${PROTOCOL_BASE}/render`;
+/** A shelf book's cover, by its fingerprint (app.rs book_cover). */
+export const coverUrl = (fp: string) => `${PROTOCOL_BASE}/cover?f=${fp}`;
 
 export interface RenderParams {
   doc: number;
