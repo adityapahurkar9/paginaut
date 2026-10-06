@@ -2748,7 +2748,7 @@ dependencies = [
 
 [[package]]
 name = "paginaut"
-version = "0.8.11"
+version = "0.8.12"
 dependencies = [
  "cc",
  "chacha20poly1305",
