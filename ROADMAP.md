@@ -685,6 +685,18 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
 - [ ] Release signing key (the user's), store listing, AAB upload; source made public first (AGPL)
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
+### 0.8.14: review fixes for windows and tabs
+- [x] Alt+` works where Windows' input methods take the key press for themselves (only its release reaches the
+      page: the release then counts); the chosen tab is checked to still be open
+- [x] A dragged tab shows under the pointer everywhere, outside the window too: a small label in the app's colours
+      that says where it will go (along the tabs, into another window by name, or a new window); the tab itself
+      lifts in the strip. Windows draws it natively (dragghost.rs); elsewhere the page draws it inside the window
+- [x] A file already open in another window isn't opened twice (the two copies could overwrite each other's saves):
+      that window comes forward at its tab; a tab isn't moved into a window that has the same file
+- [x] A Book-mode tab moved to another window leaves full screen behind; files sent to a window still starting up
+      wait for it; Stop for Convert and Compare by job, not by window; the last window closes without closing each
+      document first; the switcher's preview uses the renders the pages already have
+
 ### 0.8.13: several windows, tab switcher
 - [x] Several windows in one Paginaut (src-tauri/src/appwindows.rs, src/windows.ts): Ctrl+N or File › New window;
       starting Paginaut again without a file opens a window, a file opened from Explorer goes to the window used

@@ -8,8 +8,7 @@
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// What a new window starts with: files to open, or a tab moved from another window (the page's own record of
@@ -23,7 +22,10 @@ pub struct WindowStart {
 /// What a window told us about itself (see `window_report`).
 #[derive(Default)]
 struct Report {
-    title: String,
+    /// What other windows' menus call it (its documents).
+    summary: String,
+    /// The files open in it (lower case), so a file already open elsewhere isn't opened twice.
+    paths: Vec<String>,
     dirty: bool,
 }
 
@@ -42,30 +44,9 @@ impl Windows {
     }
 }
 
-/// A window's number: 0 for "main", n for "w-n". The page uses it to keep its request ids apart from other
-/// windows' (they share the engine's cancel ids).
+/// A window's number: 0 for "main", n for "w-n" (the page counts its request ids from it too, api.ts).
 pub fn window_index(label: &str) -> u64 {
     label.strip_prefix("w-").and_then(|n| n.parse().ok()).unwrap_or(0)
-}
-
-/// Each window's Stop for a kind of job, so a Stop in one window leaves another window's job running.
-pub struct StopFlags(Mutex<Option<HashMap<String, Arc<AtomicBool>>>>);
-
-impl StopFlags {
-    pub const fn new() -> Self {
-        StopFlags(Mutex::new(None))
-    }
-    /// A fresh flag for a job starting in `label`.
-    pub fn start(&self, label: &str) -> Arc<AtomicBool> {
-        let flag = Arc::new(AtomicBool::new(false));
-        self.0.lock().get_or_insert_with(HashMap::new).insert(label.to_owned(), flag.clone());
-        flag
-    }
-    pub fn stop(&self, label: &str) {
-        if let Some(f) = self.0.lock().as_ref().and_then(|m| m.get(label)) {
-            f.store(true, Ordering::Release);
-        }
-    }
 }
 
 /// Window setup that needs the window itself (each window, "main" included): touchpad pinches and Snap Layouts on
@@ -162,7 +143,15 @@ pub fn forward_files(app: &AppHandle, files: Vec<String>) {
     if let Some(w) = last_window(app) {
         let _ = w.unminimize();
         let _ = w.set_focus();
-        let _ = app.emit_to(w.label(), "open-files", files);
+        // A window still starting up (its page not listening yet) takes them with what it starts with.
+        let state = app.state::<Windows>();
+        let mut starts = state.starts.lock();
+        if let Some(s) = starts.get_mut(w.label()) {
+            s.files.extend(files);
+        } else {
+            drop(starts);
+            let _ = app.emit_to(w.label(), "open-files", files);
+        }
     }
 }
 
@@ -212,7 +201,7 @@ pub fn window_list(window: WebviewWindow, state: State<'_, Windows>) -> Vec<Wind
         .into_keys()
         .filter(|l| l != window.label())
         .map(|label| {
-            let title = reports.get(&label).map(|r| r.title.clone()).unwrap_or_else(|| "Paginaut".into());
+            let title = reports.get(&label).map(|r| r.summary.clone()).unwrap_or_else(|| "Paginaut".into());
             WindowEntry { label, title }
         })
         .collect();
@@ -234,6 +223,8 @@ pub fn tab_send(app: AppHandle, label: String, tab: serde_json::Value, at_x: Opt
 #[serde(rename_all = "camelCase")]
 pub struct DropTarget {
     label: String,
+    /// What it's called (its documents).
+    title: String,
     /// The mouse across that window, in its page's pixels.
     x: f64,
 }
@@ -243,7 +234,7 @@ const STRIP: f64 = 44.0;
 
 /// The other Paginaut window whose tab strip is under the mouse, if any (a tab dropped there joins it).
 #[tauri::command]
-pub fn window_at(window: WebviewWindow) -> Option<DropTarget> {
+pub fn window_at(window: WebviewWindow, state: State<'_, Windows>) -> Option<DropTarget> {
     let app = window.app_handle();
     let c = app.cursor_position().ok()?;
     let wins = app.webview_windows();
@@ -272,16 +263,53 @@ pub fn window_at(window: WebviewWindow) -> Option<DropTarget> {
     let p = target.inner_position().ok()?;
     let scale = target.scale_factor().unwrap_or(1.0);
     let (x, y) = ((c.x - p.x as f64) / scale, (c.y - p.y as f64) / scale);
-    (y >= 0.0 && y < STRIP).then(|| DropTarget { label: target.label().to_owned(), x })
+    let title = state.reports.lock().get(target.label()).map(|r| r.summary.clone()).unwrap_or_else(|| "Paginaut".into());
+    (y >= 0.0 && y < STRIP).then(|| DropTarget { label: target.label().to_owned(), title, x })
 }
 
 /// The window's title (its current document, for the taskbar and Windows' own Alt+Tab), what the other windows'
-/// menus call it (its documents), and whether it has unsaved changes.
+/// menus call it (its documents), the files open in it, and whether it has unsaved changes.
 #[tauri::command]
-pub fn window_report(window: WebviewWindow, state: State<'_, Windows>, title: String, summary: String, dirty: bool) {
+pub fn window_report(window: WebviewWindow, state: State<'_, Windows>, title: String, summary: String, paths: Vec<String>, dirty: bool) {
     let full = if title.is_empty() { "Paginaut".to_owned() } else { format!("{title} - Paginaut") };
     let _ = window.set_title(&full);
-    state.reports.lock().insert(window.label().to_owned(), Report { title: summary, dirty });
+    let paths = paths.iter().map(|p| p.to_lowercase()).collect();
+    state.reports.lock().insert(window.label().to_owned(), Report { summary, paths, dirty });
+}
+
+/// The other window that has `path` open, if one has.
+#[tauri::command]
+pub fn window_with(window: WebviewWindow, state: State<'_, Windows>, path: String) -> Option<String> {
+    let path = path.to_lowercase();
+    state.reports.lock().iter().find(|(l, r)| *l != window.label() && r.paths.contains(&path)).map(|(l, _)| l.clone())
+}
+
+/// Brings window `label` forward at its tab for `path` (a file asked for here that's open there).
+#[tauri::command]
+pub fn tab_focus(app: AppHandle, label: String, path: String) -> Result<(), String> {
+    let win = app.get_webview_window(&label).ok_or("That window has closed.")?;
+    let _ = win.unminimize();
+    let _ = win.set_focus();
+    win.emit_to(label.as_str(), "focus-path", path).map_err(|e| e.to_string())
+}
+
+/// The tab being dragged, under the mouse even outside the window (`colors`: the theme's panel, text, muted text
+/// and accent). False where there's no such thing (the page then draws its own, inside the window).
+#[tauri::command]
+pub fn drag_ghost(name: String, hint: String, colors: [[u8; 3]; 4]) -> bool {
+    #[cfg(windows)]
+    return crate::dragghost::show(&name, &hint, colors);
+    #[cfg(not(windows))]
+    {
+        let _ = (name, hint, colors);
+        false
+    }
+}
+
+#[tauri::command]
+pub fn drag_ghost_hide() {
+    #[cfg(windows)]
+    crate::dragghost::hide();
 }
 
 /// Exit Paginaut: every window is asked to close (each asks about its own unsaved changes).

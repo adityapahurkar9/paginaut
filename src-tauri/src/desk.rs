@@ -1075,23 +1075,47 @@ pub async fn convert_options(office: State<'_, Arc<Office>>) -> Res<crate::conve
     blocking(move || Ok(crate::convert::options(&office))).await
 }
 
-/// Each window's Stop for its conversion (a Stop in one window leaves another's running).
-static CONVERT_STOP: crate::appwindows::StopFlags = crate::appwindows::StopFlags::new();
+/// The Stop of each running conversion or comparison, by the id the page gave the job (ids are unique across
+/// windows, see api.ts newId), so a Stop reaches that job alone.
+static JOB_STOPS: once_cell::sync::Lazy<Mutex<std::collections::HashMap<u64, Arc<std::sync::atomic::AtomicBool>>>> = once_cell::sync::Lazy::new(Default::default);
+
+/// A running job's Stop, forgotten when the job ends.
+struct JobStop(u64, Arc<std::sync::atomic::AtomicBool>);
+
+impl JobStop {
+    fn new(sid: u64) -> Self {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        JOB_STOPS.lock().insert(sid, flag.clone());
+        JobStop(sid, flag)
+    }
+}
+
+impl Drop for JobStop {
+    fn drop(&mut self) {
+        JOB_STOPS.lock().remove(&self.0);
+    }
+}
+
+fn stop_job(sid: u64) {
+    if let Some(f) = JOB_STOPS.lock().get(&sid) {
+        f.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
 
 /// The document's pages as Word, Excel, PowerPoint, pictures or text (see convert.rs).
 #[tauri::command]
 pub async fn convert_from_pdf(
-    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     office: State<'_, Arc<Office>>,
     req: crate::convert::Request,
+    sid: u64,
     on_event: Channel<DownloadEvent>,
 ) -> Res<crate::convert::Done> {
     let office = office.inner().clone();
     let engine = state.engine.clone();
-    let stop = CONVERT_STOP.start(window.label());
+    let job = JobStop::new(sid);
     blocking(move || {
-        crate::convert::run(&engine, &office, &req, &stop, &mut |done, total| {
+        crate::convert::run(&engine, &office, &req, &job.1, &mut |done, total| {
             let _ = on_event.send(DownloadEvent::Progress { done: done as u64, total: total as u64 });
         })
     })
@@ -1099,8 +1123,8 @@ pub async fn convert_from_pdf(
 }
 
 #[tauri::command]
-pub fn convert_stop(window: tauri::WebviewWindow) {
-    CONVERT_STOP.stop(window.label());
+pub fn convert_stop(sid: u64) {
+    stop_job(sid);
 }
 
 // ---------------------------------------------------------------- compare
@@ -1113,27 +1137,21 @@ pub enum CompareEvent {
     Pictures { done: usize, total: usize },
 }
 
-static COMPARE_STOP: crate::appwindows::StopFlags = crate::appwindows::StopFlags::new();
-/// Background work of a window's comparison runs under its own id, so Stop can cancel it (well clear of the ids
-/// the pages make, see windows::window_index).
-fn compare_sid(window: &tauri::WebviewWindow) -> u64 {
-    u64::MAX - 7 - crate::appwindows::window_index(window.label())
-}
-
-/// Lines two documents up word by word (see compare.rs).
+/// Lines two documents up word by word (see compare.rs). Its background work runs under `sid`, so Stop can
+/// cancel it.
 #[tauri::command]
 pub async fn compare_run(
-    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     a: crate::compare::SideReq,
     b: crate::compare::SideReq,
     options: crate::compare::Options,
+    sid: u64,
     on_event: Channel<CompareEvent>,
 ) -> Res<crate::compare::Outcome> {
     let engine = state.engine.clone();
-    let (stop, sid) = (COMPARE_STOP.start(window.label()), compare_sid(&window));
+    let job = JobStop::new(sid);
     blocking(move || {
-        crate::compare::run(&engine, &a, &b, options, sid, &stop, &|p| {
+        crate::compare::run(&engine, &a, &b, options, sid, &job.1, &|p| {
             let _ = on_event.send(match p {
                 crate::compare::Progress::Reading(side, done, total) => CompareEvent::Reading { side: side.into(), done, total },
                 crate::compare::Progress::Comparing => CompareEvent::Comparing,
@@ -1145,9 +1163,9 @@ pub async fn compare_run(
 }
 
 #[tauri::command]
-pub fn compare_stop(window: tauri::WebviewWindow, state: State<'_, AppState>) {
-    COMPARE_STOP.stop(window.label());
-    state.engine.cancel(compare_sid(&window));
+pub fn compare_stop(state: State<'_, AppState>, sid: u64) {
+    stop_job(sid);
+    state.engine.cancel(sid);
 }
 
 // ---------------------------------------------------------------- fonts (themes)

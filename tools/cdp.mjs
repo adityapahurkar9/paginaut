@@ -5,6 +5,7 @@
 //   node tools/cdp.mjs logs [ms]                print console messages/errors for a while
 //   node tools/cdp.mjs click x y [right]        a real mouse click (counts as a user gesture)
 //   node tools/cdp.mjs drag "x0 y0" "x1 y1"     a real left-button drag
+//   node tools/cdp.mjs mouse down|move|up x y  one step of a drag
 //   node tools/cdp.mjs key <Key>                a real key press (e.g. Escape)
 // CDP_EDGE=1 drives an Edge dialog WebView2 opened (e.g. a permission prompt) instead of the app.
 // CDP_WINDOW=<label> drives that Paginaut window ("main", "w-1"…; the first one found without it).
@@ -83,6 +84,12 @@ async function drive() {
       await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x0 + ((x1 - x0) * i) / 8, y: y0 + ((y1 - y0) * i) / 8, button: "left", buttons: 1 });
     await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: x1, y: y1, button: "left", buttons: 0, clickCount: 1 });
     console.log("dragged", x0, y0, "to", x1, y1);
+  } else if (cmd === "mouse") {
+    // mouse down|move|up x y: one step of a left-button drag (to look at things halfway through)
+    const [x, y] = [Number(arg2), Number(arg3)];
+    const type = { down: "mousePressed", move: "mouseMoved", up: "mouseReleased" }[arg];
+    await send("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons: arg === "up" ? 0 : 1, clickCount: 1 });
+    console.log("mouse", arg, x, y);
   } else if (cmd === "key") {
     await send("Input.dispatchKeyEvent", { type: "keyDown", key: arg, code: arg, windowsVirtualKeyCode: arg === "Escape" ? 27 : arg === "Enter" ? 13 : 0 });
     await send("Input.dispatchKeyEvent", { type: "keyUp", key: arg, code: arg, windowsVirtualKeyCode: arg === "Escape" ? 27 : arg === "Enter" ? 13 : 0 });

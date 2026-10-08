@@ -5,7 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import * as A from "./actions";
 import { api } from "./api";
-import { activeTab, closeTab, dialog, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs, openSettings, settingsOpen } from "./store";
+import { activeKey, activeTab, closeTab, dialog, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs, openSettings, settingsOpen } from "./store";
 import * as P from "./pages";
 import * as C from "./compare";
 import "./themes";
@@ -53,13 +53,21 @@ getCurrentWindow().onResized(() => {
 
 // Files passed on the command line or "Open with", or a tab moved here from another window; later, files from
 // a second launch. (Events for this window alone: the global listen would hear every window's.)
-api.windowStart().then((s) => {
+// Listening first: files that arrive before then come with the start instead (appwindows.rs forward_files).
+const thisWindow = getCurrentWebviewWindow();
+void Promise.all([
+  thisWindow.listen<string[]>("open-files", (e) => openFiles(e.payload)),
+  thisWindow.listen<{ tab: TabTransfer; atX: number | null }>("tab-arrive", (e) => attachTab(e.payload.tab, e.payload.atX == null ? undefined : stripIndexAt(e.payload.atX))),
+  // A file asked for in another window, open here: its tab comes forward.
+  thisWindow.listen<string>("focus-path", (e) => {
+    const t = tabs.value.find((x) => x.path.toLowerCase() === e.payload.toLowerCase());
+    if (t) activeKey.value = t.key;
+  }),
+]).then(async () => {
+  const s = await api.windowStart();
   if (s.files.length) void openFiles(s.files);
   if (s.tab) attachTab(s.tab as TabTransfer);
 });
-const thisWindow = getCurrentWebviewWindow();
-void thisWindow.listen<string[]>("open-files", (e) => openFiles(e.payload));
-void thisWindow.listen<{ tab: TabTransfer; atX: number | null }>("tab-arrive", (e) => attachTab(e.payload.tab, e.payload.atX == null ? undefined : stripIndexAt(e.payload.atX)));
 
 // The window's title names its document (for the taskbar and Windows' Alt+Tab); unsaved changes are reported too,
 // so an update waits for them in every window.
@@ -68,7 +76,7 @@ effect(() => {
   const n = tabs.value.length;
   // How other windows' "Move tab to window" names this one.
   const summary = !n ? "Home" : n === 1 ? tabs.value[0].name : `${name || tabs.value[0].name} and ${n - 1} more`;
-  void api.windowReport(name, summary, tabs.value.some((x) => x.dirty.value)).catch(() => {});
+  void api.windowReport(name, summary, tabs.value.map((t) => t.path), tabs.value.some((x) => x.dirty.value)).catch(() => {});
 });
 
 // Drag and drop from Explorer.
@@ -97,7 +105,8 @@ getCurrentWindow().onCloseRequested(async (event) => {
   event.preventDefault();
   for (const t of tabs.value.filter((t) => t.dirty.value)) if (!(await closeTab(t))) return;
   if (C.compare.value) C.closeCompare();
-  await Promise.allSettled(tabs.value.map((t) => t.info.value && api.close(t.info.value.docId)));
+  // The other windows carry on: this one's documents close (the last window's go with the app).
+  if ((await api.windowList().catch(() => [])).length) await Promise.allSettled(tabs.value.map((t) => t.info.value && api.close(t.info.value.docId)));
   await getCurrentWindow().destroy();
 });
 

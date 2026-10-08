@@ -5,9 +5,10 @@
 import { signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { FileDiff, House } from "lucide-preact";
-import { api, fetchRender, newId } from "../api";
 import { COMPARE, compare } from "../compare";
-import { activeKey, isHome, tabs, tabsByUse, type Tab } from "../store";
+import { renderer, renderKey, type Bitmap } from "../render/RenderManager";
+import { LO_SCALE, paint } from "../render/Viewer";
+import { activeKey, dialog, isHome, settingsOpen, tabs, tabsByUse, type Tab } from "../store";
 import { tabIcon } from "./App";
 
 interface State {
@@ -38,32 +39,53 @@ function close(commit: boolean) {
   const s = state.value;
   clearTimeout(showTimer);
   state.value = null;
-  if (commit && s) activeKey.value = s.keys[s.sel];
+  // (A tab that closed meanwhile isn't switched to.)
+  const key = s?.keys[s.sel];
+  if (commit && key && tabsByUse().includes(key)) activeKey.value = key;
 }
+
+/** Alt+` (Alt+~ with Shift): opens the switcher, or steps through it. */
+function press(back: boolean) {
+  if (!state.value) open(back);
+  else step(back ? -1 : 1);
+}
+
+const isSwitchKey = (e: KeyboardEvent) => e.code === "Backquote" && e.altKey && !e.ctrlKey && !e.metaKey;
+/** The last Alt+` was seen pressed (not only let go of, see the keyup handler). */
+let pressSeen = false;
 
 /** The keyboard handler's first stop: true when the key was the switcher's (Alt+`, or any key while it's open). */
 export function switcherKey(e: KeyboardEvent): boolean {
-  const backquote = e.code === "Backquote";
-  if (!state.value) {
-    if (!(backquote && e.altKey && !e.ctrlKey && !e.metaKey)) return false;
-    if (!e.repeat) open(e.shiftKey);
+  if (isSwitchKey(e)) {
+    pressSeen = true;
+    if (!e.repeat || state.value) press(e.shiftKey);
     return true;
   }
-  if (backquote) step(e.shiftKey ? -1 : 1);
-  else if (e.key === "ArrowDown" || e.key === "ArrowRight" || e.key === "Tab") step(e.shiftKey && e.key === "Tab" ? -1 : 1);
+  if (!state.value) return false;
+  if (e.key === "ArrowDown" || e.key === "ArrowRight" || e.key === "Tab") step(e.shiftKey && e.key === "Tab" ? -1 : 1);
   else if (e.key === "ArrowUp" || e.key === "ArrowLeft") step(-1);
   else if (e.key === "Enter") close(true);
   else if (e.key === "Escape") close(false);
   return true;
 }
 
-// Letting go of Alt switches; the window losing focus (Windows' own Alt+Tab) leaves things as they were.
 window.addEventListener("keyup", (e) => {
+  if (dialog.value || settingsOpen.value) return;
+  // Some Windows set-ups (input methods) take the press of Alt+` for themselves and only its release reaches the
+  // page: then the release counts as the press.
+  if (isSwitchKey(e)) {
+    e.preventDefault();
+    if (!pressSeen) press(e.shiftKey);
+    pressSeen = false;
+    return;
+  }
+  // Letting go of Alt switches.
   if (state.value && e.key === "Alt") {
     e.preventDefault();
     close(true);
   }
 });
+// The window losing focus (Windows' own Alt+Tab) leaves things as they were.
 window.addEventListener("blur", () => close(false));
 
 /** For the command palette: opens the switcher shown, for picking with the mouse or arrows and Enter. */
@@ -86,7 +108,11 @@ function describe(key: string): { icon: preact.ComponentChild; name: string; sub
   return { icon: tabIcon(t), name: t.name, sub, dirty: t.dirty.value, tab: t };
 }
 
-/** The chosen tab's page, drawn small. */
+/** Room for the preview, in page pixels. */
+const BOX_W = 248;
+const BOX_H = 322;
+
+/** The chosen tab's page: at once from the small renders the viewer and thumbnails keep, then sharper. */
 function Preview({ tab, icon }: { tab: Tab | null; icon: preact.ComponentChild }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const info = tab?.status.value === "ready" ? tab.info.value : null;
@@ -100,23 +126,24 @@ function Preview({ tab, icon }: { tab: Tab | null; icon: preact.ComponentChild }
     const rot = edits.rot[src] ?? 0;
     const [pw, ph] = tab.sizes.value?.[src] ?? [612, 792];
     const [w, h] = rot % 180 ? [ph, pw] : [pw, ph];
-    const box = 248 * (window.devicePixelRatio || 1);
-    const scale = Math.min(box / w, (box * 1.3) / h);
-    const id = newId();
-    let gone = false;
-    fetchRender({ doc: info.docId, page: src, scale, rotate: rot, id, prio: 1500 })
-      .then((r) => {
-        if (!r || gone) return;
-        c.width = r.width;
-        c.height = r.height;
-        c.style.width = `${r.width / (window.devicePixelRatio || 1)}px`;
-        c.getContext("2d")!.putImageData(r.image, 0, 0);
-      })
-      .catch(() => {});
-    return () => {
-      gone = true;
-      void api.cancel([id]).catch(() => {});
+    const fit = Math.min(BOX_W / w, BOX_H / h);
+    c.style.width = `${Math.round(w * fit)}px`;
+    c.style.height = `${Math.round(h * fit)}px`;
+    const sharp = Math.ceil(fit * (window.devicePixelRatio || 1) * 20) / 20;
+    let shown = 0;
+    const draw = (b: Bitmap) => {
+      if (b.scale <= shown) return;
+      shown = b.scale;
+      c.width = b.width;
+      c.height = b.height;
+      paint(c, b);
     };
+    const doc = info.docId;
+    renderer.sync("switcher", [
+      { key: renderKey(doc, src, rot, "lo", LO_SCALE), params: { doc, page: src, scale: LO_SCALE, rotate: rot }, prio: 1500, onReady: draw },
+      { key: renderKey(doc, src, rot, "thumb", sharp), params: { doc, page: src, scale: sharp, rotate: rot }, prio: 1400, onReady: draw },
+    ]);
+    return () => renderer.release("switcher");
   }, [tab, info, view, edits]);
   if (!tab || !info) return <div class="tsw-preview empty">{icon}</div>;
   return (

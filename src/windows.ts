@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, type Attachment, type DocInfo, type OutlineItem } from "./api";
 import { History, type Edits, type HistoryData } from "./edits";
 import { ocrState } from "./ocr";
+import { setViewMode } from "./modes";
 import { redactTab } from "./redact";
 import { textEdit } from "./textedit";
 import { pageSizeEdit } from "./pagesize";
@@ -50,12 +51,14 @@ function busy(tab: Tab): string | null {
 }
 
 /** The tab as plain data (the document stays open), or null when it can't move now (says why). */
-function pack(tab: Tab): TabTransfer | null {
+async function pack(tab: Tab): Promise<TabTransfer | null> {
   const why = busy(tab);
   if (why) {
     showToast(why, 4000);
     return null;
   }
+  // Book mode is this window's (full screen): it ends here, and the tab goes on in Read mode.
+  if (tab.mode.value === "book") await setViewMode(tab, "read");
   const info = tab.info.value;
   if (tab.status.value !== "ready" || !info) return { path: tab.path };
   return {
@@ -70,7 +73,6 @@ function pack(tab: Tab): TabTransfer | null {
       labels: tab.labels.value,
       outline: tab.outline.value,
       attachments: tab.attachments.value,
-      // Book mode belongs to its window (full screen): the tab arrives in Read mode.
       mode: tab.mode.value === "pages" ? "pages" : "read",
       layout: tab.layout.value,
       reflowBlock: tab.reflowBlock,
@@ -130,7 +132,7 @@ export function stripIndexAt(x: number): number {
 
 /** Moves a tab into a new window: where the mouse is (`atCursor`, a tab dropped there) or beside this one. */
 export async function moveToNewWindow(tab: Tab, atCursor = false) {
-  const t = pack(tab);
+  const t = await pack(tab);
   if (!t) return;
   release(tab, t);
   try {
@@ -148,8 +150,14 @@ export const stripCount = () => document.querySelectorAll(".titlebar .tab").leng
 /** Moves a tab into another window (`atX`: where along its strip it was dropped). A window left with nothing
  * (its only tab moved) closes. */
 export async function moveToWindow(tab: Tab, label: string, atX: number | null = null) {
+  // That window has the file open already: it comes forward at its copy (two copies would overwrite each other).
+  if ((await api.windowWith(tab.path).catch(() => null)) === label) {
+    showToast(`That window already has ${tab.name} open.`, 4000);
+    void api.tabFocus(label, tab.path).catch(() => {});
+    return;
+  }
   const alone = stripCount() === 1;
-  const t = pack(tab);
+  const t = await pack(tab);
   if (!t) return;
   release(tab, t);
   try {

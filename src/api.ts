@@ -533,18 +533,20 @@ export const api = {
   officeConvert: (path: string, out: string, engine?: OfficeEngine) => invoke<string>("office_convert", { path, out, engine: engine ?? null }),
   /** Which programs can make Word and PowerPoint files here, best first. */
   convertOptions: () => invoke<{ docx: OfficeEngine[]; pptx: OfficeEngine[] }>("convert_options"),
-  convertFromPdf: (req: ExportRequest, onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
+  /** Converts under `sid` (newId()), which convertStop takes to stop it. */
+  convertFromPdf: (req: ExportRequest, sid: number, onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
     const ch = new Channel<{ kind: "progress"; done: number; total: number }>();
     ch.onmessage = onEvent;
-    return invoke<ExportDone>("convert_from_pdf", { req, onEvent: ch });
+    return invoke<ExportDone>("convert_from_pdf", { req, sid, onEvent: ch });
   },
-  convertStop: () => invoke<void>("convert_stop"),
-  compareRun: (a: CompareSideReq, b: CompareSideReq, options: CompareOptions, onEvent: (e: CompareEvent) => void) => {
+  convertStop: (sid: number) => invoke<void>("convert_stop", { sid }),
+  /** Compares under `sid` (newId()), which compareStop takes to stop it. */
+  compareRun: (a: CompareSideReq, b: CompareSideReq, options: CompareOptions, sid: number, onEvent: (e: CompareEvent) => void) => {
     const ch = new Channel<CompareEvent>();
     ch.onmessage = onEvent;
-    return invoke<CompareOutcome>("compare_run", { a, b, options, onEvent: ch });
+    return invoke<CompareOutcome>("compare_run", { a, b, options, sid, onEvent: ch });
   },
-  compareStop: () => invoke<void>("compare_stop"),
+  compareStop: (sid: number) => invoke<void>("compare_stop", { sid }),
   /** Font families installed in Windows. */
   fontsInstalled: () => invoke<string[]>("fonts_installed"),
   /** Font files the user added (kept in Paginaut's data folder). */
@@ -622,10 +624,18 @@ export const api = {
   windowList: () => invoke<{ label: string; title: string }[]>("window_list"),
   /** Moves a tab into another window (`atX`: where along its strip it was dropped). */
   tabSend: (label: string, tab: unknown, atX: number | null) => invoke<void>("tab_send", { label, tab, atX }),
-  /** The other window whose tab strip is under the mouse, and where across it. */
-  windowAt: () => invoke<{ label: string; x: number } | null>("window_at"),
-  /** The window's title (its document), what other windows call it, and whether it has unsaved changes. */
-  windowReport: (title: string, summary: string, dirty: boolean) => invoke<void>("window_report", { title, summary, dirty }),
+  /** The other window whose tab strip is under the mouse, what it's called, and where across it. */
+  windowAt: () => invoke<{ label: string; title: string; x: number } | null>("window_at"),
+  /** The window's title (its document), what other windows call it, its files, and whether it has unsaved changes. */
+  windowReport: (title: string, summary: string, paths: string[], dirty: boolean) => invoke<void>("window_report", { title, summary, paths, dirty }),
+  /** The other window that has `path` open, if one has. */
+  windowWith: (path: string) => invoke<string | null>("window_with", { path }),
+  /** Brings that window forward at its tab for `path`. */
+  tabFocus: (label: string, path: string) => invoke<void>("tab_focus", { label, path }),
+  /** The dragged tab under the mouse, outside the window too (colours: panel, text, muted, accent as RGB). False
+   *  where the system has none: the page draws its own. */
+  dragGhost: (name: string, hint: string, colors: [number, number, number][]) => invoke<boolean>("drag_ghost", { name, hint, colors }),
+  dragGhostHide: () => invoke<void>("drag_ghost_hide"),
   /** Exit Paginaut: every window closes, each asking about its own unsaved changes. */
   quitAll: () => invoke<void>("quit_all"),
 };

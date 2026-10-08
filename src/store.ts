@@ -364,6 +364,13 @@ export async function openFiles(paths: string[]) {
       last = existing;
       continue;
     }
+    // Open in another window already: that window comes forward at it (two copies would overwrite each other's
+    // saves).
+    const owner = await api.windowWith(path).catch(() => null);
+    if (owner) {
+      void api.tabFocus(owner, path).catch(() => {});
+      continue;
+    }
     const tab = new Tab(path);
     tabs.value = [...tabs.value, tab];
     last = tab;

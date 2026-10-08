@@ -20,6 +20,8 @@ mod defaults;
 #[cfg(windows)]
 mod snap;
 #[cfg(windows)]
+mod dragghost;
+#[cfg(windows)]
 mod print;
 #[cfg(target_os = "linux")]
 mod print_linux;
@@ -412,6 +414,10 @@ fn run_desktop() {
             appwindows::window_at,
             appwindows::window_report,
             appwindows::quit_all,
+            appwindows::window_with,
+            appwindows::tab_focus,
+            appwindows::drag_ghost,
+            appwindows::drag_ghost_hide,
             memory_level,
         ])
         .setup(move |app| {

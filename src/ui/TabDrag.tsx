@@ -7,11 +7,39 @@ import { moveToNewWindow, moveToWindow, stripCount } from "../windows";
 import { menu } from "./Toolbar";
 import type { MenuItem } from "./Overlays";
 
-/** The tab being dragged off the strip, following the pointer. */
-const ghost = signal<{ name: string; x: number; y: number } | null>(null);
+/** The tab being dragged (its key), drawn lifted in the strip. */
+export const draggingTab = signal<string | null>(null);
+/** The page's own ghost under the pointer, where the system can't show one outside the window (not Windows). */
+const ghost = signal<{ name: string; hint: string; x: number; y: number } | null>(null);
 
 /** How far above or below the strip the pointer goes before the tab leaves it. */
 const LEAVE = 28;
+
+/** A theme colour as RGB (the native ghost wears the app's colours). */
+function rgb(token: string): [number, number, number] {
+  const c = document.createElement("canvas").getContext("2d")!;
+  c.fillStyle = getComputedStyle(document.documentElement).getPropertyValue(token).trim() || "#888";
+  c.fillRect(0, 0, 1, 1);
+  const [r, g, b] = c.getImageData(0, 0, 1, 1).data;
+  return [r, g, b];
+}
+
+/**
+ * What's under the pointer while a tab is dragged: Windows gets a small native label that follows the mouse
+ * anywhere on screen (dragghost.rs); elsewhere the page draws one inside the window.
+ */
+function ghostShow(tab: Tab, hint: string, at: { x: number; y: number }, native: { on: boolean | null }) {
+  const own = () => (ghost.value = { name: tab.name, hint, ...at });
+  if (native.on === false) return own();
+  const colors = ["--panel", "--tx", "--tx3", "--acc"].map(rgb);
+  void api.dragGhost(tab.name, hint, colors).then(
+    (ok) => {
+      native.on = ok;
+      if (!ok && draggingTab.value === tab.key) own();
+    },
+    () => (native.on = false),
+  );
+}
 
 export function startTabDrag(e: PointerEvent, tab: Tab) {
   if (e.button !== 0 || (e.target as HTMLElement).closest(".x")) return;
@@ -19,18 +47,45 @@ export function startTabDrag(e: PointerEvent, tab: Tab) {
   if (!strip) return;
   const x0 = e.clientX, y0 = e.clientY;
   let dragging = false, out = false;
+  /** Whether the native ghost works (null until asked). */
+  const native = { on: null as boolean | null };
+  let hint = "";
+  /** Off the strip: which window it would go to (asked now and then; the mouse may be over another window). */
+  let asking = false, lastAsk = 0;
+  const target = () => {
+    const now = performance.now();
+    if (asking || now - lastAsk < 120) return;
+    asking = true;
+    lastAsk = now;
+    void api.windowAt().then((t) => {
+      asking = false;
+      if (!dragging || !out) return;
+      const next = t ? `Move to ${t.title}` : stripCount() < 2 ? "Its only tab: stays here" : "Open in a new window";
+      if (next !== hint) {
+        hint = next;
+        ghostShow(tab, hint, ghost.value ?? { x: x0, y: y0 }, native);
+      }
+    }, () => (asking = false));
+  };
   // On the strip itself (it stays put while the tabs in it move), so the pointer is followed outside the window too.
   strip.setPointerCapture(e.pointerId);
   const move = (ev: PointerEvent) => {
     if (!dragging && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;
-    dragging = true;
-    const r = strip.getBoundingClientRect();
-    out = ev.clientY < r.top - LEAVE || ev.clientY > r.bottom + LEAVE || ev.clientX < 0 || ev.clientX > window.innerWidth;
-    if (out) {
-      ghost.value = { name: tab.name, x: ev.clientX, y: ev.clientY };
-      return;
+    const at = { x: ev.clientX, y: ev.clientY };
+    if (!dragging) {
+      dragging = true;
+      draggingTab.value = tab.key;
+      ghostShow(tab, hint, at, native);
     }
-    ghost.value = null;
+    if (ghost.value) ghost.value = { ...ghost.value, ...at };
+    const r = strip.getBoundingClientRect();
+    const wasOut = out;
+    out = ev.clientY < r.top - LEAVE || ev.clientY > r.bottom + LEAVE || ev.clientX < 0 || ev.clientX > window.innerWidth;
+    if (out) return target();
+    if (wasOut) {
+      hint = "";
+      ghostShow(tab, hint, at, native);
+    }
     // Its place: after every other tab whose middle the pointer has passed.
     let i = 0;
     for (const el of strip.querySelectorAll<HTMLElement>(".tab[data-tab]")) {
@@ -46,7 +101,10 @@ export function startTabDrag(e: PointerEvent, tab: Tab) {
     strip.removeEventListener("pointercancel", end);
     if (strip.hasPointerCapture(ev.pointerId)) strip.releasePointerCapture(ev.pointerId);
     ghost.value = null;
-    if (!dragging || !out || ev.type === "pointercancel") return;
+    draggingTab.value = null;
+    if (dragging && native.on !== false) void api.dragGhostHide().catch(() => {});
+    dragging = false;
+    if (!out || ev.type === "pointercancel") return;
     void dropOutside(tab);
   };
   strip.addEventListener("pointermove", move);
@@ -62,12 +120,14 @@ async function dropOutside(tab: Tab) {
   return moveToNewWindow(tab, true);
 }
 
+/** The page's own ghost (where there's no native one). */
 export function TabDragGhost() {
   const g = ghost.value;
   if (!g) return null;
   return (
-    <div class="drag-ghost" style={{ left: g.x + 12, top: g.y + 12 }}>
-      {g.name} · new window
+    <div class="drag-ghost tab-ghost" style={{ left: g.x + 14, top: g.y + 18 }}>
+      <strong>{g.name}</strong>
+      {g.hint && <span>{g.hint}</span>}
     </div>
   );
 }

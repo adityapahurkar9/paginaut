@@ -49,7 +49,7 @@ import { PageDragGhost } from "./Sidebar";
 import { PageGrid } from "./PageGrid";
 import { selectedAnnot } from "../annots";
 import { SpeechBar } from "./SpeechBar";
-import { openTabMenu, startTabDrag, TabDragGhost } from "./TabDrag";
+import { draggingTab, openTabMenu, startTabDrag, TabDragGhost } from "./TabDrag";
 import { TabSwitcher } from "./TabSwitcher";
 import { PrintBar } from "./PrintBar";
 
@@ -185,7 +185,7 @@ function TitleBar() {
         {tabs.value.map((t) => (
           <button
             key={t.key}
-            class={`tab ${t.key === activeKey.value ? "on" : ""}`}
+            class={`tab ${t.key === activeKey.value ? "on" : ""} ${draggingTab.value === t.key ? "lifted" : ""}`}
             data-tab={t.key}
             title={t.path}
             onMouseDown={(e) => {
