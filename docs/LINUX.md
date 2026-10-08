@@ -45,7 +45,7 @@ The release binary needs at most glibc 2.35 and libstdc++ 3.4.29 (GCC 11).
 
 - `bash native/build-mupdf-linux.sh` builds MuPDF (with Tesseract, barcodes and the .docx writer, as on
   Windows) once; `build.rs` links it.
-- `tools/linux.sh` builds in WSL from this checkout (`sync`, `mupdf`, `check`, `build`, `run`, `bundle`). In WSL
+- `tools/linux.sh` builds in WSL from this checkout (`sync`, `mupdf`, `check`, `test`, `build`, `run`, `bundle`; `test` sets up a SoftHSM token for the DSC tests). In WSL
   it copies the sources to the Linux file system first: building from `/mnt/e` is several times slower.
 - Build machine packages (Debian/Ubuntu): `build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev
   librsvg2-dev libayatana-appindicator3-dev libxdo-dev libssl-dev patchelf file curl rsync nodejs npm`, and Rust
@@ -77,7 +77,7 @@ The release binary needs at most glibc 2.35 and libstdc++ 3.4.29 (GCC 11).
 ## Release builds
 
 `tools/linux-setup.sh` prepares a build machine; in WSL an Ubuntu 22.04 distribution is used just for this
-(`wsl --install Ubuntu-22.04`). Build the page on Windows first (`npm run build`), then
+(`wsl --install Ubuntu-22.04`). Build the release page on Windows first (`node build.mjs --prod`; the release step refuses the development build), then
 `wsl -d Ubuntu-22.04 -u root -- bash /mnt/e/Projects/PDF-Reader-Editor/tools/linux.sh release`: it copies
 the sources over, builds MuPDF once, and makes the .deb and AppImage with Tauri's CLI from cargo (22.04's
 Node is too old for the page's tools, and the page is the same anywhere).

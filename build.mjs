@@ -39,6 +39,8 @@ const TARGET = mobile ? "chrome79" : "chrome120";
 const lowerCss = (css) => esbuild.transformSync(css, { loader: "css", target: TARGET }).code;
 
 fs.mkdirSync(outdir, { recursive: true });
+// A release build writes no source map: one left by a development build would be packed into the app.
+if (prod) for (const f of fs.readdirSync(outdir)) if (f.endsWith(".map")) fs.rmSync(`${outdir}/${f}`);
 const copyStatic = () => {
   if (mobile) {
     fs.copyFileSync("src/mobile/index.html", `${outdir}/index.html`);

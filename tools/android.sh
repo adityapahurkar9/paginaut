@@ -6,8 +6,8 @@
 #
 # Usage: bash tools/android.sh [x86_64|arm64|arm|x86] [--release] [--no-install]
 #        bash tools/android.sh all --release      the Play Store bundle (.aab, all four ABIs)
-# Release builds are signed when %USERPROFILE%\.paginaut\android-signing.properties is there (see
-# src-tauri/gen/android/app/build.gradle.kts).
+# Release builds are signed with the upload key %USERPROFILE%\.paginaut\android-signing.properties names (or the
+# file PAGINAUT_ANDROID_SIGNING names; see src-tauri/gen/android/app/build.gradle.kts), and stop without it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -32,6 +32,17 @@ ndk=$(cygpath -u "$NDK_HOME")
 adb="$sdk/platform-tools/adb"
 flag=$([ "$profile" = debug ] && echo --debug || echo "")
 
+# Gradle would quietly make an unsigned release, which only shows when Play turns it down.
+if [ "$profile" = release ]; then
+  signing="${PAGINAUT_ANDROID_SIGNING:-$USERPROFILE/.paginaut/android-signing.properties}"
+  if ! grep -qs "^storeFile=" "$(cygpath -u "$signing")"; then
+    echo "Release builds need the upload key: $signing (storeFile, storePassword, keyAlias, keyPassword) wasn't found." >&2
+    exit 1
+  fi
+fi
+# The page is the same for every ABI: built with the first, then left as it is.
+page=""
+
 # One ABI's Rust library (and the frontend), copied where Gradle packs it.
 build_lib() {
   local target triple abi
@@ -42,7 +53,7 @@ build_lib() {
     x86) target=i686; triple=i686-linux-android; abi=x86 ;;
   esac
   # Tauri stops at the symlink without Developer Mode.
-  npx tauri android build $flag --apk --target "$target" > "${TEMP:-/tmp}/paginaut-android.log" 2>&1 || true
+  npx tauri android build $flag --apk --target "$target" $page > "${TEMP:-/tmp}/paginaut-android.log" 2>&1 || true
   if ! grep -q "symlinking lib\|BUILD SUCCESSFUL" "${TEMP:-/tmp}/paginaut-android.log"; then
     tail -40 "${TEMP:-/tmp}/paginaut-android.log"
     exit 1
@@ -53,6 +64,7 @@ build_lib() {
   # Debug info makes the library ~200 MB (slow to install, very slow on Android 7's adb); stack
   # traces still name functions without it.
   "$ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe" --strip-debug -o "$jni/libpaginaut_lib.so" "src-tauri/target/$triple/$profile/libpaginaut_lib.so"
+  page='--config {"build":{"beforeBuildCommand":""}}'
 }
 
 Profile="$(tr '[:lower:]' '[:upper:]' <<< "${profile:0:1}")${profile:1}"

@@ -16,7 +16,8 @@ val tauriProperties = Properties().apply {
 
 // Release signing: the upload key and its passwords live outside the repository, in
 // %USERPROFILE%\.paginaut\android-signing.properties (or the file PAGINAUT_ANDROID_SIGNING names):
-// storeFile, storePassword, keyAlias, keyPassword. Without it, release builds come out unsigned.
+// storeFile, storePassword, keyAlias, keyPassword. Without it, release builds come out unsigned (tools/android.sh
+// refuses to make them).
 val signingProperties = Properties().apply {
     val path = System.getenv("PAGINAUT_ANDROID_SIGNING")
         ?: "${System.getProperty("user.home")}/.paginaut/android-signing.properties"
