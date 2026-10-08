@@ -1075,16 +1075,23 @@ pub async fn convert_options(office: State<'_, Arc<Office>>) -> Res<crate::conve
     blocking(move || Ok(crate::convert::options(&office))).await
 }
 
-static CONVERT_STOP: once_cell::sync::Lazy<Arc<std::sync::atomic::AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
+/// Each window's Stop for its conversion (a Stop in one window leaves another's running).
+static CONVERT_STOP: crate::appwindows::StopFlags = crate::appwindows::StopFlags::new();
 
 /// The document's pages as Word, Excel, PowerPoint, pictures or text (see convert.rs).
 #[tauri::command]
-pub async fn convert_from_pdf(state: State<'_, AppState>, office: State<'_, Arc<Office>>, req: crate::convert::Request, on_event: Channel<DownloadEvent>) -> Res<crate::convert::Done> {
+pub async fn convert_from_pdf(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    office: State<'_, Arc<Office>>,
+    req: crate::convert::Request,
+    on_event: Channel<DownloadEvent>,
+) -> Res<crate::convert::Done> {
     let office = office.inner().clone();
     let engine = state.engine.clone();
-    CONVERT_STOP.store(false, std::sync::atomic::Ordering::Release);
+    let stop = CONVERT_STOP.start(window.label());
     blocking(move || {
-        crate::convert::run(&engine, &office, &req, &CONVERT_STOP, &mut |done, total| {
+        crate::convert::run(&engine, &office, &req, &stop, &mut |done, total| {
             let _ = on_event.send(DownloadEvent::Progress { done: done as u64, total: total as u64 });
         })
     })
@@ -1092,8 +1099,8 @@ pub async fn convert_from_pdf(state: State<'_, AppState>, office: State<'_, Arc<
 }
 
 #[tauri::command]
-pub fn convert_stop() {
-    CONVERT_STOP.store(true, std::sync::atomic::Ordering::Release);
+pub fn convert_stop(window: tauri::WebviewWindow) {
+    CONVERT_STOP.stop(window.label());
 }
 
 // ---------------------------------------------------------------- compare
@@ -1106,13 +1113,17 @@ pub enum CompareEvent {
     Pictures { done: usize, total: usize },
 }
 
-static COMPARE_STOP: once_cell::sync::Lazy<std::sync::atomic::AtomicBool> = once_cell::sync::Lazy::new(|| std::sync::atomic::AtomicBool::new(false));
-/// Background work of a comparison runs under its own id, so Stop can cancel it.
-const COMPARE_SID: u64 = u64::MAX - 7;
+static COMPARE_STOP: crate::appwindows::StopFlags = crate::appwindows::StopFlags::new();
+/// Background work of a window's comparison runs under its own id, so Stop can cancel it (well clear of the ids
+/// the pages make, see windows::window_index).
+fn compare_sid(window: &tauri::WebviewWindow) -> u64 {
+    u64::MAX - 7 - crate::appwindows::window_index(window.label())
+}
 
 /// Lines two documents up word by word (see compare.rs).
 #[tauri::command]
 pub async fn compare_run(
+    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     a: crate::compare::SideReq,
     b: crate::compare::SideReq,
@@ -1120,9 +1131,9 @@ pub async fn compare_run(
     on_event: Channel<CompareEvent>,
 ) -> Res<crate::compare::Outcome> {
     let engine = state.engine.clone();
-    COMPARE_STOP.store(false, std::sync::atomic::Ordering::Release);
+    let (stop, sid) = (COMPARE_STOP.start(window.label()), compare_sid(&window));
     blocking(move || {
-        crate::compare::run(&engine, &a, &b, options, COMPARE_SID, &COMPARE_STOP, &|p| {
+        crate::compare::run(&engine, &a, &b, options, sid, &stop, &|p| {
             let _ = on_event.send(match p {
                 crate::compare::Progress::Reading(side, done, total) => CompareEvent::Reading { side: side.into(), done, total },
                 crate::compare::Progress::Comparing => CompareEvent::Comparing,
@@ -1134,9 +1145,9 @@ pub async fn compare_run(
 }
 
 #[tauri::command]
-pub fn compare_stop(state: State<'_, AppState>) {
-    COMPARE_STOP.store(true, std::sync::atomic::Ordering::Release);
-    state.engine.cancel(COMPARE_SID);
+pub fn compare_stop(window: tauri::WebviewWindow, state: State<'_, AppState>) {
+    COMPARE_STOP.stop(window.label());
+    state.engine.cancel(compare_sid(&window));
 }
 
 // ---------------------------------------------------------------- fonts (themes)
@@ -1243,7 +1254,12 @@ pub async fn update_check(app: tauri::AppHandle) -> Res<crate::update::Checked> 
 /// Downloads the newer version found by the check, checks its signature, starts its installer and quits. False
 /// when Paginaut stays open (Linux's .deb: the software installer takes over).
 #[tauri::command]
-pub async fn update_install(app: tauri::AppHandle, on_event: Channel<DownloadEvent>) -> Res<bool> {
+pub async fn update_install(window: tauri::WebviewWindow, on_event: Channel<DownloadEvent>) -> Res<bool> {
+    let app = window.app_handle().clone();
+    // This window has checked its own tabs; quitting closes the others too.
+    if crate::appwindows::others_dirty(&app, window.label()) {
+        return Err("Another Paginaut window has unsaved changes: save or close them first.".into());
+    }
     let dir = std::env::temp_dir().join("Paginaut update");
     // Installers from earlier updates (and a stopped download) go first: only the new one is kept.
     let _ = std::fs::remove_dir_all(&dir);
@@ -1632,12 +1648,12 @@ pub fn print_stop() {
 
 /// Where the page's maximize button is (physical pixels of the client area), for Snap Layouts (snap.rs).
 #[tauri::command]
-pub fn snap_button(x: i32, y: i32, w: i32, h: i32, shown: bool) -> Res<()> {
+pub fn snap_button(window: tauri::WebviewWindow, x: i32, y: i32, w: i32, h: i32, shown: bool) -> Res<()> {
     #[cfg(windows)]
-    return crate::snap::place(x, y, w, h, shown);
+    return crate::snap::place(window.hwnd().map_err(|e| e.to_string())?.0 as isize, x, y, w, h, shown);
     #[cfg(not(windows))]
     {
-        let _ = (x, y, w, h, shown);
+        let _ = (window, x, y, w, h, shown);
         Ok(())
     }
 }

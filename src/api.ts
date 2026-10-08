@@ -1,5 +1,6 @@
 // Typed wrappers over the Rust backend.
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type Quad = [number, number, number, number, number, number, number, number];
 
@@ -613,11 +614,29 @@ export const api = {
   ocrRemove: (doc: number) => invoke<{ pages: number; dirty: boolean }>("ocr_remove", { doc }),
   cancel: (ids: number[]) => (ids.length ? invoke<void>("cancel", { ids }) : Promise.resolve()),
   systemInfo: () => invoke<SystemInfo>("system_info"),
-  takeLaunchFiles: () => invoke<string[]>("take_launch_files"),
+  /** What this window starts with: files to open, or a tab moved from another window (windows.ts). */
+  windowStart: () => invoke<{ files: string[]; tab: unknown | null }>("window_start"),
+  /** Opens a new window (with a tab moved into it; where the mouse is, for a tab dropped there). */
+  windowNew: (tab: unknown | null, atCursor: boolean) => invoke<string>("window_new", { tab, atCursor }),
+  /** The other windows, by title. */
+  windowList: () => invoke<{ label: string; title: string }[]>("window_list"),
+  /** Moves a tab into another window (`atX`: where along its strip it was dropped). */
+  tabSend: (label: string, tab: unknown, atX: number | null) => invoke<void>("tab_send", { label, tab, atX }),
+  /** The other window whose tab strip is under the mouse, and where across it. */
+  windowAt: () => invoke<{ label: string; x: number } | null>("window_at"),
+  /** The window's title (its document), what other windows call it, and whether it has unsaved changes. */
+  windowReport: (title: string, summary: string, dirty: boolean) => invoke<void>("window_report", { title, summary, dirty }),
+  /** Exit Paginaut: every window closes, each asking about its own unsaved changes. */
+  quitAll: () => invoke<void>("quit_all"),
 };
 
-let nextId = 1;
-/** Ids for cancellable requests (renders, searches). Never 0 (reserved for "anonymous"). */
+/** This window's number: 0 for the first ("main"), n for "w-n". */
+export const windowIndex = Number(/^w-(\d+)$/.exec(getCurrentWindow().label)?.[1] ?? 0);
+/**
+ * Ids for cancellable requests (renders, searches). Never 0 (reserved for "anonymous"). The windows share the
+ * engine, so each counts in its own range (2^32 apart, well inside JavaScript's exact integers).
+ */
+let nextId = windowIndex * 2 ** 32 + 1;
 export const newId = () => nextId++;
 
 /** Base URL of Paginaut's own protocol (Windows and Android serve custom schemes over http://<scheme>.localhost). */

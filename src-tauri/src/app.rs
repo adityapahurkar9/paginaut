@@ -2,20 +2,15 @@
 //! and app state. The desktop's editing and Windows tools are in desk.rs.
 
 use crate::engine::{DocId, DocInfo, Engine, RenderReq, SearchOptions};
-use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::http::{Request, Response, StatusCode};
 use tauri::ipc::Channel;
 use tauri::{Manager, State, UriSchemeContext, UriSchemeResponder};
-#[cfg(desktop)]
-use tauri::Emitter;
 
 pub struct AppState {
     pub engine: Arc<Engine>,
-    #[cfg_attr(mobile, allow(dead_code))]
-    pub launch_files: Mutex<Vec<String>>,
     #[cfg_attr(mobile, allow(dead_code))]
     pub started: std::time::Instant,
 }
@@ -301,12 +296,6 @@ pub fn cancel(state: State<'_, AppState>, ids: Vec<u64>) {
 // ---------------------------------------------------------------- app
 
 #[cfg(desktop)]
-#[tauri::command]
-pub fn take_launch_files(state: State<'_, AppState>) -> Vec<String> {
-    std::mem::take(&mut *state.launch_files.lock())
-}
-
-#[cfg(desktop)]
 pub fn files_from_args(args: &[String], cwd: Option<&str>) -> Vec<String> {
     args.iter()
         .skip(1)
@@ -322,17 +311,6 @@ pub fn files_from_args(args: &[String], cwd: Option<&str>) -> Vec<String> {
         .filter(|p| p.is_file())
         .map(|p| p.to_string_lossy().into_owned())
         .collect()
-}
-
-#[cfg(desktop)]
-pub fn forward_files(app: &tauri::AppHandle, files: Vec<String>) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-    }
-    if !files.is_empty() {
-        let _ = app.emit("open-files", files);
-    }
 }
 
 /// A book's title, author and pages, and its first page as a cover (`covers/<fp>.jpg` in the

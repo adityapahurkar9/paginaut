@@ -121,6 +121,23 @@ export interface RecentFile {
 
 export const recent = signal<RecentFile[]>(load("paginaut.recent", { list: [] as RecentFile[] }).list);
 
+// Every window keeps these in the same storage: what one window writes, the others take up (the theme follows at
+// once, recent files stay one list). How a window is laid out (side bar, ribbon tab) stays its own.
+const OWN_LAYOUT = ["sidebarOpen", "sidebarWidth", "sidebarTab", "ribbon"] as const;
+window.addEventListener("storage", (e) => {
+  if (!e.newValue) return;
+  try {
+    if (e.key === "paginaut.settings") {
+      const theirs = JSON.parse(e.newValue) as Settings;
+      const mine = settings.value;
+      const keep = Object.fromEntries(OWN_LAYOUT.map((k) => [k, mine[k]]));
+      settings.value = { ...mine, ...theirs, ...keep };
+    } else if (e.key === "paginaut.recent") recent.value = (JSON.parse(e.newValue) as { list: RecentFile[] }).list ?? recent.value;
+  } catch {
+    /* half-written: the next change brings it */
+  }
+});
+
 function saveRecent() {
   save("paginaut.recent", { list: recent.value });
 }
@@ -168,6 +185,8 @@ export class Tab {
   /** Files embedded in the PDF (null until read). */
   attachments = signal<Attachment[] | null>(null);
   viewer: Viewer | null = null;
+  /** Where to open the pages instead of the reading position kept for the file (a tab moved from another window). */
+  carriedView: ViewState | null = null;
   passwordTries = 0;
   /** Unsaved page edits (order, rotation); null until the document is ready. */
   edits = signal<Edits | null>(null);
@@ -422,7 +441,11 @@ export function setSaveHook(fn: (tab: Tab) => Promise<boolean>) {
   saveHook = fn;
 }
 
-function closeTabNow(tab: Tab) {
+/**
+ * Takes a tab out of the window. Its document closes, unless `keepDoc` (the tab moves to another window, which
+ * carries on with the same open document).
+ */
+export function closeTabNow(tab: Tab, keepDoc = false) {
   const list = tabs.value;
   const i = list.indexOf(tab);
   if (i < 0) return;
@@ -433,11 +456,31 @@ function closeTabNow(tab: Tab) {
   }
   const info = tab.info.value;
   if (info) {
-    api.close(info.docId).catch(() => {});
-    // Its pages and thumbnails can never be shown again (document ids aren't reused).
+    if (!keepDoc) api.close(info.docId).catch(() => {});
+    // Its pages and thumbnails can never be shown here again (document ids aren't reused; another window has
+    // its own picture cache).
     renderer.forget(`${info.docId}.`);
   }
   closeKey(tab.key, () => (tabs.value = list.filter((t) => t !== tab)));
+}
+
+/** Puts a tab (one moved from another window) into the strip at `index` (the end without one), current. */
+export function adoptTab(tab: Tab, index = tabs.value.length) {
+  batch(() => {
+    const list = tabs.value.slice();
+    list.splice(Math.max(0, Math.min(index, list.length)), 0, tab);
+    tabs.value = list;
+    leaveHome();
+    activeKey.value = tab.key;
+  });
+}
+
+/** Moves a document tab to `index` in the strip (dragged along it). */
+export function moveTab(tab: Tab, index: number) {
+  const list = tabs.value.filter((t) => t !== tab);
+  if (list.length === tabs.value.length) return;
+  list.splice(Math.max(0, Math.min(index, list.length)), 0, tab);
+  if (list.some((t, i) => t !== tabs.value[i])) tabs.value = list;
 }
 
 // WebView2 keeps what drawn pages used (mostly in its GPU process, often several
@@ -454,6 +497,20 @@ effect(() => {
   lowMemory = low;
   api.memoryLevel(low).catch(() => {});
 });
+
+/** Tabs by when they were last current, most recent first (the Alt+` switcher's order). */
+export const recentKeys = signal<string[]>([]);
+effect(() => {
+  const key = activeKey.value;
+  const all = new Set(stripKeys());
+  if (key) recentKeys.value = [key, ...recentKeys.peek().filter((k) => k !== key && all.has(k))];
+});
+/** Every tab in the strip, most recently used first (ones never visited after the rest, in strip order). */
+export function tabsByUse(): string[] {
+  const all = stripKeys();
+  const used = recentKeys.value.filter((k) => all.includes(k));
+  return [...used, ...all.filter((k) => !used.includes(k))];
+}
 
 export function cycleTab(dir: 1 | -1) {
   const list = stripKeys();
