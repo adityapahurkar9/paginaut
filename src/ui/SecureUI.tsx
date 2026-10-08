@@ -187,10 +187,13 @@ function Protect({ tab, sec, setSec, busy, run, setError }: { tab: Tab; sec: Sec
       const v = (e.target as HTMLInputElement).value;
       set((p) => (i ? [p[0], v] : [v, p[1]]));
     };
+    // Shown or hidden as typed. (Preact types each kind of input on its own, and a choice of two fits neither;
+    // a password and a text field take the same attributes here.)
+    const type = (show ? "text" : "password") as "text";
     return (
       <div class="secure-pw">
-        <input class="inp sm" type={show ? "text" : "password"} placeholder={what} autoComplete="new-password" value={pair[0]} onInput={input(0)} />
-        <input class="inp sm" type={show ? "text" : "password"} placeholder="Type it again" autoComplete="new-password" value={pair[1]} onInput={input(1)} />
+        <input class="inp sm" type={type} placeholder={what} autoComplete="new-password" value={pair[0]} onInput={input(0)} />
+        <input class="inp sm" type={type} placeholder="Type it again" autoComplete="new-password" value={pair[1]} onInput={input(1)} />
       </div>
     );
   };

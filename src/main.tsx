@@ -1,3 +1,4 @@
+import "./preact-px";
 import { render } from "preact";
 import { effect } from "@preact/signals";
 import { getCurrentWindow } from "@tauri-apps/api/window";

@@ -102,15 +102,24 @@ mod dpapi {
 
     /// The key in the desktop's keyring (made when `make` and there is none).
     fn keyring_key(make: bool) -> Result<[u8; 32], String> {
-        let entry = keyring::Entry::new("Paginaut", "saved signatures").map_err(|e| format!("The desktop's keyring isn't available ({e})."))?;
+        static STORE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+        STORE
+            .get_or_init(|| {
+                let store = dbus_secret_service_keyring_store::Store::new().map_err(|e| e.to_string())?;
+                keyring_core::set_default_store(store);
+                Ok(())
+            })
+            .clone()
+            .map_err(|e| format!("The desktop's keyring isn't available ({e})."))?;
+        let entry = keyring_core::Entry::new("Paginaut", "saved signatures").map_err(|e| format!("The desktop's keyring isn't available ({e})."))?;
         match entry.get_secret() {
             Ok(k) => k.try_into().map_err(|_| "The key for your saved signatures in the desktop's keyring is damaged.".to_string()),
-            Err(keyring::Error::NoEntry) if make => {
+            Err(keyring_core::Error::NoEntry) if make => {
                 let k = fresh()?;
                 entry.set_secret(&k).map_err(|e| format!("The desktop's keyring didn't keep the key ({e})."))?;
                 Ok(k)
             }
-            Err(keyring::Error::NoEntry) => Err("The key for your saved signatures isn't in the desktop's keyring any more.".into()),
+            Err(keyring_core::Error::NoEntry) => Err("The key for your saved signatures isn't in the desktop's keyring any more.".into()),
             Err(e) => Err(format!("The desktop's keyring couldn't be opened ({e}): unlock it, then try again.")),
         }
     }
@@ -138,10 +147,10 @@ mod dpapi {
             Ok(k) => (IN_KEYRING, k),
             Err(_) => (IN_FILE, file_key(true)?),
         };
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+        let cipher = ChaCha20Poly1305::new(&Key::from(key));
         let mut nonce = [0u8; 12];
         getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
-        let sealed = cipher.encrypt(Nonce::from_slice(&nonce), data).map_err(|_| "couldn't encrypt the signatures".to_string())?;
+        let sealed = cipher.encrypt(&Nonce::from(nonce), data).map_err(|_| "couldn't encrypt the signatures".to_string())?;
         Ok([&magic[..], &nonce, &sealed].concat())
     }
 
@@ -161,7 +170,8 @@ mod dpapi {
         for key in keys {
             match key {
                 Ok(k) => {
-                    if let Ok(plain) = ChaCha20Poly1305::new(Key::from_slice(&k)).decrypt(Nonce::from_slice(&rest[..12]), &rest[12..]) {
+                    let nonce: [u8; 12] = rest[..12].try_into().map_err(|_| "The saved signatures are damaged.".to_string())?;
+                    if let Ok(plain) = ChaCha20Poly1305::new(&Key::from(k)).decrypt(&Nonce::from(nonce), &rest[12..]) {
                         return Ok(plain);
                     }
                 }
