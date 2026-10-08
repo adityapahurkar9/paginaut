@@ -49,7 +49,7 @@ import { PageDragGhost } from "./Sidebar";
 import { PageGrid } from "./PageGrid";
 import { selectedAnnot } from "../annots";
 import { SpeechBar } from "./SpeechBar";
-import { draggingTab, dropAt, dropMarkerLeft, justDraggedFile, openTabMenu, startFileDrag, startTabDrag, TabDragGhost } from "./TabDrag";
+import { draggingTab, dropAt, dropMarkerLeft, openTabMenu, startTabDrag, TabDragGhost } from "./TabDrag";
 import { TabSwitcher } from "./TabSwitcher";
 import { PrintBar } from "./PrintBar";
 
@@ -406,12 +406,7 @@ function StatusBar() {
     <div class="statusbar">
       <div class="sb-side">
         {ready && info ? (
-          <span
-            class="muted file-chip"
-            title={`${[info.format || "Document", fmtBytes(info.fileSize), info.title].filter(Boolean).join(" · ")}\nDrag to hand the file to another app (WhatsApp, Outlook, a folder…)`}
-            onPointerDown={(e) => startFileDrag(e, ready.path, ready.dirty.value)}
-          >
-            <FileText size={13} />
+          <span class="muted" title={[info.format || "Document", fmtBytes(info.fileSize), info.title].filter(Boolean).join(" · ")}>
             {[info.format || "Document", fmtBytes(info.fileSize), info.title].filter(Boolean).join(" · ")}
           </span>
         ) : (

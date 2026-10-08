@@ -3,7 +3,7 @@
 import { signal } from "@preact/signals";
 import { AppWindow, FileText, Plus } from "lucide-preact";
 import { api, type DropKind } from "../api";
-import { closeTab, moveTab, showToast, tabs, type Tab } from "../store";
+import { closeTab, moveTab, tabs, type Tab } from "../store";
 import { moveToNewWindow, moveToWindow, stripCount, stripIndexAt } from "../windows";
 import { menu } from "./Toolbar";
 import type { MenuItem } from "./Overlays";
@@ -160,31 +160,6 @@ export function dropMarkerLeft(strip: HTMLElement, x: number): number {
   const edge = i < tabsHere.length ? tabsHere[i].left - 2 : tabsHere.length ? tabsHere[tabsHere.length - 1].right : box.left + 2;
   return edge - box.left;
 }
-
-/**
- * The file itself, dragged out of Paginaut into another app (WhatsApp, Outlook, a folder…) as Windows' own file
- * drag: holding it over a taskbar button brings that app forward. (The file as saved: unsaved changes stay here.)
- */
-export function startFileDrag(e: PointerEvent, path: string, dirty = false) {
-  if (e.button !== 0) return;
-  const x0 = e.clientX, y0 = e.clientY;
-  const stop = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", stop);
-  };
-  const move = (ev: PointerEvent) => {
-    if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
-    stop();
-    fileDragged = performance.now();
-    if (dirty) showToast("The file goes as last saved: your unsaved changes aren't in it.", 5000);
-    void api.fileDrag(path).catch((err) => showToast(`Couldn't drag the file: ${err}`, 5000));
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", stop);
-}
-/** When a file drag last started (the click that may follow it is ignored). */
-let fileDragged = 0;
-export const justDraggedFile = () => performance.now() - fileDragged < 600;
 
 /** A document tab's right-click menu. */
 export async function openTabMenu(e: MouseEvent, tab: Tab) {

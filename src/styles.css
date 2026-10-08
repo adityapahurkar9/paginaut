@@ -1374,6 +1374,3 @@ body.text-edit .pg { cursor: default; }
 .tabs { position: relative; }
 .tabs.drop-target { background: var(--acc-soft); border-radius: 9px 9px 0 0; }
 .tab-drop { position: absolute; bottom: 4px; width: 3px; height: 26px; border-radius: 2px; background: var(--acc); z-index: 3; pointer-events: none; }
-/* The document's file in the status bar, to drag into other apps. */
-.file-chip { display: inline-flex; align-items: center; gap: 6px; cursor: grab; border-radius: 6px; padding: 1px 6px; margin-left: -6px; }
-.file-chip:hover { background: var(--hover); color: var(--tx2); }

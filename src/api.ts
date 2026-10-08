@@ -638,8 +638,6 @@ export const api = {
   dragGhostHide: () => invoke<void>("drag_ghost_hide"),
   /** A tab dragged from here is over window `label`'s tabs at `x` (null: it left): that window shows where. */
   tabHover: (label: string, x: number | null) => invoke<void>("tab_hover", { label, x }),
-  /** Drags a document's file out to other apps (Windows' own file drag); true when it was dropped somewhere. */
-  fileDrag: (path: string) => invoke<boolean>("file_drag", { path }),
   /** Exit Paginaut: every window closes, each asking about its own unsaved changes. */
   quitAll: () => invoke<void>("quit_all"),
 };

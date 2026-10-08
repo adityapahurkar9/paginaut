@@ -4,7 +4,6 @@ import * as A from "../actions";
 import { Logo } from "./Logo";
 import { startMerge } from "./PagesUI";
 import { forgetFile, openFiles, recent } from "../store";
-import { justDraggedFile, startFileDrag } from "./TabDrag";
 import { shelfCount } from "../shelf";
 import { ShelfPane } from "./Shelf";
 
@@ -115,13 +114,7 @@ function Start() {
           {list.slice(0, 12).map((r) => {
             const Icon = KINDS.find((k) => k.id === kindOf(r.path))!.Icon;
             return (
-            <button
-              class="recent-row"
-              key={r.path}
-              onClick={() => !justDraggedFile() && openFiles([r.path])}
-              onPointerDown={(e) => startFileDrag(e, r.path)}
-              title={`${r.path}\nDrag to hand the file to another app`}
-            >
+            <button class="recent-row" key={r.path} onClick={() => openFiles([r.path])} title={r.path}>
               <Icon size={18} style={{ color: "var(--tx3)" }} />
               <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
                 <span class="n">{r.name}</span>

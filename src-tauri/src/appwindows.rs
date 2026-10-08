@@ -323,28 +323,6 @@ pub fn tab_hover(app: AppHandle, label: String, x: Option<f64>) {
     let _ = app.emit_to(label.as_str(), "tab-hover", x);
 }
 
-/// Drags the file of a document out to other apps (Windows' own file drag). True when it was dropped somewhere.
-#[tauri::command]
-pub async fn file_drag(window: WebviewWindow, path: String) -> Result<bool, String> {
-    #[cfg(windows)]
-    {
-        let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
-        let (tx, mut rx) = tauri::async_runtime::channel(1);
-        // On the UI thread (drag and drop needs it), modal until the file is dropped.
-        window
-            .run_on_main_thread(move || {
-                let _ = tx.try_send(crate::dragghost::drag_file(hwnd, &path));
-            })
-            .map_err(|e| e.to_string())?;
-        rx.recv().await.ok_or("The drag ended unexpectedly.")?
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (window, path);
-        Ok(false)
-    }
-}
-
 #[tauri::command]
 pub fn drag_ghost_hide() {
     #[cfg(windows)]

@@ -8,7 +8,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ["Open", "Ctrl+O"], ["Save", "Ctrl+S"], ["Save as", "Ctrl+Shift+S"], ["Print", "Ctrl+P"], ["New tab (Home)", "Ctrl+T"], ["Close tab", "Ctrl+W"],
     ["Next / previous tab", "Ctrl+Tab / Ctrl+Shift+Tab"],
     ["Switch tab (last used first)", "Hold Alt, press ` · Alt+~ goes back · let go to switch"], ["New window", "Ctrl+N"],
-    ["Move a tab to its own window", "Drag it off the tab strip · right-click the tab"], ["Hand the file to another app", "Drag it from the status bar or Home's recent files"], ["File menu", "Alt+F"], ["Settings", "Ctrl+,"],
+    ["Move a tab to its own window", "Drag it off the tab strip · right-click the tab"], ["File menu", "Alt+F"], ["Settings", "Ctrl+,"],
   ]],
   ["Viewing", [
     ["Zoom in / out", "Ctrl+= / Ctrl+−  ·  Ctrl+wheel  ·  pinch"], ["Actual size", "Ctrl+0"], ["Fit page / fit width", "Ctrl+1 / Ctrl+2"],

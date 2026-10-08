@@ -1,8 +1,7 @@
 //! The tab being dragged, shown under the mouse even outside Paginaut's windows: a small pill that follows the
 //! pointer (the page can only draw inside its own window), with an icon for what letting go does: a + (accent
 //! coloured) over another window's tabs, a new-window icon off the tabs. It never takes the mouse or the focus.
-//! Also the file itself dragged out to other apps (Windows' own file drag, as from Explorer). Windows only;
-//! elsewhere the page draws its own label, inside the window.
+//! Windows only; elsewhere the page draws its own label, inside the window.
 
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -228,31 +227,4 @@ pub fn hide() {
         }
     }
     *LOOK.lock() = None;
-}
-
-/// Drags the file at `path` out of the window as Windows' own file drag (as from Explorer): other apps take a
-/// copy when it's dropped on them, and holding it over a taskbar button brings that app forward. Runs until the
-/// file is dropped or the drag is given up; true when it was dropped somewhere. On the UI thread, with the mouse
-/// button down.
-pub fn drag_file(hwnd: isize, path: &str) -> Result<bool, String> {
-    use windows::core::HSTRING;
-    use windows::Win32::System::Com::IDataObject;
-    use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_NONE};
-    use windows::Win32::UI::Shell::{BHID_DataObject, IShellItem, SHCreateItemFromParsingName, SHDoDragDrop};
-    // SAFETY: shell COM objects on the UI thread (an STA, as drag and drop needs); released when dropped.
-    unsafe {
-        // The button was let go before the drag could start (it's asked for from the page): no drag, or it would
-        // wait for a release that already happened.
-        // (GetAsyncKeyState reads the physical button: the right one for swapped, left-handed mice.)
-        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
-        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
-        let button = if GetSystemMetrics(SM_SWAPBUTTON) != 0 { VK_RBUTTON } else { VK_LBUTTON };
-        if GetAsyncKeyState(button.0 as i32) as u16 & 0x8000 == 0 {
-            return Ok(false);
-        }
-        let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None).map_err(|e| e.to_string())?;
-        let data: IDataObject = item.BindToHandler(None, &BHID_DataObject).map_err(|e| e.to_string())?;
-        let effect = SHDoDragDrop(Some(HWND(hwnd as *mut _)), &data, None, DROPEFFECT_COPY | DROPEFFECT_LINK).map_err(|e| e.to_string())?;
-        Ok(effect != DROPEFFECT_NONE)
-    }
 }

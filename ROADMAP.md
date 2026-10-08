@@ -685,14 +685,12 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
 - [ ] Release signing key (the user's), store listing, AAB upload; source made public first (AGPL)
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
-### 0.8.15: drag labels and handing files to other apps
+### 0.8.15: drag labels
 - [x] The dragged tab's label is a small one-line pill whose icon says what letting go does: over another window's
       tabs it turns accent-coloured with a +, and that window's strip lights up with a bar where the tab lands; off
       the tabs it shows a new-window icon
-- [x] The file itself drags out to other apps (WhatsApp, Outlook, Photoshop, a folder) from the status bar's file
-      chip and Home's recent files: Windows' own file drag (SHDoDragDrop with the shell's data object), so holding
-      it over a taskbar button brings that app forward. The file goes as saved (a toast says when there are unsaved
-      changes). Tabs keep Chrome's tab drag: new window, or another Paginaut window
+- [x] 0.8.16: dragging the file itself out to other apps (0.8.15: Windows' SHDoDragDrop from the status bar and
+      Home's recent files) didn't work in use and was taken out; tabs keep Chrome's tab drag only
 - [x] A file asked for again while open (in any window) switches to it, as Office does; the window says so
 
 ### 0.8.14: review fixes for windows and tabs
