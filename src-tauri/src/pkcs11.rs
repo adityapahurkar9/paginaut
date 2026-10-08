@@ -68,10 +68,38 @@ pub struct TokenCert {
     pub others: Vec<X509>,
 }
 
-fn open(module: &Path) -> Result<Pkcs11, String> {
+/// One driver in use at a time (listing in one window while signing in another): finishing a driver ends every
+/// session on it, the other one's too.
+static IN_USE: Mutex<()> = Mutex::new(());
+
+/// A started token driver, finished (C_Finalize) when it goes out of scope, after the sessions opened on it.
+/// cryptoki 0.10 did that itself and 0.12 doesn't: a driver left started refuses to start again, so the second
+/// look at a token (listing, then signing) failed with drivers that stay loaded.
+struct Driver {
+    p11: Option<Pkcs11>,
+    _turn: parking_lot::MutexGuard<'static, ()>,
+}
+
+impl std::ops::Deref for Driver {
+    type Target = Pkcs11;
+    fn deref(&self) -> &Pkcs11 {
+        self.p11.as_ref().expect("the driver is started until dropped")
+    }
+}
+
+impl Drop for Driver {
+    fn drop(&mut self) {
+        if let Some(p) = self.p11.take() {
+            let _ = p.finalize();
+        }
+    }
+}
+
+fn open(module: &Path) -> Result<Driver, String> {
+    let turn = IN_USE.lock();
     let p = Pkcs11::new(module).map_err(|e| format!("Couldn't load the token driver {}: {e}", module.display()))?;
     p.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)).map_err(|e| format!("The token driver didn't start: {e}"))?;
-    Ok(p)
+    Ok(Driver { p11: Some(p), _turn: turn })
 }
 
 /// Every certificate with a private key on the tokens plugged in.
@@ -205,6 +233,19 @@ fn ecdsa_der(r: &[u8], s: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    /// A driver started, finished and started again, as listing and then signing do: with SoftHSM, when
+    /// PAGINAUT_SOFTHSM_CONF names its setup (`tools/linux.sh test` makes one).
+    #[test]
+    fn starts_again() {
+        let Ok(conf) = std::env::var("PAGINAUT_SOFTHSM_CONF") else { return };
+        std::env::set_var("SOFTHSM2_CONF", conf);
+        let module = std::path::Path::new("/usr/lib/softhsm/libsofthsm2.so");
+        for _ in 0..3 {
+            let driver = super::open(module).unwrap();
+            assert!(!driver.get_slots_with_token().unwrap().is_empty());
+        }
+    }
+
     #[test]
     fn ecdsa_lengths() {
         // P-256: short lengths; a high bit gets a leading zero.

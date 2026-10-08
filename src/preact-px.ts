@@ -6,6 +6,13 @@ import { options, type VNode } from "preact";
 
 /** Properties whose numbers have no unit (Preact's compat list). */
 const UNITLESS = /^(-|f[lo].*[^se]$|g.{5,}[^ps]$|z|o[pr]|(W.{5})?[lL]i.*(t|mp)$|an|(bo|s).{4}Im|sca|m.{6}[ds]|ta|c.*[st]$|wido|ini)/;
+/** The answer per property name: this runs for every element made, and the interface uses a few dozen names. */
+const unitless = new Map<string, boolean>();
+const isUnitless = (key: string) => {
+  let u = unitless.get(key);
+  if (u === undefined) unitless.set(key, (u = UNITLESS.test(key)));
+  return u;
+};
 
 const next = options.vnode;
 options.vnode = (vnode: VNode) => {
@@ -14,7 +21,7 @@ options.vnode = (vnode: VNode) => {
     let style = props.style as Record<string, unknown>;
     let copied = false;
     for (const key in style) {
-      if (typeof style[key] !== "number" || UNITLESS.test(key)) continue;
+      if (typeof style[key] !== "number" || isUnitless(key)) continue;
       if (!copied) {
         style = props.style = { ...style };
         copied = true;

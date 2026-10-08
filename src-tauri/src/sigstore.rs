@@ -102,17 +102,26 @@ mod dpapi {
 
     /// The key in the desktop's keyring (made when `make` and there is none).
     fn keyring_key(make: bool) -> Result<[u8; 32], String> {
-        static STORE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
-        STORE
-            .get_or_init(|| {
-                let store = dbus_secret_service_keyring_store::Store::new().map_err(|e| e.to_string())?;
+        // Connected on first use, and again when the connection fails: a keyring that wasn't up yet (just after
+        // logging in) or was restarted is found on the next try, not only after Paginaut restarts. A connection
+        // kept from before is made again at once.
+        let (entry, got) = loop {
+            let kept = keyring_core::get_default_store().is_some();
+            if !kept {
+                let store = dbus_secret_service_keyring_store::Store::new().map_err(|e| format!("The desktop's keyring isn't available ({e})."))?;
                 keyring_core::set_default_store(store);
-                Ok(())
-            })
-            .clone()
-            .map_err(|e| format!("The desktop's keyring isn't available ({e})."))?;
-        let entry = keyring_core::Entry::new("Paginaut", "saved signatures").map_err(|e| format!("The desktop's keyring isn't available ({e})."))?;
-        match entry.get_secret() {
+            }
+            let entry = keyring_core::Entry::new("Paginaut", "saved signatures").map_err(|e| format!("The desktop's keyring isn't available ({e})."))?;
+            let got = entry.get_secret();
+            if matches!(got, Err(keyring_core::Error::PlatformFailure(_) | keyring_core::Error::NoStorageAccess(_))) {
+                keyring_core::unset_default_store();
+                if kept {
+                    continue;
+                }
+            }
+            break (entry, got);
+        };
+        match got {
             Ok(k) => k.try_into().map_err(|_| "The key for your saved signatures in the desktop's keyring is damaged.".to_string()),
             Err(keyring_core::Error::NoEntry) if make => {
                 let k = fresh()?;
@@ -163,15 +172,14 @@ mod dpapi {
         } else {
             return Ok(data.to_vec());
         };
-        if rest.len() < 12 {
+        let Some((nonce, sealed)) = rest.split_first_chunk::<12>() else {
             return Err("The saved signatures are damaged.".into());
-        }
+        };
         let mut why = String::new();
         for key in keys {
             match key {
                 Ok(k) => {
-                    let nonce: [u8; 12] = rest[..12].try_into().map_err(|_| "The saved signatures are damaged.".to_string())?;
-                    if let Ok(plain) = ChaCha20Poly1305::new(&Key::from(k)).decrypt(&Nonce::from(nonce), &rest[12..]) {
+                    if let Ok(plain) = ChaCha20Poly1305::new(&Key::from(k)).decrypt(&Nonce::from(*nonce), sealed) {
                         return Ok(plain);
                     }
                 }

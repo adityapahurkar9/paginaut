@@ -689,8 +689,25 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       first); source made public first (AGPL); 1.0 for the store release
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
+## 0.9.1 (Windows, Linux): fixes from the 0.9.0 review
+- [x] Linux DSC tokens: cryptoki 0.12 no longer finishes a token driver (C_Finalize) when it's let go, so a driver
+      that stays loaded refused to start a second time: listing the certificates worked, signing after it failed
+      ("The token driver didn't start"). pkcs11.rs finishes each driver after use again, one driver use at a time
+- [x] The token tests run for real: `tools/linux.sh test` sets up a SoftHSM token (~/softhsm) and runs the Rust tests with
+      it; before, they passed without running (and the SoftHSM test passed anyway through p11-kit's proxy, which
+      hides the problem above). New test: a driver started three times in a row
+- [x] Linux saved signatures: the desktop's keyring is connected again after a failure (not yet up after logging in,
+      or restarted), not only after Paginaut restarts; a lost connection is remade at once, so signatures don't
+      fall back to the key file. Tried with GNOME Keyring restarted under a running test
+- [x] Android release builds stop when the upload key isn't set up (they came out unsigned without a word);
+      `tools/android.sh all` builds the page once for the four ABIs, not four times
+- [x] Inline-style px check remembered per property name; the password fields in Protect typed without a cast
+- [x] Release builds no longer carry a development build's source map: build.mjs --prod clears old ones from dist/
+      (the 0.9.0 installer had one packed in, unused), and `tools/linux.sh release` refuses a development page (the
+      0.8.11/0.8.12 Linux packages shipped one: the release notes said `npm run build`, which is the development build)
+
 ## 0.9.0 (Windows, Linux) and Android 0.3.0: libraries brought up to date, signed Android release
-- [x] Every library on its newest version that Tauri allows: Tauri 2.12.1 and its plugins, sysinfo 0.39, similar 3
+- [x] The app's libraries on their newest versions that Tauri allows (not Android's test-only ones, unused): Tauri 2.12.1 and its plugins, sysinfo 0.39, similar 3
       (with its `std` feature: without it Compare's time limit is silently off), minisign-verify 0.3; Linux:
       keyring 3 → keyring-core + its D-Bus store (finds the saved-signature key keyring 3 stored), chacha20poly1305
       0.11, sha1/sha2 0.11, getrandom 0.4, cryptoki 0.12; Preact 11 (no more px for numbers in inline styles:
