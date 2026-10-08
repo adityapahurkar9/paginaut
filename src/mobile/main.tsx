@@ -1,5 +1,6 @@
 // The Android viewer: a library of recent files, and a reader. No editing, no accounts, no network.
 import "./polyfills";
+import "../preact-px";
 import { render } from "preact";
 import { effect } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";

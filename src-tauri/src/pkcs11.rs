@@ -7,7 +7,7 @@
 //! The token's PIN is typed into Paginaut (Windows' drivers ask in their own window) and used for the one
 //! signature: it's handed to the token and dropped.
 
-use cryptoki::context::{CInitializeArgs, Pkcs11};
+use cryptoki::context::{CInitializeArgs, CInitializeFlags, Pkcs11};
 use cryptoki::error::RvError;
 use cryptoki::mechanism::Mechanism;
 use cryptoki::object::{Attribute, AttributeType, KeyType, ObjectClass};
@@ -70,7 +70,7 @@ pub struct TokenCert {
 
 fn open(module: &Path) -> Result<Pkcs11, String> {
     let p = Pkcs11::new(module).map_err(|e| format!("Couldn't load the token driver {}: {e}", module.display()))?;
-    p.initialize(CInitializeArgs::OsThreads).map_err(|e| format!("The token driver didn't start: {e}"))?;
+    p.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)).map_err(|e| format!("The token driver didn't start: {e}"))?;
     Ok(p)
 }
 

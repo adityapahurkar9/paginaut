@@ -682,8 +682,25 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       than that gets a message to update it. Tauri's Jackson pinned to 2.13 (2.15 crashed Android 7)
 - [x] Logo #4 redrawn as assets/icon.svg (also the Windows icon); Android adaptive and themed icons
       (assets/android-icons.py)
-- [ ] Release signing key (the user's), store listing, AAB upload; source made public first (AGPL)
+- [x] Release signing key (0.3.0, 2026-10-08): an upload key (RSA 4096) in %USERPROFILE%\.paginaut\paginaut-upload.jks,
+      its passwords in android-signing.properties beside it (both must be backed up, like updater.key); Gradle signs release builds
+      with it when the file is there. `bash tools/android.sh all --release` makes the Play bundle (.aab, all ABIs)
+- [ ] Store listing, AAB upload (a personal Play account must run a closed test with 12 testers for 14 days
+      first); source made public first (AGPL); 1.0 for the store release
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
+
+## 0.9.0 (Windows, Linux) and Android 0.3.0: libraries brought up to date, signed Android release
+- [x] Every library on its newest version that Tauri allows: Tauri 2.12.1 and its plugins, sysinfo 0.39, similar 3
+      (with its `std` feature: without it Compare's time limit is silently off), minisign-verify 0.3; Linux:
+      keyring 3 → keyring-core + its D-Bus store (finds the saved-signature key keyring 3 stored), chacha20poly1305
+      0.11, sha1/sha2 0.11, getrandom 0.4, cryptoki 0.12; Preact 11 (no more px for numbers in inline styles:
+      src/preact-px.ts adds them, as Preact's compat does), TypeScript 7; Android: AGP 9.4.1, Kotlin 2.4.21,
+      Gradle 9.8.1, AndroidX webkit 1.17.1, appcompat 1.8, activity 1.13, material 1.14, lifecycle 2.11. Held by
+      Tauri: windows-rs 0.62 (webview2-com), gtk 0.18, foreign-types 0.3 (openssl)
+- [x] cargo-audit: no vulnerabilities; three warnings inside Tauri's own Linux and build dependencies
+- [x] Android release builds signed (upload key above); 0.3.0 tested on Android 16 and on Android 11's WebView 83
+      (the oldest it supports); Android 7's stock WebView still gets the "update WebView" page
+- [x] Checked by the user: a tab dragged onto another window's tab strip joins it
 
 ### 0.8.17: tabs slide like Chrome's
 - [x] A tab dragged along the strip slides with the pointer and the other tabs move aside (animated) as it passes
