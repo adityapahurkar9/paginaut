@@ -685,6 +685,11 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
 - [ ] Release signing key (the user's), store listing, AAB upload; source made public first (AGPL)
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
+### 0.8.17: tabs slide like Chrome's
+- [x] A tab dragged along the strip slides with the pointer and the other tabs move aside (animated) as it passes
+      their middles; it settles into its place when let go. The label under the pointer only shows once the tab is
+      pulled off the strip (before, the tab jumped between places under the label and looked stuck)
+
 ### 0.8.15: drag labels
 - [x] The dragged tab's label is a small one-line pill whose icon says what letting go does: over another window's
       tabs it turns accent-coloured with a +, and that window's strip lights up with a bar where the tab lands; off

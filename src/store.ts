@@ -482,12 +482,14 @@ export function adoptTab(tab: Tab, index = tabs.value.length) {
   });
 }
 
-/** Moves a document tab to `index` in the strip (dragged along it). */
-export function moveTab(tab: Tab, index: number) {
+/** Moves a document tab to `index` in the strip (dragged along it). True when its place changed. */
+export function moveTab(tab: Tab, index: number): boolean {
   const list = tabs.value.filter((t) => t !== tab);
-  if (list.length === tabs.value.length) return;
+  if (list.length === tabs.value.length) return false;
   list.splice(Math.max(0, Math.min(index, list.length)), 0, tab);
-  if (list.some((t, i) => t !== tabs.value[i])) tabs.value = list;
+  if (!list.some((t, i) => t !== tabs.value[i])) return false;
+  tabs.value = list;
+  return true;
 }
 
 // WebView2 keeps what drawn pages used (mostly in its GPU process, often several

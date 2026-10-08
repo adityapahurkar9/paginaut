@@ -1359,7 +1359,7 @@ body.text-edit .pg { cursor: default; }
 @media (max-width: 700px) { .tsw-preview { display: none; } }
 
 /* A tab being dragged: lifted out of the strip. */
-.tab.lifted { background: var(--surface); color: var(--tx); box-shadow: 0 0 0 1.5px var(--acc), var(--pop-shadow); position: relative; z-index: 2; cursor: grabbing; }
+.tab.lifted { background: var(--surface); color: var(--tx); box-shadow: 0 0 0 1.5px var(--acc), var(--pop-shadow); position: relative; z-index: 2; cursor: grabbing; transition: none; }
 /* The page's own label for a dragged tab (where there's no native one): what letting go does. */
 .tab-ghost {
   position: fixed; z-index: 80; pointer-events: none; display: flex; align-items: center; gap: 6px; max-width: 220px;

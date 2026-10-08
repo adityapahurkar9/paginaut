@@ -44,21 +44,81 @@ function ghostShow(tab: Tab, kind: DropKind, at: { x: number; y: number }, nativ
   );
 }
 
+/**
+ * Drags a document tab, as in Chrome: along the strip it slides with the pointer and the other tabs move aside;
+ * pulled off the strip a label follows the pointer and says what letting go does (another window, a new one).
+ */
 export function startTabDrag(e: PointerEvent, tab: Tab) {
   if (e.button !== 0 || (e.target as HTMLElement).closest(".x")) return;
-  const strip = (e.currentTarget as HTMLElement).parentElement;
+  const grabbed = e.currentTarget as HTMLElement;
+  const strip = grabbed.parentElement;
   if (!strip) return;
   const x0 = e.clientX, y0 = e.clientY;
+  /** Where in the tab it was taken hold of. */
+  const grab = x0 - grabbed.getBoundingClientRect().left;
   let dragging = false, out = false;
   /** Whether the native label works (null until asked). */
   const native = { on: null as boolean | null };
   let kind: DropKind = "move";
+  let labelShown = false;
   let at = { x: x0, y: y0 };
   const setKind = (k: DropKind) => {
-    if (k === kind) return;
+    if (k === kind && labelShown) return;
     kind = k;
+    labelShown = true;
     ghostShow(tab, kind, at, native);
   };
+  const hideLabel = () => {
+    if (!labelShown) return;
+    labelShown = false;
+    ghost.value = null;
+    if (native.on !== false) void api.dragGhostHide().catch(() => {});
+  };
+  const docTabs = () => [...strip.querySelectorAll<HTMLElement>(".tab[data-tab]")];
+  const me = () => docTabs().find((el) => el.dataset.tab === tab.key) ?? null;
+
+  /** The tab under the pointer: it slides along (not past the first or last document tab). */
+  const follow = () => {
+    const el = me();
+    if (!el) return;
+    const all = docTabs();
+    const lo = Math.min(...all.map((x) => x.offsetLeft));
+    const hi = Math.max(...all.map((x) => x.offsetLeft + x.offsetWidth)) - el.offsetWidth;
+    const want = at.x - strip.getBoundingClientRect().left + strip.scrollLeft - grab;
+    el.style.transform = `translateX(${Math.max(lo, Math.min(hi, want)) - el.offsetLeft}px)`;
+  };
+  /** Moves the tab to the place its middle has reached; the others slide into their new places. */
+  const reorder = () => {
+    const el = me();
+    if (!el) return;
+    const middle = at.x - strip.getBoundingClientRect().left + strip.scrollLeft - grab + el.offsetWidth / 2;
+    const others = docTabs().filter((x) => x !== el);
+    // (Places from offsetLeft, which leaves out the slide: no jitter while the others move.)
+    const i = others.filter((x) => x.offsetLeft + x.offsetWidth / 2 < middle).length;
+    const before = new Map(others.map((x) => [x, x.offsetLeft]));
+    if (!moveTab(tab, i)) return follow();
+    requestAnimationFrame(() => {
+      for (const [x, was] of before) {
+        const dx = was - x.offsetLeft;
+        if (!dx) continue;
+        x.style.transition = "none";
+        x.style.transform = `translateX(${dx}px)`;
+        void x.offsetWidth;
+        x.style.transition = "transform 0.15s ease";
+        x.style.transform = "";
+      }
+      follow();
+    });
+  };
+  /** Back in its place (animated), styles cleared after. */
+  const settle = () => {
+    for (const x of docTabs()) {
+      x.style.transition = "transform 0.12s ease";
+      x.style.transform = "";
+    }
+    setTimeout(() => docTabs().forEach((x) => (x.style.transition = "")), 160);
+  };
+
   /** The other window showing where the tab would land. */
   let hovered: string | null = null;
   const leaveHovered = () => {
@@ -95,34 +155,36 @@ export function startTabDrag(e: PointerEvent, tab: Tab) {
     if (!dragging) {
       dragging = true;
       draggingTab.value = tab.key;
-      ghostShow(tab, kind, at, native);
     }
     if (ghost.value) ghost.value = { ...ghost.value, ...at };
     const r = strip.getBoundingClientRect();
+    const wasOut = out;
     out = ev.clientY < r.top - LEAVE || ev.clientY > r.bottom + LEAVE || ev.clientX < 0 || ev.clientX > window.innerWidth;
-    if (out) return target();
-    leaveHovered();
-    setKind("move");
-    // Its place: after every other tab whose middle the pointer has passed.
-    let i = 0;
-    for (const el of strip.querySelectorAll<HTMLElement>(".tab[data-tab]")) {
-      if (el.dataset.tab === tab.key) continue;
-      const b = el.getBoundingClientRect();
-      if (ev.clientX > b.left + b.width / 2) i++;
+    if (out) {
+      // Off the strip: the tab waits in its place, the label takes over.
+      if (!wasOut) {
+        const el = me();
+        if (el) el.style.transform = "";
+        if (!labelShown) setKind(stripCount() < 2 ? "move" : "new");
+      }
+      return target();
     }
-    moveTab(tab, i);
+    leaveHovered();
+    hideLabel();
+    reorder();
   };
   const end = (ev: PointerEvent) => {
     strip.removeEventListener("pointermove", move);
     strip.removeEventListener("pointerup", end);
     strip.removeEventListener("pointercancel", end);
     if (strip.hasPointerCapture(ev.pointerId)) strip.releasePointerCapture(ev.pointerId);
-    ghost.value = null;
+    hideLabel();
     draggingTab.value = null;
     leaveHovered();
-    if (dragging && native.on !== false) void api.dragGhostHide().catch(() => {});
+    settle();
+    const was = dragging;
     dragging = false;
-    if (!out || ev.type === "pointercancel") return;
+    if (!was || !out || ev.type === "pointercancel") return;
     void dropOutside(tab);
   };
   strip.addEventListener("pointermove", move);
