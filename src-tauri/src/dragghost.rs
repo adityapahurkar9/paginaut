@@ -1,6 +1,8 @@
-//! The tab being dragged, shown under the mouse even outside Paginaut's windows: a small borderless window that
-//! follows the pointer (the page can only draw inside its own window). It never takes the mouse or the focus.
-//! Windows only; elsewhere the page draws its own, inside the window.
+//! The tab being dragged, shown under the mouse even outside Paginaut's windows: a small pill that follows the
+//! pointer (the page can only draw inside its own window), with an icon for what letting go does: a + (accent
+//! coloured) over another window's tabs, a new-window icon off the tabs. It never takes the mouse or the focus.
+//! Also the file itself dragged out to other apps (Windows' own file drag, as from Explorer). Windows only;
+//! elsewhere the page draws its own label, inside the window.
 
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -21,10 +23,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
-/// What the ghost says and its colours (the app's theme: panel, text, muted text, accent).
+/// What letting go does, shown by the pill's icon (and colour).
+#[derive(Clone, Copy, PartialEq)]
+pub enum Kind {
+    /// Moving along its own tabs.
+    Move,
+    /// Joins the window under the mouse (accent coloured, a +).
+    Join,
+    /// Opens a new window.
+    New,
+}
+
+/// What the ghost says and its colours (the app's theme: panel, text, accent, text on accent).
 struct Look {
     name: Vec<u16>,
-    hint: Vec<u16>,
+    kind: Kind,
     colors: [COLORREF; 4],
 }
 
@@ -34,12 +47,21 @@ static CLASS: OnceLock<bool> = OnceLock::new();
 
 const TIMER: usize = 1;
 /// Base sizes, in 96-dpi pixels.
-const NAME_PT: i32 = 13;
-const HINT_PT: i32 = 12;
-const PAD_X: i32 = 12;
-const PAD_Y: i32 = 8;
-const BAR: i32 = 3;
-const MAX_TEXT: i32 = 300;
+const TEXT_PX: i32 = 12;
+const ICON_PX: i32 = 12;
+const PAD_X: i32 = 9;
+const PAD_Y: i32 = 5;
+const GAP: i32 = 7;
+const MAX_TEXT: i32 = 200;
+
+/// Segoe MDL2 Assets icons (on Windows 10 and 11): Document, Add, Open in new window.
+fn glyph(kind: Kind) -> u16 {
+    match kind {
+        Kind::Move => 0xE8A5,
+        Kind::Join => 0xE710,
+        Kind::New => 0xE8A7,
+    }
+}
 
 fn scaled(hwnd: HWND, v: i32) -> i32 {
     // SAFETY: plain query on our own window.
@@ -47,11 +69,10 @@ fn scaled(hwnd: HWND, v: i32) -> i32 {
     v * dpi / 96
 }
 
-fn font(hwnd: HWND, px: i32, weight: i32) -> HFONT {
+fn font(hwnd: HWND, px: i32, weight: i32, icons: bool) -> HFONT {
+    let face = if icons { w!("Segoe MDL2 Assets") } else { w!("Segoe UI") };
     // SAFETY: a GDI font, deleted by the caller.
-    unsafe {
-        CreateFontW(-scaled(hwnd, px), 0, 0, 0, weight, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, 0, w!("Segoe UI"))
-    }
+    unsafe { CreateFontW(-scaled(hwnd, px), 0, 0, 0, weight, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, 0, face) }
 }
 
 fn text_size(dc: HDC, f: HFONT, text: &[u16]) -> SIZE {
@@ -65,56 +86,51 @@ fn text_size(dc: HDC, f: HFONT, text: &[u16]) -> SIZE {
     s
 }
 
-/// The ghost's size for its text, and the height of its first line.
+/// The pill's size for its text, and the icon's width.
 fn measure(hwnd: HWND, look: &Look) -> (i32, i32, i32) {
     // SAFETY: the window's DC, released below; fonts deleted.
     unsafe {
         let dc = GetDC(Some(hwnd));
-        let (nf, hf) = (font(hwnd, NAME_PT, 600), font(hwnd, HINT_PT, 400));
-        let n = text_size(dc, nf, &look.name);
-        let h = if look.hint.is_empty() { SIZE::default() } else { text_size(dc, hf, &look.hint) };
-        let _ = DeleteObject(nf.into());
-        let _ = DeleteObject(hf.into());
+        let (tf, gf) = (font(hwnd, TEXT_PX, 600, false), font(hwnd, ICON_PX, 400, true));
+        let n = text_size(dc, tf, &look.name);
+        let g = text_size(dc, gf, &[glyph(look.kind)]);
+        let _ = DeleteObject(tf.into());
+        let _ = DeleteObject(gf.into());
         ReleaseDC(Some(hwnd), dc);
-        let text = n.cx.max(h.cx).min(scaled(hwnd, MAX_TEXT));
-        let w = scaled(hwnd, BAR + PAD_X * 2) + text;
-        let gap = if look.hint.is_empty() { 0 } else { scaled(hwnd, 2) };
-        let ht = scaled(hwnd, PAD_Y * 2) + n.cy + gap + h.cy;
-        (w, ht, n.cy)
+        let w = scaled(hwnd, PAD_X * 2 + GAP) + g.cx + n.cx.min(scaled(hwnd, MAX_TEXT));
+        let h = scaled(hwnd, PAD_Y * 2) + n.cy.max(g.cy);
+        (w, h, g.cx)
     }
 }
 
 fn paint(hwnd: HWND) {
     let look = LOOK.lock();
     let Some(look) = look.as_ref() else { return };
-    let (w, h, line) = measure(hwnd, look);
+    let (w, h, icon_w) = measure(hwnd, look);
+    // Joining a window: accent coloured; otherwise the panel's colour with an accent icon.
+    let join = look.kind == Kind::Join;
+    let (bg, fg, icon) = if join { (look.colors[2], look.colors[3], look.colors[3]) } else { (look.colors[0], look.colors[1], look.colors[2]) };
     // SAFETY: standard WM_PAINT drawing with GDI objects made and deleted here.
     unsafe {
         let mut ps = PAINTSTRUCT::default();
         let dc = BeginPaint(hwnd, &mut ps);
-        let fill = |r: RECT, c: COLORREF| {
-            let b = CreateSolidBrush(c);
-            FillRect(dc, &r, b);
-            let _ = DeleteObject(b.into());
-        };
-        fill(RECT { left: 0, top: 0, right: w, bottom: h }, look.colors[0]);
-        fill(RECT { left: 0, top: 0, right: scaled(hwnd, BAR), bottom: h }, look.colors[3]);
+        let b = CreateSolidBrush(bg);
+        FillRect(dc, &RECT { left: 0, top: 0, right: w, bottom: h }, b);
+        let _ = DeleteObject(b.into());
         SetBkMode(dc, TRANSPARENT);
-        let x = scaled(hwnd, BAR + PAD_X);
-        let y = scaled(hwnd, PAD_Y);
-        let draw = |text: &[u16], f: HFONT, c: COLORREF, top: i32, bottom: i32| {
+        let draw = |text: &[u16], f: HFONT, c: COLORREF, left: i32, right: i32| {
             let old = SelectObject(dc, f.into());
             SetTextColor(dc, c);
             let mut t = text.to_vec();
-            let mut r = RECT { left: x, top, right: w - scaled(hwnd, PAD_X), bottom };
+            let mut r = RECT { left, top: 0, right, bottom: h };
             DrawTextW(dc, &mut t, &mut r, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX | DT_VCENTER);
             SelectObject(dc, old);
             let _ = DeleteObject(f.into());
         };
-        draw(&look.name, font(hwnd, NAME_PT, 600), look.colors[1], y, y + line);
-        if !look.hint.is_empty() {
-            draw(&look.hint, font(hwnd, HINT_PT, 400), look.colors[2], y + line + scaled(hwnd, 2), h - y);
-        }
+        let x = scaled(hwnd, PAD_X);
+        draw(&[glyph(look.kind)], font(hwnd, ICON_PX, 400, true), icon, x, x + icon_w);
+        let tx = x + icon_w + scaled(hwnd, GAP);
+        draw(&look.name, font(hwnd, TEXT_PX, 600, false), fg, tx, w - scaled(hwnd, PAD_X));
         let _ = EndPaint(hwnd, &ps);
     }
 }
@@ -125,7 +141,7 @@ fn follow(hwnd: HWND) {
     // SAFETY: our own window; never activated.
     unsafe {
         if GetCursorPos(&mut p).is_ok() {
-            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), p.x + scaled(hwnd, 14), p.y + scaled(hwnd, 18), 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), p.x + scaled(hwnd, 12), p.y + scaled(hwnd, 16), 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
         }
     }
 }
@@ -158,12 +174,12 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 /// Shows the ghost (or changes what it says). On the UI thread.
-pub fn show(name: &str, hint: &str, colors: [[u8; 3]; 4]) -> bool {
+pub fn show(name: &str, kind: Kind, colors: [[u8; 3]; 4]) -> bool {
     if !*CLASS.get_or_init(register) {
         return false;
     }
     let colors = colors.map(|[r, g, b]| COLORREF(r as u32 | (g as u32) << 8 | (b as u32) << 16));
-    *LOOK.lock() = Some(Look { name: wide(name), hint: wide(hint), colors });
+    *LOOK.lock() = Some(Look { name: wide(name), kind, colors });
     let mut hwnd = HWND(GHOST.load(Ordering::Relaxed) as *mut _);
     // SAFETY: plain Win32 window on the UI thread: a click-through, never-activated, topmost popup.
     unsafe {
@@ -186,13 +202,13 @@ pub fn show(name: &str, hint: &str, colors: [[u8; 3]; 4]) -> bool {
                 return false;
             };
             hwnd = h;
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 242, LWA_ALPHA);
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 245, LWA_ALPHA);
             SetTimer(Some(hwnd), TIMER, 15, None);
             GHOST.store(hwnd.0 as isize, Ordering::Relaxed);
         }
         let (w, h, _) = measure(hwnd, LOOK.lock().as_ref().unwrap());
         let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, w, h, SWP_NOACTIVATE);
-        let r = scaled(hwnd, 16);
+        let r = h;
         SetWindowRgn(hwnd, Some(CreateRoundRectRgn(0, 0, w + 1, h + 1, r, r)), true);
         follow(hwnd);
         let _ = InvalidateRect(Some(hwnd), None, true);
@@ -212,4 +228,31 @@ pub fn hide() {
         }
     }
     *LOOK.lock() = None;
+}
+
+/// Drags the file at `path` out of the window as Windows' own file drag (as from Explorer): other apps take a
+/// copy when it's dropped on them, and holding it over a taskbar button brings that app forward. Runs until the
+/// file is dropped or the drag is given up; true when it was dropped somewhere. On the UI thread, with the mouse
+/// button down.
+pub fn drag_file(hwnd: isize, path: &str) -> Result<bool, String> {
+    use windows::core::HSTRING;
+    use windows::Win32::System::Com::IDataObject;
+    use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_NONE};
+    use windows::Win32::UI::Shell::{BHID_DataObject, IShellItem, SHCreateItemFromParsingName, SHDoDragDrop};
+    // SAFETY: shell COM objects on the UI thread (an STA, as drag and drop needs); released when dropped.
+    unsafe {
+        // The button was let go before the drag could start (it's asked for from the page): no drag, or it would
+        // wait for a release that already happened.
+        // (GetAsyncKeyState reads the physical button: the right one for swapped, left-handed mice.)
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+        let button = if GetSystemMetrics(SM_SWAPBUTTON) != 0 { VK_RBUTTON } else { VK_LBUTTON };
+        if GetAsyncKeyState(button.0 as i32) as u16 & 0x8000 == 0 {
+            return Ok(false);
+        }
+        let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None).map_err(|e| e.to_string())?;
+        let data: IDataObject = item.BindToHandler(None, &BHID_DataObject).map_err(|e| e.to_string())?;
+        let effect = SHDoDragDrop(Some(HWND(hwnd as *mut _)), &data, None, DROPEFFECT_COPY | DROPEFFECT_LINK).map_err(|e| e.to_string())?;
+        Ok(effect != DROPEFFECT_NONE)
+    }
 }

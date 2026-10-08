@@ -1360,5 +1360,20 @@ body.text-edit .pg { cursor: default; }
 
 /* A tab being dragged: lifted out of the strip. */
 .tab.lifted { background: var(--surface); color: var(--tx); box-shadow: 0 0 0 1.5px var(--acc), var(--pop-shadow); position: relative; z-index: 2; cursor: grabbing; }
-.drag-ghost.tab-ghost { display: flex; flex-direction: column; gap: 2px; border-left: 3px solid var(--acc); background: var(--panel); color: var(--tx); }
-.drag-ghost.tab-ghost span { font-size: 12px; color: var(--tx3); font-weight: 400; }
+/* The page's own label for a dragged tab (where there's no native one): what letting go does. */
+.tab-ghost {
+  position: fixed; z-index: 80; pointer-events: none; display: flex; align-items: center; gap: 6px; max-width: 220px;
+  padding: 4px 9px; border-radius: 999px; background: var(--panel); color: var(--tx); font-size: 12px; font-weight: 600;
+  box-shadow: var(--pop-shadow);
+}
+.tab-ghost svg { color: var(--acc); flex-shrink: 0; }
+.tab-ghost span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-ghost.join { background: var(--acc); color: var(--on-acc); }
+.tab-ghost.join svg { color: var(--on-acc); }
+/* A tab from another window over this strip: the strip lights up, a bar shows where it lands. */
+.tabs { position: relative; }
+.tabs.drop-target { background: var(--acc-soft); border-radius: 9px 9px 0 0; }
+.tab-drop { position: absolute; bottom: 4px; width: 3px; height: 26px; border-radius: 2px; background: var(--acc); z-index: 3; pointer-events: none; }
+/* The document's file in the status bar, to drag into other apps. */
+.file-chip { display: inline-flex; align-items: center; gap: 6px; cursor: grab; border-radius: 6px; padding: 1px 6px; margin-left: -6px; }
+.file-chip:hover { background: var(--hover); color: var(--tx2); }

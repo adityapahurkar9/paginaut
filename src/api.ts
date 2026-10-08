@@ -632,13 +632,20 @@ export const api = {
   windowWith: (path: string) => invoke<string | null>("window_with", { path }),
   /** Brings that window forward at its tab for `path`. */
   tabFocus: (label: string, path: string) => invoke<void>("tab_focus", { label, path }),
-  /** The dragged tab under the mouse, outside the window too (colours: panel, text, muted, accent as RGB). False
-   *  where the system has none: the page draws its own. */
-  dragGhost: (name: string, hint: string, colors: [number, number, number][]) => invoke<boolean>("drag_ghost", { name, hint, colors }),
+  /** The dragged tab under the mouse, outside the window too, with what letting go does (colours: panel, text,
+   *  accent, text on accent, as RGB). False where the system has none: the page draws its own. */
+  dragGhost: (name: string, kind: DropKind, colors: [number, number, number][]) => invoke<boolean>("drag_ghost", { name, kind, colors }),
   dragGhostHide: () => invoke<void>("drag_ghost_hide"),
+  /** A tab dragged from here is over window `label`'s tabs at `x` (null: it left): that window shows where. */
+  tabHover: (label: string, x: number | null) => invoke<void>("tab_hover", { label, x }),
+  /** Drags a document's file out to other apps (Windows' own file drag); true when it was dropped somewhere. */
+  fileDrag: (path: string) => invoke<boolean>("file_drag", { path }),
   /** Exit Paginaut: every window closes, each asking about its own unsaved changes. */
   quitAll: () => invoke<void>("quit_all"),
 };
+
+/** What letting go of a dragged tab does: move along its tabs, join another window, open a new window. */
+export type DropKind = "move" | "join" | "new";
 
 /** This window's number: 0 for the first ("main"), n for "w-n". */
 export const windowIndex = Number(/^w-(\d+)$/.exec(getCurrentWindow().label)?.[1] ?? 0);

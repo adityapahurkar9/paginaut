@@ -293,16 +293,55 @@ pub fn tab_focus(app: AppHandle, label: String, path: String) -> Result<(), Stri
     win.emit_to(label.as_str(), "focus-path", path).map_err(|e| e.to_string())
 }
 
-/// The tab being dragged, under the mouse even outside the window (`colors`: the theme's panel, text, muted text
-/// and accent). False where there's no such thing (the page then draws its own, inside the window).
+/// The tab being dragged, under the mouse even outside the window. `kind` is what letting go does: "move" (along
+/// its own tabs), "join" (into the window under the mouse), "new" (a new window); `colors`: the theme's panel,
+/// text, accent and text on accent. False where there's no such thing (the page then draws its own, inside the
+/// window).
 #[tauri::command]
-pub fn drag_ghost(name: String, hint: String, colors: [[u8; 3]; 4]) -> bool {
+pub fn drag_ghost(name: String, kind: String, colors: [[u8; 3]; 4]) -> bool {
     #[cfg(windows)]
-    return crate::dragghost::show(&name, &hint, colors);
+    {
+        use crate::dragghost::Kind;
+        let kind = match kind.as_str() {
+            "join" => Kind::Join,
+            "new" => Kind::New,
+            _ => Kind::Move,
+        };
+        crate::dragghost::show(&name, kind, colors)
+    }
     #[cfg(not(windows))]
     {
-        let _ = (name, hint, colors);
+        let _ = (name, kind, colors);
         false
+    }
+}
+
+/// A tab dragged from another window is over window `label`'s tabs at `x` (its page pixels; None: it left), so
+/// that window shows where it would land.
+#[tauri::command]
+pub fn tab_hover(app: AppHandle, label: String, x: Option<f64>) {
+    let _ = app.emit_to(label.as_str(), "tab-hover", x);
+}
+
+/// Drags the file of a document out to other apps (Windows' own file drag). True when it was dropped somewhere.
+#[tauri::command]
+pub async fn file_drag(window: WebviewWindow, path: String) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+        let (tx, mut rx) = tauri::async_runtime::channel(1);
+        // On the UI thread (drag and drop needs it), modal until the file is dropped.
+        window
+            .run_on_main_thread(move || {
+                let _ = tx.try_send(crate::dragghost::drag_file(hwnd, &path));
+            })
+            .map_err(|e| e.to_string())?;
+        rx.recv().await.ok_or("The drag ended unexpectedly.")?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, path);
+        Ok(false)
     }
 }
 

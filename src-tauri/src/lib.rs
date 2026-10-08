@@ -418,6 +418,8 @@ fn run_desktop() {
             appwindows::tab_focus,
             appwindows::drag_ghost,
             appwindows::drag_ghost_hide,
+            appwindows::tab_hover,
+            appwindows::file_drag,
             memory_level,
         ])
         .setup(move |app| {

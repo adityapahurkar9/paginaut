@@ -5,7 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import * as A from "./actions";
 import { api } from "./api";
-import { activeKey, activeTab, closeTab, dialog, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs, openSettings, settingsOpen } from "./store";
+import { activeKey, activeTab, closeTab, dialog, showToast, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs, openSettings, settingsOpen } from "./store";
 import * as P from "./pages";
 import * as C from "./compare";
 import "./themes";
@@ -28,6 +28,9 @@ import { pauseOrResume, speaking, toggleReadAloud } from "./speech";
 import { printTab } from "./print";
 import { attachTab, stripIndexAt, type TabTransfer } from "./windows";
 import { switcherKey } from "./ui/TabSwitcher";
+import { dropAt } from "./ui/TabDrag";
+
+let dropTimer = 0;
 
 // Before any file opens: which program converts Office files.
 initOffice();
@@ -61,7 +64,16 @@ void Promise.all([
   // A file asked for in another window, open here: its tab comes forward.
   thisWindow.listen<string>("focus-path", (e) => {
     const t = tabs.value.find((x) => x.path.toLowerCase() === e.payload.toLowerCase());
-    if (t) activeKey.value = t.key;
+    if (!t) return;
+    activeKey.value = t.key;
+    showToast(`${t.name} is open here already.`);
+  }),
+  // A tab dragged from another window over this one's tabs: where it would land (cleared when it leaves, or if
+  // the other window stops saying).
+  thisWindow.listen<number | null>("tab-hover", (e) => {
+    dropAt.value = e.payload;
+    clearTimeout(dropTimer);
+    if (e.payload != null) dropTimer = window.setTimeout(() => (dropAt.value = null), 1500);
   }),
 ]).then(async () => {
   const s = await api.windowStart();
