@@ -50,14 +50,14 @@ gtk = "0.18"
 # Signing with certificates: the system's OpenSSL (Windows uses its own crypto; dsc.rs).
 openssl = "0.10"
 openssl-sys = "0.9"
-foreign-types = "0.3"
+foreign-types = "0.5"
 # DSC tokens and smart cards through their PKCS#11 drivers (pkcs11.rs).
 cryptoki = "0.12"
 
 [target.'cfg(windows)'.dependencies]
 # Same versions Tauri uses, to reach WebView2 settings it doesn't expose (touchpad pinch).
 webview2-com = "0.39"
-windows-core = "0.62"
+windows-core = "0.100"
 # DPAPI: saved signatures are encrypted for the Windows user. WinHTTP and BCrypt:
 # downloading OCR language models and checking them.
 windows = { version = "0.62", features = [
