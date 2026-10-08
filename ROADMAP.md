@@ -685,6 +685,47 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
 - [ ] Release signing key (the user's), store listing, AAB upload; source made public first (AGPL)
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
+### 0.8.17: tabs slide like Chrome's
+- [x] A tab dragged along the strip slides with the pointer and the other tabs move aside (animated) as it passes
+      their middles; it settles into its place when let go. The label under the pointer only shows once the tab is
+      pulled off the strip (before, the tab jumped between places under the label and looked stuck)
+
+### 0.8.15: drag labels
+- [x] The dragged tab's label is a small one-line pill whose icon says what letting go does: over another window's
+      tabs it turns accent-coloured with a +, and that window's strip lights up with a bar where the tab lands; off
+      the tabs it shows a new-window icon
+- [x] 0.8.16: dragging the file itself out to other apps (0.8.15: Windows' SHDoDragDrop from the status bar and
+      Home's recent files) didn't work in use and was taken out; tabs keep Chrome's tab drag only
+- [x] A file asked for again while open (in any window) switches to it, as Office does; the window says so
+
+### 0.8.14: review fixes for windows and tabs
+- [x] Alt+` works where Windows' input methods take the key press for themselves (only its release reaches the
+      page: the release then counts); the chosen tab is checked to still be open
+- [x] A dragged tab shows under the pointer everywhere, outside the window too: a small label in the app's colours
+      that says where it will go (along the tabs, into another window by name, or a new window); the tab itself
+      lifts in the strip. Windows draws it natively (dragghost.rs); elsewhere the page draws it inside the window
+- [x] A file already open in another window isn't opened twice (the two copies could overwrite each other's saves):
+      that window comes forward at its tab; a tab isn't moved into a window that has the same file
+- [x] A Book-mode tab moved to another window leaves full screen behind; files sent to a window still starting up
+      wait for it; Stop for Convert and Compare by job, not by window; the last window closes without closing each
+      document first; the switcher's preview uses the renders the pages already have
+
+### 0.8.13: several windows, tab switcher
+- [x] Several windows in one Paginaut (src-tauri/src/appwindows.rs, src/windows.ts): Ctrl+N or File › New window;
+      starting Paginaut again without a file opens a window, a file opened from Explorer goes to the window used
+      last. File › Close window (Alt+F4) and Exit Paginaut (all windows, each asking about its unsaved changes)
+- [x] Tabs move between windows with their open document: unsaved changes, undo history, Read mode and the
+      place in the document go along (the windows share the engine, nothing is saved or opened again). Drag a tab
+      along the strip to reorder it, off the strip for a new window where it's dropped, or onto another window's
+      strip to join it; right-click a tab for Move tab to new window / to window, Close other tabs. A window
+      whose last tab leaves closes. Not while the tab is saving, recognizing text or in an editing panel
+- [x] Alt+` tab switcher (Alt+~ back), most recently used first: a list that drops from the tab strip with the
+      chosen tab's page beside it; let go of Alt to switch, Esc to stay; a quick Alt+` flips to the tab before
+- Per window: Snap Layouts overlay, Stop for Convert and Compare, title (the document, for the taskbar), request
+  ids (each window counts in its own range of the engine's cancel ids). Settings and recent files written by one
+  window are taken up by the others (the side bar and ribbon tab stay each window's own). An update waits for
+  unsaved changes in every window
+
 ### 0.8.6: natural voices and printing
 - [x] Natural offline voices (Piper) for read aloud, downloaded in Settings › Read aloud (Phase 2's list)
 - [x] Print (File › Print, Home, Ctrl+P; the command palette moved to Ctrl+K only): Windows' own print dialog

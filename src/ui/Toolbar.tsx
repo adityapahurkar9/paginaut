@@ -4,6 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { api } from "../api";
 import type { ComponentChild } from "preact";
 import {
   BookOpen, ChevronDown, ChevronsRight, ChevronUp, Columns2, Combine, Expand, File, FileOutput, FolderOpen, FormInput, Hand, Highlighter, Info, Keyboard,
@@ -89,8 +90,10 @@ function fileItems(): MenuItem[] {
       run: () => void openFiles([f.path]),
     })),
     { sep: true },
+    { label: "New window", hint: "Ctrl+N", run: () => void api.windowNew(null, false).catch(() => {}) },
     { label: "Close tab", hint: "Ctrl+W", disabled: !tab, run: A.closeActive },
-    { label: "Exit", hint: "Alt+F4", run: () => void getCurrentWindow().close() },
+    { label: "Close window", hint: "Alt+F4", run: () => void getCurrentWindow().close() },
+    { label: "Exit Paginaut (all windows)", run: () => void api.quitAll() },
   ];
 }
 

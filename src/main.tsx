@@ -1,10 +1,11 @@
 import { render } from "preact";
-import { listen } from "@tauri-apps/api/event";
+import { effect } from "@preact/signals";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import * as A from "./actions";
 import { api } from "./api";
-import { activeTab, closeTab, dialog, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs, openSettings, settingsOpen } from "./store";
+import { activeKey, activeTab, closeTab, dialog, showToast, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs, openSettings, settingsOpen } from "./store";
 import * as P from "./pages";
 import * as C from "./compare";
 import "./themes";
@@ -25,6 +26,11 @@ import { endPageSize, pageSizeEdit } from "./pagesize";
 import { initOffice } from "./office";
 import { pauseOrResume, speaking, toggleReadAloud } from "./speech";
 import { printTab } from "./print";
+import { attachTab, stripIndexAt, type TabTransfer } from "./windows";
+import { switcherKey } from "./ui/TabSwitcher";
+import { dropAt } from "./ui/TabDrag";
+
+let dropTimer = 0;
 
 // Before any file opens: which program converts Office files.
 initOffice();
@@ -48,11 +54,42 @@ getCurrentWindow().onResized(() => {
   getCurrentWindow().isMinimized().then(setMinimized).catch(() => {});
 });
 
-// Files passed on the command line, "Open with", or a second launch.
-api.takeLaunchFiles().then((files) => {
-  if (files.length) void openFiles(files);
+// Files passed on the command line or "Open with", or a tab moved here from another window; later, files from
+// a second launch. (Events for this window alone: the global listen would hear every window's.)
+// Listening first: files that arrive before then come with the start instead (appwindows.rs forward_files).
+const thisWindow = getCurrentWebviewWindow();
+void Promise.all([
+  thisWindow.listen<string[]>("open-files", (e) => openFiles(e.payload)),
+  thisWindow.listen<{ tab: TabTransfer; atX: number | null }>("tab-arrive", (e) => attachTab(e.payload.tab, e.payload.atX == null ? undefined : stripIndexAt(e.payload.atX))),
+  // A file asked for in another window, open here: its tab comes forward.
+  thisWindow.listen<string>("focus-path", (e) => {
+    const t = tabs.value.find((x) => x.path.toLowerCase() === e.payload.toLowerCase());
+    if (!t) return;
+    activeKey.value = t.key;
+    showToast(`${t.name} is open here already.`);
+  }),
+  // A tab dragged from another window over this one's tabs: where it would land (cleared when it leaves, or if
+  // the other window stops saying).
+  thisWindow.listen<number | null>("tab-hover", (e) => {
+    dropAt.value = e.payload;
+    clearTimeout(dropTimer);
+    if (e.payload != null) dropTimer = window.setTimeout(() => (dropAt.value = null), 1500);
+  }),
+]).then(async () => {
+  const s = await api.windowStart();
+  if (s.files.length) void openFiles(s.files);
+  if (s.tab) attachTab(s.tab as TabTransfer);
 });
-listen<string[]>("open-files", (e) => openFiles(e.payload));
+
+// The window's title names its document (for the taskbar and Windows' Alt+Tab); unsaved changes are reported too,
+// so an update waits for them in every window.
+effect(() => {
+  const name = activeTab.value?.name ?? "";
+  const n = tabs.value.length;
+  // How other windows' "Move tab to window" names this one.
+  const summary = !n ? "Home" : n === 1 ? tabs.value[0].name : `${name || tabs.value[0].name} and ${n - 1} more`;
+  void api.windowReport(name, summary, tabs.value.map((t) => t.path), tabs.value.some((x) => x.dirty.value)).catch(() => {});
+});
 
 // Drag and drop from Explorer.
 let dragPaths: string[] = [];
@@ -73,13 +110,15 @@ getCurrentWebview().onDragDropEvent((e) => {
   }
 });
 
-// Closing the window: ask about unsaved page edits, tab by tab.
+// Closing the window: ask about unsaved page edits, tab by tab. Its documents close with it (the other
+// windows carry on with theirs).
 getCurrentWindow().onCloseRequested(async (event) => {
   persistPositions();
-  const dirty = tabs.value.filter((t) => t.dirty.value);
-  if (!dirty.length) return;
   event.preventDefault();
-  for (const t of dirty) if (!(await closeTab(t))) return;
+  for (const t of tabs.value.filter((t) => t.dirty.value)) if (!(await closeTab(t))) return;
+  if (C.compare.value) C.closeCompare();
+  // The other windows carry on: this one's documents close (the last window's go with the app).
+  if ((await api.windowList().catch(() => [])).length) await Promise.allSettled(tabs.value.map((t) => t.info.value && api.close(t.info.value.docId)));
   await getCurrentWindow().destroy();
 });
 
@@ -100,6 +139,8 @@ window.addEventListener("keydown", (e) => {
   };
 
   if (dialog.value || settingsOpen.value) return; // a dialog is open; it handles its own keys
+  // Alt+` / Alt+~: the tab switcher (it takes the keys while it's open).
+  if (switcherKey(e)) return handled();
   const tab = activeTab.value;
   const ready = tab?.status.value === "ready" ? tab : null;
 
@@ -111,6 +152,7 @@ window.addEventListener("keydown", (e) => {
       case "o": handled(); return A.openDialog();
       case "w": handled(); return A.closeActive();
       case "t": handled(); return openHome();
+      case "n": handled(); return void api.windowNew(null, false).catch(() => {});
       case "f": handled(); return A.openFind();
       case "k": handled(); paletteOpen.value = true; return;
       case "p": handled(); if (ready) void printTab(ready); return;

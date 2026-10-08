@@ -1,7 +1,7 @@
 // Compare: two files side by side, lined up word by word (see compare.rs), in a tab of their own. A PDF with a
 // PDF, or with the Word, PowerPoint, Excel or Markdown file it was made from.
 import { batch, signal } from "@preact/signals";
-import { api, type CompareOptions, type CompareOutcome, type CompareSideReq, type DocInfo } from "./api";
+import { api, newId, type CompareOptions, type CompareOutcome, type CompareSideReq, type DocInfo } from "./api";
 import { activeKey, baseName, closeKey, leaveHome, setCompareKey, settings, tabs, updateSettings } from "./store";
 
 /** The Compare tab's key (like the Home tab's). */
@@ -98,6 +98,9 @@ const request = (s: CompareSide): CompareSideReq => ({
   fixed: !!s.info && !s.info.reflowable && !s.info.converted,
 });
 
+/** The running comparison's id, for Stop. */
+let compareSid = 0;
+
 function update(patch: Partial<CompareSession>) {
   if (compare.value) compare.value = { ...compare.value, ...patch };
 }
@@ -105,7 +108,7 @@ function update(patch: Partial<CompareSession>) {
 /** Opens both files and compares them in the Compare tab. */
 export async function startCompare(a: string, b: string) {
   const gen = ++generation;
-  void api.compareStop().catch(() => {});
+  void api.compareStop(compareSid).catch(() => {});
   comparePassword.value?.answer(null);
   closeDocs();
   const blank = (path: string): CompareSide => ({ path, name: baseName(path), info: null, sizes: null });
@@ -137,7 +140,8 @@ async function runCompare(gen: number) {
   compareSel.value = -1;
   const names = { a: s.a.name, b: s.b.name };
   try {
-    const outcome = await api.compareRun(request(s.a), request(s.b), compareOptions(), (e) => {
+    compareSid = newId();
+    const outcome = await api.compareRun(request(s.a), request(s.b), compareOptions(), compareSid, (e) => {
       if (gen !== generation) return;
       if (e.kind === "reading") update({ progress: `Reading ${names[e.side]}…`, fraction: e.total > 1 ? e.done / e.total : -1 });
       else if (e.kind === "comparing") update({ progress: "Lining up the words…", fraction: -1 });
@@ -173,7 +177,7 @@ export function swapSides() {
 }
 
 export function stopCompare() {
-  void api.compareStop().catch(() => {});
+  void api.compareStop(compareSid).catch(() => {});
   comparePassword.value?.answer(null);
 }
 

@@ -1,10 +1,10 @@
 // The Convert pane (right side, sharing the place of the Sign pane): this document to Word, Excel, PowerPoint,
 // pictures or text; and files (Office, web pages, e-books) to PDF.
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { X } from "lucide-preact";
-import { api, type ExportDone, type ExportFormat, type OfficeEngine } from "../api";
+import { api, newId, type ExportDone, type ExportFormat, type OfficeEngine } from "../api";
 import { bookScreen } from "../modes";
 import { parsePages } from "../ocr";
 import { convertTarget, openConvertPane, type ExportTarget } from "../office";
@@ -73,6 +73,8 @@ function ThisDocument({ tab }: { tab: Tab }) {
   const target = convertTarget.value;
   const setTarget = (t: ExportTarget) => (convertTarget.value = t);
   const [opts, setOpts] = useState<{ docx: OfficeEngine[]; pptx: OfficeEngine[] } | null>(null);
+  /** The running conversion's id, for Stop. */
+  const job = useRef(0);
   const [engine, setEngine] = useState<Record<string, OfficeEngine>>({});
   const [pages, setPages] = useState<"all" | "selected" | "range">("all");
   const [range, setRange] = useState("");
@@ -117,8 +119,10 @@ function ThisDocument({ tab }: { tab: Tab }) {
     setDone(null);
     setBusy({ done: 0, total: order.length });
     try {
+      job.current = newId();
       const r = await api.convertFromPdf(
         { doc: tab.info.value!.docId, order, rot: edits.rot, format, out, engine: chosen ?? null, dpi: target === "images" ? dpi : null },
+        job.current,
         (e) => setBusy((b) => ({ ...b, done: e.done, total: e.total })),
       );
       setDone(r);
@@ -211,7 +215,7 @@ function ThisDocument({ tab }: { tab: Tab }) {
               disabled={busy.stopping}
               onClick={() => {
                 setBusy({ ...busy, stopping: true });
-                void api.convertStop();
+                void api.convertStop(job.current);
               }}
             >
               Stop

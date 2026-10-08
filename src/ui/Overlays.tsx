@@ -27,6 +27,9 @@ import { removeStamps } from "../stamps";
 import { activeTab, baseName, dialog, findOpen, openFiles, openSettings, paletteOpen, recent, settings, toast, unlockTab, updateSettings, type Tab } from "../store";
 import { speaking, toggleReadAloud } from "../speech";
 import { printTab } from "../print";
+import { moveToNewWindow } from "../windows";
+import { api } from "../api";
+import { openSwitcher } from "./TabSwitcher";
 
 // ---------------------------------------------------------------- menu
 
@@ -288,6 +291,9 @@ function commands(): Item[] {
     c(settings.value.autoSaveRotations ? "Turn off auto-save for rotations" : "Turn on auto-save for rotations",
       () => updateSettings({ autoSaveRotations: !settings.value.autoSaveRotations }), ""),
     c("Next tab", A.nextTab, "Ctrl+Tab"),
+    c("Switch tab…", openSwitcher, "Alt+`"),
+    c("New window", () => void api.windowNew(null, false).catch(() => {}), "Ctrl+N"),
+    c("Move tab to new window", withTab((t) => void moveToNewWindow(t)), "", () => !!activeTab.value),
     c("Close tab", A.closeActive, "Ctrl+W", () => !!activeTab.value),
     c("Keyboard shortcuts", () => openSettings("shortcuts"), "F1"),
     c("About Paginaut", () => openSettings("about"), ""),
