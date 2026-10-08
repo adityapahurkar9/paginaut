@@ -14,9 +14,13 @@ pub mod addons;
 #[cfg(desktop)]
 mod update;
 #[cfg(desktop)]
+mod appwindows;
+#[cfg(desktop)]
 mod defaults;
 #[cfg(windows)]
 mod snap;
+#[cfg(windows)]
+mod dragghost;
 #[cfg(windows)]
 mod print;
 #[cfg(target_os = "linux")]
@@ -64,8 +68,6 @@ mod shelf;
 
 #[cfg(desktop)]
 use app::AppState;
-#[cfg(desktop)]
-use parking_lot::Mutex;
 #[cfg(desktop)]
 use tauri::Manager;
 
@@ -258,11 +260,13 @@ fn run_desktop() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             let files = app::files_from_args(&argv, Some(&cwd));
-            app::forward_files(app, files);
+            appwindows::forward_files(app, files);
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState { engine, launch_files: Mutex::new(launch), started: std::time::Instant::now() })
+        .manage(AppState { engine, started: std::time::Instant::now() })
+        .manage(appwindows::Windows::new(launch))
+        .on_window_event(appwindows::on_window_event)
         .register_asynchronous_uri_scheme_protocol("paginaut", app::protocol)
         .invoke_handler(tauri::generate_handler![
             app::open_document,
@@ -403,11 +407,22 @@ fn run_desktop() {
             desk::markdown_save,
             app::cancel,
             desk::system_info,
-            app::take_launch_files,
+            appwindows::window_start,
+            appwindows::window_new,
+            appwindows::window_list,
+            appwindows::tab_send,
+            appwindows::window_at,
+            appwindows::window_report,
+            appwindows::quit_all,
+            appwindows::window_with,
+            appwindows::tab_focus,
+            appwindows::drag_ghost,
+            appwindows::drag_ghost_hide,
+            appwindows::tab_hover,
             memory_level,
         ])
         .setup(move |app| {
-            // Only the one instance gets here (a second one hands its files over and quits first):
+            // Only the one instance gets here (a second one hands its files over, or asks for a window, and quits first):
             // what earlier runs left in the temp folder can go.
             clear_temp();
             engine::mupdf::set_temp_dir(&std::env::temp_dir());
@@ -429,14 +444,8 @@ fn run_desktop() {
             converter.set_converter(std::sync::Arc::new(move |path: &str, engine: Option<&str>| o.convert(path, engine)));
             app.manage(office);
             // Shown by the UI once the first frame is painted, so there's no white flash.
-            #[cfg(windows)]
             if let Some(win) = app.get_webview_window("main") {
-                enable_touchpad_pinch(&win);
-                if let Ok(hwnd) = win.hwnd() {
-                    if let Err(e) = snap::install(app.handle(), hwnd.0 as isize) {
-                        eprintln!("snap layouts: {e}");
-                    }
-                }
+                appwindows::window_ready(&win);
             }
             Ok(())
         })

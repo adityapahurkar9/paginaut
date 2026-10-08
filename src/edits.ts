@@ -122,4 +122,19 @@ export class History {
   get canRedo() {
     return this.redoStack.length > 0;
   }
+  /** Both stacks as plain data (a tab moving to another window takes its history along). */
+  toJSON(): HistoryData {
+    return { undo: this.undoStack, redo: this.redoStack };
+  }
+  static from(data: HistoryData): History {
+    const h = new History();
+    h.undoStack = data.undo.slice();
+    h.redoStack = data.redo.slice();
+    return h;
+  }
+}
+
+export interface HistoryData {
+  undo: Entry[];
+  redo: Entry[];
 }

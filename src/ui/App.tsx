@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
 import { BookOpen, FileDiff, FileImage, FileSpreadsheet, FileText, House, Plus, Presentation, X } from "lucide-preact";
 import { Logo } from "./Logo";
@@ -49,6 +49,8 @@ import { PageDragGhost } from "./Sidebar";
 import { PageGrid } from "./PageGrid";
 import { selectedAnnot } from "../annots";
 import { SpeechBar } from "./SpeechBar";
+import { draggingTab, dropAt, dropMarkerLeft, openTabMenu, startTabDrag, TabDragGhost } from "./TabDrag";
+import { TabSwitcher } from "./TabSwitcher";
 import { PrintBar } from "./PrintBar";
 
 export const tool = signal<"select" | "hand">("select");
@@ -117,6 +119,8 @@ export function App() {
       <PicturesDialog />
       <TableDialog />
       <PageDragGhost />
+      <TabDragGhost />
+      <TabSwitcher />
       <Toast />
       {dropping.value && <div class="drop-veil" />}
     </div>
@@ -125,7 +129,7 @@ export function App() {
 
 // ---------------------------------------------------------------- title bar
 
-function tabIcon(t: Tab) {
+export function tabIcon(t: Tab) {
   const ext = t.path.split(".").pop()?.toLowerCase() ?? "";
   if (["epub", "mobi", "fb2", "fbz"].includes(ext)) return <BookOpen size={15} />;
   if (["png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "jfif"].includes(ext)) return <FileImage size={15} />;
@@ -156,7 +160,7 @@ function useSnapButton() {
     ro.observe(el);
     ro.observe(document.documentElement);
     window.addEventListener("resize", report);
-    const unlisten = listen<boolean>("snap-hover", (e) => setHot(e.payload));
+    const unlisten = getCurrentWebviewWindow().listen<boolean>("snap-hover", (e) => setHot(e.payload));
     report();
     return () => {
       cancelAnimationFrame(raf);
@@ -170,6 +174,7 @@ function useSnapButton() {
 
 function TitleBar() {
   const win = getCurrentWindow();
+  const strip = useRef<HTMLDivElement>(null);
   const snap = useSnapButton();
   return (
     <div class="titlebar">
@@ -177,11 +182,12 @@ function TitleBar() {
         <Logo size={20} tile />
         <span data-tauri-drag-region>Paginaut</span>
       </div>
-      <div class="tabs">
+      <div class={`tabs ${dropAt.value != null ? "drop-target" : ""}`} ref={strip}>
+        {dropAt.value != null && strip.current && <div class="tab-drop" style={{ left: dropMarkerLeft(strip.current, dropAt.value) }} />}
         {tabs.value.map((t) => (
           <button
             key={t.key}
-            class={`tab ${t.key === activeKey.value ? "on" : ""}`}
+            class={`tab ${t.key === activeKey.value ? "on" : ""} ${draggingTab.value === t.key ? "lifted" : ""}`}
             data-tab={t.key}
             title={t.path}
             onMouseDown={(e) => {
@@ -190,6 +196,8 @@ function TitleBar() {
                 closeTab(t);
               } else if (e.button === 0) activeKey.value = t.key;
             }}
+            onPointerDown={(e) => startTabDrag(e, t)}
+            onContextMenu={(e) => void openTabMenu(e, t)}
           >
             {t.status.value === "loading" || t.saving.value ? <span class="spin" /> : tabIcon(t)}
             <span class="name">{t.name}</span>
@@ -312,7 +320,8 @@ function TabView({ tab, active }: { tab: Tab; active: boolean }) {
     void initForms(tab);
     P.runDocReady(tab);
     if (tab.info.value?.isPdf) attachAnnotLayer(tab);
-    const prev = recent.value.find((r) => r.path.toLowerCase() === tab.path.toLowerCase())?.view;
+    const prev = tab.carriedView ?? recent.value.find((r) => r.path.toLowerCase() === tab.path.toLowerCase())?.view;
+    tab.carriedView = null;
     v.restore(prev ?? { page: 0, frac: 0, zoom: 1, fit: "width" });
     if (tab.sizes.value && tab.edits.value) v.setPages(specs(tab.edits.value, tab.sizes.value));
     if (active) v.focus();

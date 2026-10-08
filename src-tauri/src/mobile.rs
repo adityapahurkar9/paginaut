@@ -5,7 +5,6 @@
 
 use crate::app::{self, blocking, AppState, Res};
 use crate::engine::DocId;
-use parking_lot::Mutex;
 use serde_json::{json, Value};
 use tauri::plugin::{Builder as PluginBuilder, PluginHandle, TauriPlugin};
 use tauri::{Manager, Runtime, State, Wry};
@@ -17,7 +16,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(native())
-        .manage(AppState { engine, launch_files: Mutex::new(Vec::new()), started: std::time::Instant::now() })
+        .manage(AppState { engine, started: std::time::Instant::now() })
         .register_asynchronous_uri_scheme_protocol("paginaut", app::protocol)
         .invoke_handler(tauri::generate_handler![
             app::open_document,
