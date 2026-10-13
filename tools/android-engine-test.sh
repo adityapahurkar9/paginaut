@@ -68,14 +68,18 @@ after=$(engine_pid)
 [ -n "$after" ] && [ "$after" != "$before" ] && echo "ok   stuck engine gone ($before -> $after)" || { echo "FAIL stuck engine still there ($before -> $after)"; fail=1; }
 js "T.I('close_document', { doc: $h })" >/dev/null
 
-# 5. A locked document stays unlocked across a restart.
+# 5. An engine asking for more temporary files than any reading needs gets no more than the cap.
+check "temporary files capped" "$(js "T.I('engine_crash_test', { how: 'flood' }).then(r => r.got + ' ' + (r.error || ''))")" "512 The reading engine asked for too many temporary files."
+check "a new engine starts with none" "$(js "T.I('engine_crash_test').catch(() => 0).then(() => T.I('engine_crash_test', { how: 'flood' })).then(r => r.got)")" 512
+
+# 6. A locked document stays unlocked across a restart.
 l=$(js "T.open('$(uri locked.pdf)')")
 check "unlock" "$(js "T.I('unlock_document', { doc: $l, password: 'test' }).then(i => !!i)")" true
 kill_engine
 check "locked document after restart" "$(js "T.draw($l, 0)")" 200
 js "T.I('close_document', { doc: $l })" >/dev/null
 
-# 6. Files written through handles: a cover, a print PDF, a repaired e-book.
+# 7. Files written through handles: a cover, a print PDF, a repaired e-book.
 check "cover" "$(js "T.I('reopen', { uri: '$(uri businessplans.epub)' }).then(p => T.I('book_cover', { path: p.path, fp: 'ab12' })).then(m => m.cover + '/' + m.pages)")" "true/206"
 b=$(js "T.open('$(uri businessplans.epub)')")
 bpath=$(js "T.I('reopen', { uri: '$(uri businessplans.epub)' }).then(p => p.path)")
