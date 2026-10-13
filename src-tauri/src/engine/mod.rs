@@ -4,6 +4,7 @@ pub mod ffi;
 pub mod mupdf;
 pub mod ocr;
 mod pdfhtml;
+pub mod sandbox;
 pub use pdfhtml::Preview as BookPreview;
 pub mod pool;
 pub mod table;
@@ -1599,18 +1600,10 @@ impl Engine {
         let d = self.doc(id)?;
         let from = d.converted.read().as_ref().filter(|_| pdfhtml::is_rebuilt(&d.path())).map(|c| c.from.clone());
         let from = from.ok_or("This e-book didn't need repairing.")?;
-        if let Some(dir) = std::path::Path::new(target).parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
         if !pdf {
             return pdfhtml::repaired_epub(&from, target);
         }
-        let part = format!("{target}.part");
-        std::fs::copy(d.path(), &part).map_err(|e| e.to_string())?;
-        std::fs::rename(&part, target).map_err(|e| {
-            let _ = std::fs::remove_file(&part);
-            e.to_string()
-        })
+        sandbox::copy_file(&d.path(), target)
     }
 
     pub fn unlock(&self, id: DocId, password: &str) -> Result<Option<DocInfo>, String> {

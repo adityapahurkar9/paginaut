@@ -4,14 +4,19 @@ import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Environment
+import android.os.IBinder
+import android.os.Message
+import android.os.Messenger
 import android.os.ParcelFileDescriptor
 import android.print.PageRange
 import android.print.PrintAttributes
@@ -431,6 +436,73 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     io.execute {
       dirs.forEach { it.deleteRecursively() }
       invoke.resolve()
+    }
+  }
+
+  // ------------------------------------------------------------ the engine's process
+
+  /** The current engine's binding: let go when a new engine is started (the old one stopped). */
+  private var engineBinding: ServiceConnection? = null
+
+  /**
+   * Starts the reading engine in its isolated process (EngineService) and gives it one end of a new socket
+   * pair: `{ fd }` is the app's end, detached for engine_link.rs. Called at start and whenever the engine
+   * has stopped; the earlier binding goes first.
+   */
+  @Command
+  fun engineConnect(invoke: Invoke) {
+    if (MainActivity.refused) return invoke.reject(REFUSED)
+    activity.runOnUiThread {
+      engineBinding?.let {
+        try {
+          activity.unbindService(it)
+        } catch (_: Exception) {
+        }
+      }
+      val pair = ParcelFileDescriptor.createSocketPair()
+      val binding = object : ServiceConnection {
+        var done = false
+
+        /** Not started (no binding, or none within the time below): said once, and the binding goes. */
+        fun fail(why: String) {
+          if (done) return
+          done = true
+          pair.forEach { it.close() }
+          try {
+            activity.unbindService(this)
+          } catch (_: Exception) {
+          }
+          if (engineBinding === this) engineBinding = null
+          invoke.reject(why)
+        }
+
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+          // Android starts a stopped engine again for this binding: the app connects anew instead.
+          if (done) return
+          done = true
+          try {
+            Messenger(binder).send(Message.obtain().apply { data = Bundle().apply { putParcelable("socket", pair[1]) } })
+            pair[1].close()
+            invoke.resolve(JSObject().put("fd", pair[0].detachFd()))
+          } catch (e: Exception) {
+            pair.forEach { it.close() }
+            invoke.reject("The reading engine didn't start: ${e.message}")
+          }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {}
+        override fun onBindingDied(name: ComponentName) = fail("The reading engine didn't start.")
+        override fun onNullBinding(name: ComponentName) = fail("The reading engine didn't start.")
+      }
+      engineBinding = binding
+      // engine_link.rs waits for this: never forever.
+      android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ binding.fail("The reading engine took too long to start.") }, 20_000)
+      val started = try {
+        activity.bindService(Intent(activity, EngineService::class.java), binding, Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT)
+      } catch (_: Exception) {
+        false
+      }
+      if (!started) binding.fail("The reading engine didn't start.")
     }
   }
 

@@ -81,6 +81,13 @@ Points that can be checked in the source:
    limited to the copies of opened documents and handing out one-time read grants.
 7. **No scripts from documents.** JavaScript in PDFs is off on Android. Book text is shown as text, never run
    as a web page.
+8. **The reading engine is sealed off.** MuPDF, the code that reads every document, runs in its own Android
+   isolated process (`EngineService`, `engine_link.rs`): no permissions, no files, no network. The app opens
+   each document read-only and hands the engine just that open file. A document built to break the engine
+   reaches nothing. If the engine stops or stops answering, the app starts a new one and carries on; a
+   document that stops it twice is closed with a message. `tools/android-engine-test.sh` checks this.
+9. **Hide from screenshots** (the reader's View sheet): Android's secure window, so screenshots, recordings
+   and shared screens show black and Recent apps no preview.
 
 ## Privacy policy (draft)
 

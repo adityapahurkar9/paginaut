@@ -7,13 +7,14 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { Lock } from "lucide-preact";
 import { Library } from "./Library";
 import { native } from "./native";
-import { checkIntent, passwordAsk, savePosition } from "./open";
+import { listen } from "@tauri-apps/api/event";
+import { checkIntent, leaveReader, passwordAsk, savePosition } from "./open";
 import { Reader } from "./Reader";
 import { Sheets } from "./Sheets";
 import { tidyCache } from "./records";
 import "./theme";
 import { scanIfStale, scanShelf } from "./shelf";
-import { busy, chrome, doc, isDark, look, searching, settings, sheet, toast } from "./state";
+import { busy, chrome, doc, isDark, look, say, searching, settings, sheet, toast } from "./state";
 
 function App() {
   const d = doc.value;
@@ -95,6 +96,13 @@ effect(() => {
 
 // Hide from screenshots (the View sheet). Android remembers it too, so it's on before the first frame.
 effect(() => void native.setSecure(settings.value.secure));
+
+// A document that stopped the reading engine twice is closed by it (engine_link.rs): leave it and say why.
+void listen<number>("engine-refused", (e) => {
+  if (doc.value?.info.docId !== e.payload) return;
+  leaveReader();
+  say("This document stopped Paginaut's reading engine twice, so it was closed. The file may be damaged.");
+});
 
 // Copies the app no longer needs go (records.ts tidyCache), and Recent drops files that can't be
 // opened any more: checked from the library, so never under a document being opened.

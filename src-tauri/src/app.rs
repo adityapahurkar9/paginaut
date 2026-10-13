@@ -88,11 +88,86 @@ pub async fn page_label(state: State<'_, AppState>, doc: DocId, page: usize) -> 
 #[tauri::command]
 pub async fn outline(state: State<'_, AppState>, doc: DocId) -> Res<serde_json::Value> {
     let engine = state.engine.clone();
-    blocking(move || {
-        let json = engine.doc(doc)?.outline_json()?;
-        serde_json::from_str(&json).map_err(|e| e.to_string())
+    blocking(move || outline_of(&engine, doc)).await
+}
+
+// The bodies of commands that do more than one call, shared with the Android engine's process (engine_link.rs).
+
+pub(crate) fn outline_of(engine: &Engine, doc: DocId) -> Res<serde_json::Value> {
+    let json = engine.doc(doc)?.outline_json()?;
+    serde_json::from_str(&json).map_err(|e| e.to_string())
+}
+
+pub(crate) fn page_links_of(engine: &Engine, doc: DocId, page: usize) -> Res<serde_json::Value> {
+    let json = engine.doc(doc)?.links_json(page)?;
+    serde_json::from_str(&json).map_err(|e| e.to_string())
+}
+
+pub(crate) fn text_select_of(engine: &Engine, doc: DocId, page: usize, a: [f32; 2], b: [f32; 2], mode: i32) -> Res<Vec<[f32; 8]>> {
+    let d = engine.doc(doc)?;
+    let bounds = d.bounds(page)?;
+    let text = d.text(page)?;
+    let t = text.lock();
+    Ok(match mode {
+        0 => t.highlight(&bounds, a, b),
+        m => t.snap(&bounds, a, b, m).into_iter().collect(),
     })
-    .await
+}
+
+pub(crate) fn text_range_of(engine: &Engine, doc: DocId, page: usize, p: [f32; 2], mode: i32) -> Res<Option<TextRange>> {
+    let d = engine.doc(doc)?;
+    let bounds = d.bounds(page)?;
+    let text = d.text(page)?;
+    let t = text.lock();
+    Ok(t.snap_range(&bounds, p, mode).map(|[from, to]| TextRange { range: [from, to], quads: t.range_quads(&bounds, from, to) }))
+}
+
+pub(crate) fn text_copy_of(engine: &Engine, doc: DocId, page: usize, a: [f32; 2], b: [f32; 2]) -> Res<String> {
+    let d = engine.doc(doc)?;
+    let bounds = d.bounds(page)?;
+    let text = d.text(page)?;
+    let s = text.lock().copy(&bounds, a, b);
+    Ok(s)
+}
+
+pub(crate) fn text_range_copy_of(engine: &Engine, doc: DocId, page: usize, from: i32, to: i32) -> Res<String> {
+    let text = engine.doc(doc)?.text(page)?;
+    let s = text.lock().range_copy(from, to);
+    Ok(s)
+}
+
+/// A book's title, author and pages, and its first page as a JPEG (None without one): the shelf's cover.
+pub(crate) fn book_cover_of(engine: &Engine, path: &str) -> Res<(serde_json::Value, Option<Vec<u8>>)> {
+    // A book drawn again from its EPUB (pdfhtml.rs): only its first page is drawn for this.
+    let preview = crate::engine::book_preview(path);
+    let opened = engine.open(preview.as_ref().map_or(path, |p| p.pdf.as_str()));
+    let info = match opened {
+        Ok(info) => info,
+        Err(e) => {
+            if let Some(p) = &preview {
+                crate::engine::sandbox::release(&p.pdf);
+            }
+            return Err(e);
+        }
+    };
+    let jpg = (|| -> Result<Option<Vec<u8>>, String> {
+        if info.needs_password || info.page_count == 0 {
+            return Ok(None);
+        }
+        // About 360 px wide: sharp in a three-across grid on a phone, and in the Windows shelf's tiles.
+        let dpi = (72.0 * 360.0 / info.first_size[0].max(1.0)).clamp(12.0, 300.0);
+        Ok(Some(engine.doc(info.doc_id)?.page_image(0, 0, "jpg", dpi)?))
+    })()
+    .unwrap_or(None);
+    engine.close(info.doc_id);
+    let (title, author, pages) = match preview {
+        Some(p) => {
+            crate::engine::sandbox::release(&p.pdf);
+            (p.title, p.author, p.pages)
+        }
+        None => (info.title, info.author, info.page_count),
+    };
+    Ok((serde_json::json!({ "title": title, "author": author, "pages": pages, "cover": jpg.is_some() }), jpg))
 }
 
 #[tauri::command]
@@ -104,11 +179,7 @@ pub async fn page_images(state: State<'_, AppState>, doc: DocId, page: usize) ->
 #[tauri::command]
 pub async fn page_links(state: State<'_, AppState>, doc: DocId, page: usize) -> Res<serde_json::Value> {
     let engine = state.engine.clone();
-    blocking(move || {
-        let json = engine.doc(doc)?.links_json(page)?;
-        serde_json::from_str(&json).map_err(|e| e.to_string())
-    })
-    .await
+    blocking(move || page_links_of(&engine, doc, page)).await
 }
 
 // ---------------------------------------------------------------- text
@@ -123,22 +194,12 @@ pub async fn text_select(
     mode: i32,
 ) -> Res<Vec<[f32; 8]>> {
     let engine = state.engine.clone();
-    blocking(move || {
-        let d = engine.doc(doc)?;
-        let bounds = d.bounds(page)?;
-        let text = d.text(page)?;
-        let t = text.lock();
-        Ok(match mode {
-            0 => t.highlight(&bounds, a, b),
-            m => t.snap(&bounds, a, b, m).into_iter().collect(),
-        })
-    })
-    .await
+    blocking(move || text_select_of(&engine, doc, page, a, b, mode)).await
 }
 
 /// A word (mode 3), paragraph (4) or the page (5) near a point, as a character range with its
 /// quads: drawn and later copied exactly (see fo_text_snap_range).
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 pub struct TextRange {
     range: [i32; 2],
     quads: Vec<[f32; 8]>,
@@ -147,39 +208,19 @@ pub struct TextRange {
 #[tauri::command]
 pub async fn text_range(state: State<'_, AppState>, doc: DocId, page: usize, p: [f32; 2], mode: i32) -> Res<Option<TextRange>> {
     let engine = state.engine.clone();
-    blocking(move || {
-        let d = engine.doc(doc)?;
-        let bounds = d.bounds(page)?;
-        let text = d.text(page)?;
-        let t = text.lock();
-        Ok(t.snap_range(&bounds, p, mode).map(|[from, to]| TextRange { range: [from, to], quads: t.range_quads(&bounds, from, to) }))
-    })
-    .await
+    blocking(move || text_range_of(&engine, doc, page, p, mode)).await
 }
 
 #[tauri::command]
 pub async fn text_range_copy(state: State<'_, AppState>, doc: DocId, page: usize, from: i32, to: i32) -> Res<String> {
     let engine = state.engine.clone();
-    blocking(move || {
-        let d = engine.doc(doc)?;
-        let text = d.text(page)?;
-        let s = text.lock().range_copy(from, to);
-        Ok(s)
-    })
-    .await
+    blocking(move || text_range_copy_of(&engine, doc, page, from, to)).await
 }
 
 #[tauri::command]
 pub async fn text_copy(state: State<'_, AppState>, doc: DocId, page: usize, a: [f32; 2], b: [f32; 2]) -> Res<String> {
     let engine = state.engine.clone();
-    blocking(move || {
-        let d = engine.doc(doc)?;
-        let bounds = d.bounds(page)?;
-        let text = d.text(page)?;
-        let s = text.lock().copy(&bounds, a, b);
-        Ok(s)
-    })
-    .await
+    blocking(move || text_copy_of(&engine, doc, page, a, b)).await
 }
 
 #[tauri::command]
@@ -323,41 +364,17 @@ pub async fn book_cover(app: tauri::AppHandle, state: State<'_, AppState>, path:
     let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("covers");
     let engine = state.engine.clone();
     blocking(move || {
-        // A book drawn again from its EPUB (pdfhtml.rs): only its first page is drawn for this.
-        let preview = crate::engine::book_preview(&path);
-        let opened = engine.open(preview.as_ref().map_or(path.as_str(), |p| p.pdf.as_str()));
-        let info = match opened {
-            Ok(info) => info,
-            Err(e) => {
-                if let Some(p) = &preview {
-                    let _ = std::fs::remove_file(&p.pdf);
-                }
-                return Err(e);
-            }
-        };
-        let cover = (|| -> Result<bool, String> {
-            if info.needs_password || info.page_count == 0 {
-                return Ok(false);
-            }
-            // About 360 px wide: sharp in a three-across grid on a phone, and in the Windows shelf's tiles.
-            let dpi = (72.0 * 360.0 / info.first_size[0].max(1.0)).clamp(12.0, 300.0);
-            let jpg = engine.doc(info.doc_id)?.page_image(0, 0, "jpg", dpi)?;
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            std::fs::write(dir.join(format!("{fp}.jpg")), jpg).map_err(|e| e.to_string())?;
-            Ok(true)
-        })()
-        .unwrap_or(false);
-        engine.close(info.doc_id);
-        let (title, author, pages) = match preview {
-            Some(p) => {
-                let _ = std::fs::remove_file(&p.pdf);
-                (p.title, p.author, p.pages)
-            }
-            None => (info.title, info.author, info.page_count),
-        };
-        Ok(serde_json::json!({ "title": title, "author": author, "pages": pages, "cover": cover }))
+        let (meta, jpg) = book_cover_of(&engine, &path)?;
+        Ok(save_cover(meta, jpg, &dir, &fp))
     })
     .await
+}
+
+/// Keeps a cover as `covers/<fp>.jpg` (served by the protocol); `meta.cover` says whether there is one.
+pub(crate) fn save_cover(mut meta: serde_json::Value, jpg: Option<Vec<u8>>, dir: &std::path::Path, fp: &str) -> serde_json::Value {
+    let saved = jpg.is_some_and(|b| std::fs::create_dir_all(dir).and_then(|_| std::fs::write(dir.join(format!("{fp}.jpg")), b)).is_ok());
+    meta["cover"] = serde_json::json!(saved);
+    meta
 }
 
 // ---------------------------------------------------------------- paginaut:// protocol

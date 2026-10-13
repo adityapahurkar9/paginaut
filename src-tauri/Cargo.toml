@@ -33,6 +33,10 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 
+# Android: the engine's process gets documents as file handles over a socket (engine_link.rs).
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # Downloads (OCR models, voices, updates) and their checks: Windows does these itself (net.rs).
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }

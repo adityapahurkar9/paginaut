@@ -1,50 +1,52 @@
 //! The Android viewer: the same engine and `paginaut://` pixel protocol as the desktop app,
-//! with only the commands needed to read documents. Android's own services (the file picker,
-//! "Open with", Share, printing) are in the Kotlin plugin, PaginautPlugin.kt; the page reaches
-//! it through the commands here.
+//! with only the commands needed to read documents. The engine runs in its own isolated process
+//! (engine_link.rs); the commands here pass the page's requests to it. Android's own services (the
+//! file picker, "Open with", Share, printing) are in the Kotlin plugin, PaginautPlugin.kt.
 
-use crate::app::{self, blocking, AppState, Res};
-use crate::engine::{DocId, DocInfo};
+use crate::app::{self, blocking, Res};
+use crate::engine::DocId;
+use crate::engine_link::Remote;
 use serde_json::{json, Value};
+use std::sync::Arc;
+use tauri::http::{Request, Response, StatusCode};
+use tauri::ipc::Channel;
+use tauri::{UriSchemeContext, UriSchemeResponder};
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use tauri::plugin::{Builder as PluginBuilder, PluginHandle, TauriPlugin};
 use tauri::{Manager, Runtime, State, Wry};
 
 pub fn run() {
-    // A viewer fills in no forms: PDF scripts (form calculations, formatting) stay off.
-    crate::engine::mupdf::allow_scripts(false);
-    let engine = crate::engine::Engine::new(crate::worker_count(), crate::store_bytes()).expect("MuPDF failed to start");
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(native())
-        .manage(AppState { engine, started: std::time::Instant::now() })
-        .register_asynchronous_uri_scheme_protocol("paginaut", app::protocol)
+        .register_asynchronous_uri_scheme_protocol("paginaut", protocol)
         .invoke_handler(tauri::generate_handler![
             open_document,
-            app::unlock_document,
-            app::close_document,
-            app::trim_document,
-            app::properties,
-            app::security,
-            app::page_sizes,
-            app::page_label,
-            app::page_labels,
-            app::outline,
-            app::page_links,
-            app::page_images,
-            app::text_select,
-            app::text_copy,
-            app::text_range,
-            app::text_range_copy,
-            app::page_text,
-            app::page_text_stats,
-            app::search,
-            app::reflow,
-            app::annots,
-            app::doc_annots,
+            unlock_document,
+            close_document,
+            trim_document,
+            properties,
+            security,
+            page_sizes,
+            page_label,
+            page_labels,
+            outline,
+            page_links,
+            page_images,
+            text_select,
+            text_copy,
+            text_range,
+            text_range_copy,
+            page_text,
+            page_text_stats,
+            search,
+            reflow,
+            annots,
+            doc_annots,
             app::user_name,
-            app::cancel,
+            cancel,
+            engine_crash_test,
             pick_file,
             take_intent,
             reopen,
@@ -92,17 +94,32 @@ struct Native<R: Runtime>(PluginHandle<R>);
 fn native<R: Runtime>() -> TauriPlugin<R> {
     PluginBuilder::new("paginaut")
         .setup(|app, api| {
-            // Solid RAR comic books are unpacked here while open (std's temp dir isn't writable on Android).
-            if let Ok(dir) = app.path().app_cache_dir() {
-                crate::engine::mupdf::set_temp_dir(&dir.join("unpacked"));
-                let _ = std::fs::create_dir_all(&dir);
-                if let Ok(real) = std::fs::canonicalize(&dir) {
-                    let _ = CACHE.set(real);
-                }
+            let dir = app.path().app_cache_dir()?;
+            let _ = std::fs::create_dir_all(&dir);
+            if let Ok(real) = std::fs::canonicalize(&dir) {
+                let _ = CACHE.set(real);
             }
             #[cfg(target_os = "android")]
             {
                 let handle = api.register_android_plugin("app.paginaut.reader", "PaginautPlugin")?;
+                // The engine's process, started by the plugin (EngineService); started early, as it takes a moment.
+                let h = handle.clone();
+                let remote = Remote::new(
+                    move || {
+                        let v: Value = h.run_mobile_plugin("engineConnect", json!({})).map_err(|e| e.to_string())?;
+                        v["fd"].as_i64().map(|fd| fd as i32).ok_or_else(|| "The engine didn't start.".to_string())
+                    },
+                    &dir,
+                    {
+                        let app = app.app_handle().clone();
+                        move |doc| {
+                            use tauri::Emitter;
+                            let _ = app.emit("engine-refused", doc);
+                        }
+                    },
+                );
+                remote.warm_up();
+                app.manage(remote);
                 app.manage(Native(handle));
             }
             #[cfg(not(target_os = "android"))]
@@ -154,18 +171,16 @@ async fn share_text(native: State<'_, Native<Wry>>, text: String) -> Res<()> {
 /// Android's print service takes PDFs: other documents (e-books, XPS, comics) are written as a
 /// PDF in the cache first (never beside the book: Paginaut doesn't write where your files are).
 #[tauri::command]
-async fn print(native: State<'_, Native<Wry>>, state: State<'_, AppState>, doc: DocId, path: String, title: String, pdf: bool) -> Res<()> {
+async fn print(native: State<'_, Native<Wry>>, remote: State<'_, Arc<Remote>>, doc: DocId, path: String, title: String, pdf: bool) -> Res<()> {
     readable(&path)?;
     let file = if pdf {
         path
     } else {
         let dir = cache()?.join("print");
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let out = dir.join("print.pdf").to_string_lossy().into_owned();
-        let engine = state.engine.clone();
-        let target = out.clone();
-        blocking(move || engine.export_pdf(doc, &target)).await?;
+        let (r, target) = (remote.inner().clone(), out.clone());
+        blocking(move || r.write_to("export_pdf", doc, &target, json!({}))).await?;
         out
     };
     call(&native, "print", json!({ "path": file, "title": title })).await.map(|_| ())
@@ -339,20 +354,150 @@ fn writable(path: &str) -> Res<()> {
     }
 }
 
-#[tauri::command]
-async fn open_document(state: State<'_, AppState>, path: String, engine: Option<String>) -> Res<DocInfo> {
-    readable(&path)?;
-    app::open_document(state, path, engine).await
+// ---------------------------------------------------------------- the engine's commands
+
+/// Runs `f` with the engine's connection, off the async runtime (calls wait for the engine).
+async fn with<T: Send + 'static>(remote: &State<'_, Arc<Remote>>, f: impl FnOnce(&Remote) -> Res<T> + Send + 'static) -> Res<T> {
+    let r = remote.inner().clone();
+    blocking(move || f(&r)).await
 }
 
 #[tauri::command]
-async fn book_cover(app: tauri::AppHandle, state: State<'_, AppState>, path: String, fp: String) -> Res<Value> {
+async fn open_document(remote: State<'_, Arc<Remote>>, path: String) -> Res<Value> {
     readable(&path)?;
-    app::book_cover(app, state, path, fp).await
+    with(&remote, move |r| r.open(&path)).await
 }
 
 #[tauri::command]
-async fn save_repaired(state: State<'_, AppState>, doc: DocId, target: String, pdf: bool) -> Res<()> {
+async fn unlock_document(remote: State<'_, Arc<Remote>>, doc: DocId, password: String) -> Res<Value> {
+    with(&remote, move |r| r.unlock(doc, &password)).await
+}
+
+#[tauri::command]
+async fn close_document(remote: State<'_, Arc<Remote>>, doc: DocId) -> Res<()> {
+    with(&remote, move |r| Ok(r.close(doc))).await
+}
+
+/// A command about one document, passed on as it is.
+macro_rules! forward {
+    ($name:ident, $cmd:literal $(, $arg:ident: $ty:ty)*) => {
+        #[tauri::command]
+        async fn $name(remote: State<'_, Arc<Remote>>, doc: DocId $(, $arg: $ty)*) -> Res<Value> {
+            #[allow(unused_mut)]
+            let mut args = serde_json::Map::new();
+            $(args.insert(stringify!($arg).into(), json!($arg));)*
+            with(&remote, move |r| r.doc_value($cmd, doc, Value::Object(args))).await
+        }
+    };
+}
+
+forward!(trim_document, "trim");
+forward!(properties, "properties");
+forward!(security, "security");
+forward!(page_sizes, "page_sizes");
+forward!(page_label, "page_label", page: usize);
+forward!(page_labels, "page_labels");
+forward!(outline, "outline");
+forward!(page_links, "page_links", page: usize);
+forward!(page_images, "page_images", page: usize);
+forward!(text_select, "text_select", page: usize, a: [f32; 2], b: [f32; 2], mode: i32);
+forward!(text_copy, "text_copy", page: usize, a: [f32; 2], b: [f32; 2]);
+forward!(text_range, "text_range", page: usize, p: [f32; 2], mode: i32);
+forward!(text_range_copy, "text_range_copy", page: usize, from: i32, to: i32);
+forward!(page_text, "page_text", page: usize);
+forward!(page_text_stats, "page_text_stats", page: usize);
+forward!(annots, "annots", page: usize);
+forward!(doc_annots, "doc_annots");
+
+#[tauri::command]
+async fn search(remote: State<'_, Arc<Remote>>, doc: DocId, needle: String, opts: Option<Value>, sid: u64, on_event: Channel<Value>) -> Res<()> {
+    with(&remote, move |r| r.stream("search", doc, sid, json!({ "needle": needle, "opts": opts }), on_event)).await
+}
+
+#[tauri::command]
+async fn reflow(remote: State<'_, Arc<Remote>>, doc: DocId, start: usize, sid: u64, on_event: Channel<Value>) -> Res<()> {
+    with(&remote, move |r| r.stream("reflow", doc, sid, json!({ "start": start }), on_event)).await
+}
+
+#[tauri::command]
+async fn cancel(remote: State<'_, Arc<Remote>>, ids: Vec<u64>) -> Res<()> {
+    with(&remote, move |r| Ok(r.cancel(ids))).await
+}
+
+/// Stops the engine as a crash would, or makes it stop answering (`how`: "hang"), to test that the app
+/// carries on (debug builds only).
+#[tauri::command]
+async fn engine_crash_test(remote: State<'_, Arc<Remote>>, how: Option<String>) -> Res<()> {
+    if !cfg!(debug_assertions) {
+        return Err("Not in release builds.".into());
+    }
+    with(&remote, move |r| r.trouble_for_test(how.as_deref().unwrap_or("crash"))).await
+}
+
+#[tauri::command]
+async fn book_cover(remote: State<'_, Arc<Remote>>, path: String, fp: String) -> Res<Value> {
+    if fp.is_empty() || !fp.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("no fingerprint".into());
+    }
+    readable(&path)?;
+    let covers = cache()?.join("covers");
+    with(&remote, move |r| r.cover(&path, &covers, &fp)).await
+}
+
+#[tauri::command]
+async fn save_repaired(remote: State<'_, Arc<Remote>>, doc: DocId, target: String, pdf: bool) -> Res<()> {
     writable(&target)?;
-    app::save_repaired(state, doc, target, pdf).await
+    with(&remote, move |r| r.write_to("save_repaired", doc, &target, json!({ "pdf": pdf }))).await
+}
+
+// ---------------------------------------------------------------- paginaut:// protocol
+
+fn respond(responder: UriSchemeResponder, status: StatusCode, kind: &str, body: Vec<u8>) {
+    let resp = Response::builder()
+        .status(status)
+        .header("Content-Type", kind)
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Cache-Control", "no-store")
+        .body(body)
+        .unwrap();
+    responder.respond(resp);
+}
+
+/// As the desktop's (app::protocol): `/render?d=&p=&s=&r=&e=&c=&id=&q=` gives 8 bytes of size and RGBA pixels
+/// (204 if the drawing was cancelled), drawn by the engine's process; `/cover?f=` a shelf cover from the cache.
+fn protocol<R: tauri::Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
+    let uri = request.uri().to_string();
+    let q: std::collections::HashMap<String, String> =
+        uri.split_once('?').map(|(_, q)| q).unwrap_or("").split('&').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    if request.uri().path() == "/cover" {
+        let f = q.get("f").filter(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_hexdigit()));
+        return match f.and_then(|f| std::fs::read(cache().ok()?.join("covers").join(format!("{f}.jpg"))).ok()) {
+            Some(b) => respond(responder, StatusCode::OK, "image/jpeg", b),
+            None => respond(responder, StatusCode::NOT_FOUND, "application/octet-stream", Vec::new()),
+        };
+    }
+    let num = |k: &str| q.get(k).and_then(|v| v.parse::<f64>().ok());
+    let (Some(doc), Some(page), Some(scale)) = (num("d"), num("p"), num("s")) else {
+        return respond(responder, StatusCode::BAD_REQUEST, "text/plain", b"bad render request".to_vec());
+    };
+    let clip = q.get("c").and_then(|c| {
+        let v: Vec<i32> = c.split(',').filter_map(|x| x.parse().ok()).collect();
+        (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
+    });
+    let args = json!({
+        "page": page as usize,
+        "scale": scale as f32,
+        "rotate": num("r").unwrap_or(0.0) as i32,
+        "clip": clip,
+        "extras": num("e").unwrap_or(1.0).clamp(0.0, 2.0) as u8,
+        "rid": num("id").unwrap_or(0.0) as u64,
+        "prio": num("q").unwrap_or(0.0) as i32,
+    });
+    let remote = ctx.app_handle().state::<Arc<Remote>>().inner().clone();
+    // Waits for the engine: not on WebView's thread.
+    std::thread::spawn(move || match remote.render(doc as DocId, args) {
+        Ok(Some(px)) => respond(responder, StatusCode::OK, "application/octet-stream", px),
+        Ok(None) => respond(responder, StatusCode::NO_CONTENT, "application/octet-stream", Vec::new()),
+        Err(e) => respond(responder, StatusCode::INTERNAL_SERVER_ERROR, "text/plain", e.into_bytes()),
+    });
 }

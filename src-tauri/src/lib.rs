@@ -2,6 +2,8 @@ pub mod engine;
 mod app;
 #[cfg(mobile)]
 mod mobile;
+#[cfg(target_os = "android")]
+mod engine_link;
 
 // The desktop app: editing, OCR, Office files, conversion, signing and Windows' own services.
 // The Android viewer is built from the engine and app.rs alone (see mobile.rs).
