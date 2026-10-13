@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The library's background (the page background in src/mobile/mobile.css), shown while the app starts. -->
-    <color name="app_background">#F5F6FA</color>
+    <!-- The library's background (the bg colour in src/mobile/mobile.css), shown while the app starts. -->
+    <color name="app_background">#F7F6F3</color>
 </resources>

@@ -20,7 +20,7 @@ function setTab(t: Tab) {
 }
 
 const FORMAT_COLORS: Record<string, string> = {
-  PDF: "#2f5bd3",
+  PDF: "#2b58d1",
   EPUB: "#1f8a70",
   MOBI: "#a0662a",
   FB2: "#a0662a",
@@ -28,7 +28,7 @@ const FORMAT_COLORS: Record<string, string> = {
   CBR: "#b0408a",
   XPS: "#6a55c8",
   OXPS: "#6a55c8",
-  MD: "#5b6475",
+  MD: "#5b5852",
 };
 
 function ago(t: number) {
@@ -126,7 +126,7 @@ function RecentPane() {
 
 function RecentRow({ r, removing, onHold, onDone }: { r: ReadRecord; removing: boolean; onHold: () => void; onDone: () => void }) {
   const progress = r.pages > 1 ? progressOf(r) : 1;
-  const color = FORMAT_COLORS[r.format] ?? "#5b6475";
+  const color = FORMAT_COLORS[r.format] ?? "#5b5852";
   const title = r.name.replace(/\.[^.]+$/, "");
   return (
     <li class={`rec ${removing ? "removing" : ""}`}>
@@ -242,7 +242,7 @@ function openHit(open: () => void) {
 }
 
 function RecentHit({ r }: { r: ReadRecord }) {
-  const color = FORMAT_COLORS[r.format] ?? "#5b6475";
+  const color = FORMAT_COLORS[r.format] ?? "#5b5852";
   return (
     <li class="rec">
       <button class="rec-main" onClick={() => openHit(() => void openRecent(r))}>
@@ -262,7 +262,7 @@ function RecentHit({ r }: { r: ReadRecord }) {
 
 function ShelfHit({ s }: { s: Shelved }) {
   const ext = s.it.name.split(".").pop()?.toUpperCase() ?? "";
-  const color = FORMAT_COLORS[ext] ?? "#5b6475";
+  const color = FORMAT_COLORS[ext] ?? "#5b5852";
   return (
     <li class="rec">
       <button class="rec-main" onClick={() => openHit(() => void openShelf(s.it))}>
