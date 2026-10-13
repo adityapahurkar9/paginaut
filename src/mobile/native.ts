@@ -28,6 +28,8 @@ export interface Storage {
   picked: string[];
   /** Folders chosen for the shelf. */
   folders: { uri: string; name: string }[];
+  /** Books picked one by one for the shelf ("Search and pick books"). */
+  shelfPicked: number;
   allFiles: boolean;
 }
 
@@ -50,6 +52,10 @@ export const native = {
   /** Asks for a folder for the shelf (empty if none was chosen). */
   addFolder: () => invoke<{ uri?: string; name?: string }>("add_folder"),
   removeFolder: (uri: string) => invoke<void>("remove_folder", { uri }),
+  /** Android's picker, e-books and comics only: the books picked join the shelf. */
+  pickBooks: () => invoke<{ added: number; already: number; notBooks: number; noRoom: number }>("pick_books"),
+  /** Takes the picked books off the shelf (those in `keep`, files in Recent, still open from there). */
+  forgetPicked: (keep: string[]) => invoke<void>("forget_picked", { keep }),
   /** Shows where "All files access" is turned on or off. */
   allFilesAccess: () => invoke<void>("all_files_access"),
   scanBooks: () => invoke<{ items: ShelfItem[] }>("scan_books"),

@@ -111,3 +111,66 @@ configurations.all {
 }
 
 apply(from = file("tauri.build.gradle.kts"))
+
+// ---------------------------------------------------------------- what the app asks Android for
+//
+// Every build stops if the merged manifest (the app's own plus every library's) asks for a permission
+// Paginaut doesn't use, opens a component to other apps, or shares more than the copies of opened
+// documents. A library update can add any of these without a word; this says so and stops. MainActivity
+// checks the permissions again when the app starts, and won't run with extra ones.
+val allowedPermissions = setOf(
+    "android.permission.MANAGE_EXTERNAL_STORAGE",
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "app.paginaut.reader.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+)
+val filePathsXml = file("src/main/res/xml/file_paths.xml")
+
+// Written out in the task (no calls back into this script: Gradle's configuration cache can't keep those).
+tasks.configureEach {
+    if (!(name.startsWith("process") && name.endsWith("MainManifest"))) return@configureEach
+    // Debug builds load the page from the computer building them.
+    val debug = name.contains("Debug")
+    val allowed = allowedPermissions + if (debug) setOf("android.permission.INTERNET") else emptySet()
+    val pathsXml = filePathsXml
+    doLast {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val problems = mutableListOf<String>()
+        for (manifest in outputs.files.asFileTree.matching { include("**/AndroidManifest.xml") }.files) {
+            val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }.newDocumentBuilder().parse(manifest)
+            for (tag in listOf("uses-permission", "uses-permission-sdk-23")) {
+                val list = doc.getElementsByTagName(tag)
+                for (i in 0 until list.length) {
+                    val name = (list.item(i) as org.w3c.dom.Element).getAttributeNS(ns, "name")
+                    if (name !in allowed) problems.add("asks for a permission Paginaut doesn't use: $name")
+                }
+            }
+            // Reachable from other apps: the main screen (launcher, "Open with", Share) and AndroidX's
+            // profile receiver, which only the system's shell may call (DUMP).
+            for (tag in listOf("activity", "activity-alias", "service", "receiver", "provider")) {
+                val list = doc.getElementsByTagName(tag)
+                for (i in 0 until list.length) {
+                    val e = list.item(i) as org.w3c.dom.Element
+                    if (e.getAttributeNS(ns, "exported") != "true") continue
+                    val name = e.getAttributeNS(ns, "name")
+                    val ok = (tag == "activity" && name == "app.paginaut.reader.MainActivity") ||
+                        (tag == "receiver" && e.getAttributeNS(ns, "permission") == "android.permission.DUMP")
+                    if (!ok) problems.add("opens a $tag to other apps: $name")
+                }
+            }
+            val app = doc.getElementsByTagName("application").item(0) as org.w3c.dom.Element
+            if (!debug && app.getAttributeNS(ns, "debuggable") == "true") problems.add("is debuggable")
+        }
+        // What Share may hand out: the cache's copies of opened documents, nothing else.
+        val paths = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(pathsXml)
+        val entries = paths.documentElement.childNodes.let { n -> (0 until n.length).map { n.item(it) }.filterIsInstance<org.w3c.dom.Element>() }
+        if (entries.size != 1 || entries[0].tagName != "cache-path" || entries[0].getAttribute("path") != "docs/") {
+            problems.add("shares more than the copies of opened documents (res/xml/file_paths.xml)")
+        }
+        if (problems.isNotEmpty()) {
+            throw GradleException(
+                "Paginaut stopped this build. The app " + problems.joinToString(";\n  ", "\n  ", "\n") +
+                    "Remove it, or if it's really needed, add it to app/build.gradle.kts and MainActivity's list.",
+            )
+        }
+    }
+}

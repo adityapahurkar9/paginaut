@@ -4,8 +4,10 @@
 //! it through the commands here.
 
 use crate::app::{self, blocking, AppState, Res};
-use crate::engine::DocId;
+use crate::engine::{DocId, DocInfo};
 use serde_json::{json, Value};
+use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 use tauri::plugin::{Builder as PluginBuilder, PluginHandle, TauriPlugin};
 use tauri::{Manager, Runtime, State, Wry};
 
@@ -19,7 +21,7 @@ pub fn run() {
         .manage(AppState { engine, started: std::time::Instant::now() })
         .register_asynchronous_uri_scheme_protocol("paginaut", app::protocol)
         .invoke_handler(tauri::generate_handler![
-            app::open_document,
+            open_document,
             app::unlock_document,
             app::close_document,
             app::trim_document,
@@ -58,8 +60,10 @@ pub fn run() {
             remove_folder,
             all_files_access,
             scan_books,
-            app::book_cover,
-            app::save_repaired,
+            book_cover,
+            save_repaired,
+            pick_books,
+            forget_picked,
             share_text,
             release,
         ])
@@ -90,6 +94,10 @@ fn native<R: Runtime>() -> TauriPlugin<R> {
             // Solid RAR comic books are unpacked here while open (std's temp dir isn't writable on Android).
             if let Ok(dir) = app.path().app_cache_dir() {
                 crate::engine::mupdf::set_temp_dir(&dir.join("unpacked"));
+                let _ = std::fs::create_dir_all(&dir);
+                if let Ok(real) = std::fs::canonicalize(&dir) {
+                    let _ = CACHE.set(real);
+                }
             }
             #[cfg(target_os = "android")]
             {
@@ -142,14 +150,18 @@ async fn share_text(native: State<'_, Native<Wry>>, text: String) -> Res<()> {
     call(&native, "shareText", json!({ "text": text })).await.map(|_| ())
 }
 
-/// Android's print service takes PDFs: other documents (e-books, XPS, comics) are written
-/// as a PDF next to their copy first.
+/// Android's print service takes PDFs: other documents (e-books, XPS, comics) are written as a
+/// PDF in the cache first (never beside the book: Paginaut doesn't write where your files are).
 #[tauri::command]
 async fn print(native: State<'_, Native<Wry>>, state: State<'_, AppState>, doc: DocId, path: String, title: String, pdf: bool) -> Res<()> {
+    readable(&path)?;
     let file = if pdf {
         path
     } else {
-        let out = std::path::Path::new(&path).with_extension("print.pdf").to_string_lossy().into_owned();
+        let dir = cache()?.join("print");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let out = dir.join("print.pdf").to_string_lossy().into_owned();
         let engine = state.engine.clone();
         let target = out.clone();
         blocking(move || engine.export_pdf(doc, &target)).await?;
@@ -210,9 +222,130 @@ async fn all_files_access(native: State<'_, Native<Wry>>) -> Res<()> {
     call(&native, "allFilesAccess", json!({})).await.map(|_| ())
 }
 
+/// "Search and pick books": Android's picker, e-books and comics only; the books picked join the shelf
+/// (`{ added, already, notBooks, noRoom }`).
+#[tauri::command]
+async fn pick_books(native: State<'_, Native<Wry>>) -> Res<Value> {
+    call(&native, "pickBooks", json!({})).await
+}
+
+/// Takes the picked books off the shelf (files in Recent, `keep`, still open from there).
+#[tauri::command]
+async fn forget_picked(native: State<'_, Native<Wry>>, keep: Vec<String>) -> Res<()> {
+    call(&native, "forgetPicked", json!({ "keep": keep })).await.map(|_| ())
+}
+
 /// The e-books and comics the shelf can reach: `{ items: [{ id, name, size, mtime, fp, kind }] }`.
 #[tauri::command]
 async fn scan_books(native: State<'_, Native<Wry>>) -> Res<Value> {
     call(&native, "scanBooks", json!({})).await
 }
 
+// ---------------------------------------------------------------- what the engine may touch
+//
+// The page names files by path. Kotlin only ever gives it Paginaut's own copies and links (in the
+// cache) or, with all-files access, books on shared storage; these checks hold the engine to that
+// whatever the page asks: never the app's own data, other apps' folders, or a file type Paginaut
+// doesn't read, and it writes only into its cache.
+
+/// The app's cache folder, links resolved (set at start).
+static CACHE: OnceLock<PathBuf> = OnceLock::new();
+
+fn cache() -> Res<&'static Path> {
+    CACHE.get().map(PathBuf::as_path).ok_or_else(|| "Paginaut isn't ready yet.".to_string())
+}
+
+/// What Paginaut reads from shared storage (the shelf's books, and documents it opens).
+const DOCUMENTS: &[&str] = &["pdf", "xps", "oxps", "epub", "mobi", "fb2", "fbz", "cbz", "cbr", "cbt", "md", "markdown", "txt"];
+
+const REFUSED: &str = "Paginaut doesn't open files from there.";
+
+/// `path`'s folder with links and `..` resolved. A folder not made yet (somewhere to write) is
+/// its nearest existing one, plus plain names.
+fn real_dir(path: &Path) -> Option<PathBuf> {
+    let dir = path.parent()?;
+    let mut base = dir;
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(base) {
+            let mut out = real;
+            for name in rest.iter().rev() {
+                out.push(name);
+            }
+            return Some(out);
+        }
+        match base.components().next_back()? {
+            Component::Normal(name) => rest.push(name.to_owned()),
+            _ => return None,
+        }
+        base = base.parent()?;
+    }
+}
+
+/// Inside the cache (the file itself may be a link: big files are read in place through one).
+fn in_cache(path: &Path) -> bool {
+    matches!((cache(), real_dir(path)), (Ok(c), Some(d)) if d.starts_with(c))
+}
+
+/// A document on shared storage (the phone's own, or a card): a plain file, not a link, of a type
+/// Paginaut reads, and not in another app's data or obb folder (Android/media, where WhatsApp
+/// keeps documents, is fine).
+fn shared_document(path: &Path) -> bool {
+    let Some(dir) = real_dir(path) else { return false };
+    let Ok(meta) = std::fs::symlink_metadata(path) else { return false };
+    if !meta.is_file() {
+        return false;
+    }
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if !DOCUMENTS.contains(&ext.as_str()) {
+        return false;
+    }
+    let parts: Vec<String> = dir.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    // ["/", "storage", "emulated", "0", …] or ["/", "storage", "1A2B-3C4D", …]
+    if parts.get(1).map(String::as_str) != Some("storage") {
+        return false;
+    }
+    let skip = if parts.get(2).map(String::as_str) == Some("emulated") { 4 } else { 3 };
+    if parts.len() < skip {
+        return false;
+    }
+    let rest = &parts[skip..];
+    !(rest.first().is_some_and(|p| p.eq_ignore_ascii_case("android")) && rest.get(1).is_some_and(|p| p.eq_ignore_ascii_case("data") || p.eq_ignore_ascii_case("obb")))
+}
+
+/// The engine may read `path`.
+fn readable(path: &str) -> Res<()> {
+    let p = Path::new(path);
+    if in_cache(p) || shared_document(p) {
+        Ok(())
+    } else {
+        Err(REFUSED.into())
+    }
+}
+
+/// The engine may write `path`: only into the cache.
+fn writable(path: &str) -> Res<()> {
+    if in_cache(Path::new(path)) {
+        Ok(())
+    } else {
+        Err("Paginaut only writes into its own cache.".into())
+    }
+}
+
+#[tauri::command]
+async fn open_document(state: State<'_, AppState>, path: String, engine: Option<String>) -> Res<DocInfo> {
+    readable(&path)?;
+    app::open_document(state, path, engine).await
+}
+
+#[tauri::command]
+async fn book_cover(app: tauri::AppHandle, state: State<'_, AppState>, path: String, fp: String) -> Res<Value> {
+    readable(&path)?;
+    app::book_cover(app, state, path, fp).await
+}
+
+#[tauri::command]
+async fn save_repaired(state: State<'_, AppState>, doc: DocId, target: String, pdf: bool) -> Res<()> {
+    writable(&target)?;
+    app::save_repaired(state, doc, target, pdf).await
+}

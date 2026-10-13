@@ -32,10 +32,10 @@ export const shelf = signal<ShelfItem[]>(load<ShelfItem[]>(KEY, []));
 export const metas = signal<Record<string, BookMeta>>(load<Record<string, BookMeta>>(META, {}));
 export const scanning = signal(false);
 
-/** The shelf has somewhere to look: a chosen folder, or all-files access. */
+/** The shelf has somewhere to look: a chosen folder, books picked for it, or all-files access. */
 export const shelfOn = computed(() => {
   const st = storage.value;
-  return !!st && (st.allFiles || st.folders.length > 0);
+  return !!st && (st.allFiles || st.folders.length > 0 || st.shelfPicked > 0);
 });
 
 
@@ -75,7 +75,7 @@ export function sections(kind: ShelfItem["kind"], sort: { key: "title" | "author
 let lastScan = { at: 0, access: "" };
 const accessKey = () => {
   const st = storage.value;
-  return st ? `${st.allFiles}|${st.folders.map((f) => f.uri).join("|")}` : "";
+  return st ? `${st.allFiles}|${st.shelfPicked}|${st.folders.map((f) => f.uri).join("|")}` : "";
 };
 
 /** Looks again when the app comes back, if access changed (a folder, all-files access) or it's been ten minutes. */
@@ -90,7 +90,7 @@ export async function scanShelf(loud = false) {
   try {
     const st = await refreshStorage();
     lastScan = { at: Date.now(), access: accessKey() };
-    if (!st || (!st.allFiles && !st.folders.length)) {
+    if (!st || (!st.allFiles && !st.folders.length && !st.shelfPicked)) {
       shelf.value = [];
       save(KEY, []);
       return;
@@ -165,6 +165,31 @@ export async function addFolder() {
   } catch (e) {
     say(errorText(e));
   }
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** "Search and pick books": the books picked join the shelf; those on it already stay as they are. */
+export async function pickBooks() {
+  try {
+    const r = await native.pickBooks();
+    if (!r.added && !r.already && !r.notBooks && !r.noRoom) return;
+    const said: string[] = [];
+    said.push(r.added ? `Added ${plural(r.added, "book", "books")}` : "No new books");
+    if (r.already) said.push(`${r.already} already on the shelf`);
+    if (r.notBooks) said.push(`${plural(r.notBooks, "file wasn't an e-book or comic", "files weren't e-books or comics")}`);
+    if (r.noRoom) said.push(`${r.noRoom} left out: Android keeps access to only so many single files, so choose their folder instead`);
+    say(said.join(". "));
+    if (r.added) await scanShelf();
+  } catch (e) {
+    say(errorText(e));
+  }
+}
+
+/** Takes the books picked one by one off the shelf (files in Recent still open from there). */
+export async function forgetPicked() {
+  await native.forgetPicked(records.value.flatMap((r) => r.uris));
+  await scanShelf();
 }
 
 export async function removeFolder(uri: string) {
