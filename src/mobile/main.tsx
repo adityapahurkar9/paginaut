@@ -93,6 +93,9 @@ effect(() => {
   });
 });
 
+// Hide from screenshots (the View sheet). Android remembers it too, so it's on before the first frame.
+effect(() => void native.setSecure(settings.value.secure));
+
 // Copies the app no longer needs go (records.ts tidyCache), and Recent drops files that can't be
 // opened any more: checked from the library, so never under a document being opened.
 effect(() => {

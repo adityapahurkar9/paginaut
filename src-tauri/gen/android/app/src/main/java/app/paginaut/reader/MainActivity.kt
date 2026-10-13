@@ -1,6 +1,10 @@
 package app.paginaut.reader
 
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.view.WindowManager
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -9,6 +13,7 @@ import androidx.activity.enableEdgeToEdge
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
+    applySecure(this, getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("secure", false))
     // Checked before the page starts: a refused copy reads no file (PaginautPlugin checks `refused`)
     // and shows RefusedActivity in its place.
     val extra = extraPermissions()
@@ -24,6 +29,21 @@ class MainActivity : TauriActivity() {
     /** This copy asks for permissions Paginaut doesn't use: it opens and lists nothing. */
     @Volatile
     var refused = false
+
+    private const val PREFS = "paginaut"
+
+    /** Hide from screenshots, for the next start (the page's setting is the one shown). */
+    fun rememberSecure(context: Context, on: Boolean) {
+      context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("secure", on).apply()
+    }
+
+    /** Android's secure window on or off (on the UI thread, or before the window shows). */
+    fun applySecure(activity: Activity, on: Boolean) {
+      if (on) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+      else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+      // Android 13+: no preview in Recent apps either way the flag is read.
+      if (Build.VERSION.SDK_INT >= 33) activity.setRecentsScreenshotEnabled(!on)
+    }
   }
 
   /**

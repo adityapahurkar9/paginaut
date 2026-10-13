@@ -188,6 +188,8 @@ function ViewSheet() {
           <Toggle label="Justify lines" on={t.justify} onChange={(v) => updateText({ justify: v })} />
         </div>
       )}
+      <Toggle label="Hide from screenshots" on={st.secure} onChange={(v) => updateSettings({ secure: v })} />
+      {st.secure && <p class="hint secure-hint">Screenshots, screen recordings and shared screens show black, and Recent apps shows no preview. You can't take screenshots of your documents either.</p>}
     </>
   );
 }

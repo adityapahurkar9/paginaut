@@ -46,6 +46,8 @@ export const native = {
   /** Android's print dialog; documents other than PDFs are written as a PDF first. */
   print: (doc: number, path: string, title: string, pdf: boolean) => invoke<void>("print", { doc, path, title, pdf }),
   setBars: (dark: boolean, immersive: boolean) => invoke<void>("set_bars", { dark, immersive }).catch(() => {}),
+  /** Hide from screenshots: Android's secure window, on or off (remembered for the next start). */
+  setSecure: (on: boolean) => invoke<void>("set_secure", { on }).catch(() => {}),
   storage: () => invoke<Storage>("storage"),
   /** Deletes these copies from the cache. */
   dropCopies: (paths: string[]) => invoke<void>("drop_copies", { paths }).catch(() => {}),

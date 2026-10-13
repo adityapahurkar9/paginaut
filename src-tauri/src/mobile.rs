@@ -51,6 +51,7 @@ pub fn run() {
             share,
             print,
             set_bars,
+            set_secure,
             safe_area,
             speak,
             stop_speaking,
@@ -174,6 +175,12 @@ async fn print(native: State<'_, Native<Wry>>, state: State<'_, AppState>, doc: 
 #[tauri::command]
 async fn set_bars(native: State<'_, Native<Wry>>, dark: bool, immersive: bool) -> Res<()> {
     call(&native, "setBars", json!({ "dark": dark, "immersive": immersive })).await.map(|_| ())
+}
+
+/// Hide from screenshots: Android's secure window (remembered by the Kotlin side for the next start).
+#[tauri::command]
+async fn set_secure(native: State<'_, Native<Wry>>, on: bool) -> Res<()> {
+    call(&native, "setSecure", json!({ "on": on })).await.map(|_| ())
 }
 
 /// What the page must keep clear of (bars, camera cutout, keyboard): `{ top, right, bottom, left }` in CSS px.
