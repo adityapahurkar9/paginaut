@@ -62,6 +62,10 @@
             </intent-filter>
         </activity>
 
+        <!-- Shown instead of the app by a copy asking for permissions Paginaut doesn't use (MainActivity). -->
+        <!-- Its own process: the app's ends as MainActivity closes (mobile.rs exits at once). -->
+        <activity android:name=".RefusedActivity" android:exported="false" android:process=":refused" />
+
         <provider
           android:name="androidx.core.content.FileProvider"
           android:authorities="${applicationId}.fileprovider"

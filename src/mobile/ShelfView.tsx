@@ -1,12 +1,12 @@
 // The E-books and Comics tabs: covers of every book the shelf found, those being read first; and
 // where the shelf looks (chosen folders, all-files access).
 import { useRef, useState } from "preact/hooks";
-import { BookOpen, Folder, FolderPlus, Images, RefreshCw, X } from "lucide-preact";
+import { BookOpen, BookPlus, Folder, FolderPlus, Images, RefreshCw, X } from "lucide-preact";
 import { coverUrl } from "../api";
 import { native } from "./native";
 import { pushLayer } from "./nav";
 import { progressOf, storage } from "./records";
-import { addFolder, openShelf, removeFolder, scanning, scanShelf, sections, shelf, shelfOn, type ShelfItem, type Shelved } from "./shelf";
+import { addFolder, forgetPicked, openShelf, pickBooks, removeFolder, scanning, scanShelf, sections, shelf, shelfOn, type ShelfItem, type Shelved } from "./shelf";
 import { load, save, sheet } from "./state";
 import { SortToggle, type SortState } from "./SortToggle";
 
@@ -49,7 +49,7 @@ export function ShelfPane({ kind }: { kind: ShelfItem["kind"] }) {
         <RefreshCw size={18} class={scanning.value ? "spinning" : ""} /> {scanning.value ? "Looking for books…" : pull.ready ? "Let go to look again" : "Pull to look again"}
       </div>
       {all.length === 0 ? (
-        <p class="hint shelf-none">{scanning.value ? "" : `No ${NOUN[kind]} found where the shelf looks. Add a folder, or look through the whole phone.`}</p>
+        <p class="hint shelf-none">{scanning.value ? "" : `No ${NOUN[kind]} found where the shelf looks. Pick some, add a folder, or look through the whole phone.`}</p>
       ) : (
         <>
           {reading.length > 0 && <Grid title="Reading now" list={reading} progress />}
@@ -142,8 +142,12 @@ function ShelfSetup({ kind }: { kind: ShelfItem["kind"] }) {
     <div class="shelf-setup">
       <Icon size={40} />
       <h2>Find your {NOUN[kind]}</h2>
-      <p>Choose the folders where you keep them, or let Paginaut look through the whole phone. They're read where they are: nothing is copied.</p>
-      <button class="btn pri" onClick={() => void addFolder()}>
+      <p>Pick them, choose the folders where you keep them, or let Paginaut look through the whole phone. They're read where they are: nothing is copied, nothing is changed.</p>
+      <button class="btn pri" onClick={() => void pickBooks()}>
+        <BookPlus size={18} /> Search and pick books
+      </button>
+      <p class="hint">Android's own file picker shows only e-books and comics: search, tick the ones you want, or Select all. Paginaut gets those books and nothing else.</p>
+      <button class="btn" onClick={() => void addFolder()}>
         <FolderPlus size={18} /> Choose a folder
       </button>
       <button class="btn" onClick={() => void native.allFilesAccess()}>
@@ -183,6 +187,20 @@ export function ShelfAccess() {
           ))}
         </ul>
       )}
+      <button class="row link-row" onClick={() => void pickBooks()}>
+        <span class="row-label">Search and pick books</span>
+      </button>
+      {st.shelfPicked > 0 && (
+        <div class="row">
+          <span class="row-label row-two">
+            Books you picked
+            <small>{st.shelfPicked === 1 ? "1 book" : `${st.shelfPicked} books`} on the shelf; picking more only adds</small>
+          </span>
+          <button class="btn sm" onClick={() => void forgetPicked()}>
+            Take them off
+          </button>
+        </div>
+      )}
       <button class="row link-row" onClick={() => void addFolder()}>
         <span class="row-label">Add a folder</span>
       </button>
@@ -196,7 +214,7 @@ export function ShelfAccess() {
           {st.allFiles ? "Turn off" : "Turn on"}
         </button>
       </div>
-      {(st.allFiles || st.folders.length > 0) && (
+      {(st.allFiles || st.folders.length > 0 || st.shelfPicked > 0) && (
         <button class="row link-row" onClick={() => void scanShelf(true)}>
           <span class="row-label">{scanning.value ? "Looking for books…" : "Look for books again"}</span>
         </button>

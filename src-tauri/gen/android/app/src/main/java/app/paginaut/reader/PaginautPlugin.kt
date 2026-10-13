@@ -116,6 +116,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
 
   @Command
   fun pickFile(invoke: Invoke) {
+    if (MainActivity.refused) return invoke.reject(REFUSED)
     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
       addCategory(Intent.CATEGORY_OPENABLE)
       type = "*/*"
@@ -146,6 +147,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
   /** The file another app sent ("Open with", Share), once; empty when there's none. */
   @Command
   fun takeIntent(invoke: Invoke) {
+    if (MainActivity.refused) return invoke.reject(REFUSED)
     val uri = pending
     pending = null
     if (uri == null) invoke.resolve(JSObject()) else copyThenResolve(invoke, uri)
@@ -154,6 +156,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
   /** Opens a recent file again from where it came from (its copy is refreshed if it changed). */
   @Command
   fun reopen(invoke: Invoke) {
+    if (MainActivity.refused) return invoke.reject(REFUSED)
     val uri = invoke.getArgs().getString("uri", null)
     if (uri.isNullOrEmpty()) return invoke.reject("No file given.")
     copyThenResolve(invoke, Uri.parse(uri))
@@ -315,7 +318,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
    * access), inside a folder chosen for the shelf, or a path while it has all-files access.
    */
   private fun canReach(uri: Uri): Boolean = when (uri.scheme) {
-    "file" -> allFiles() && File(uri.path ?: "").canonicalPath.startsWith(Environment.getExternalStorageDirectory().canonicalPath + "/")
+    "file" -> allFiles() && sharedBook(File(uri.path ?: ""))
     "content" -> {
       val s = uri.toString()
       activity.contentResolver.persistedUriPermissions.any { p ->
@@ -323,6 +326,19 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
       }
     }
     else -> false
+  }
+
+  /**
+   * A book on the phone's shared storage that a path may name (the shelf with all-files access): an
+   * e-book or comic, not reached through a link, and not in another app's data or obb folder. The
+   * engine checks the same again (mobile.rs, `readable`).
+   */
+  private fun sharedBook(f: File): Boolean {
+    val root = Environment.getExternalStorageDirectory().canonicalPath + "/"
+    val real = try { f.canonicalPath } catch (_: Exception) { return false }
+    if (!real.startsWith(root) || real != f.absolutePath) return false
+    val rest = real.removePrefix(root).lowercase()
+    return !rest.startsWith("android/data/") && !rest.startsWith("android/obb/") && shelfKind(f.name) != null
   }
 
   /** Paginaut may read every file on the phone (the user turned on "All files access"). */
@@ -368,6 +384,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
    */
   @Command
   fun storage(invoke: Invoke) {
+    if (MainActivity.refused) return invoke.reject(REFUSED)
     io.execute {
       val copies = JSONArray()
       val stale = System.currentTimeMillis() - 600_000
@@ -387,6 +404,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
         put("copies", copies)
         put("picked", picked)
         put("folders", folders)
+        put("shelfPicked", loadPicked().size)
         put("allFiles", allFiles())
       })
     }
@@ -428,10 +446,9 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
    */
   @Command
   fun addFolder(invoke: Invoke) {
+    if (MainActivity.refused) return invoke.reject(REFUSED)
     val pick = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-    if (Build.VERSION.SDK_INT >= 26) {
-      pick.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download"))
-    }
+    if (Build.VERSION.SDK_INT >= 26) pick.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DOWNLOAD)
     try {
       startActivityForResult(invoke, pick, "folderPicked")
     } catch (e: ActivityNotFoundException) {
@@ -451,6 +468,101 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     invoke.resolve(JSObject().put("uri", uri.toString()).put("name", folderName(uri)))
   }
 
+  /**
+   * "Search and pick books": Android's file picker, showing only e-books and comics (and files of no
+   * known type: Android calls FB2 and CBT that), several at once. Paginaut keeps access to each book
+   * picked and nothing else. Picking again only adds: books already on the shelf stay.
+   */
+  @Command
+  fun pickBooks(invoke: Invoke) {
+    if (MainActivity.refused) return invoke.reject(REFUSED)
+    val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      type = "*/*"
+      putExtra(Intent.EXTRA_MIME_TYPES, BOOK_TYPES)
+      putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+      if (Build.VERSION.SDK_INT >= 26) putExtra(DocumentsContract.EXTRA_INITIAL_URI, DOWNLOAD)
+    }
+    try {
+      startActivityForResult(invoke, pick, "booksPicked")
+    } catch (e: ActivityNotFoundException) {
+      invoke.reject("No file picker is available on this device.")
+    }
+  }
+
+  /** `{ added, already, notBooks, noRoom }`: how many books joined the shelf, and why others didn't. */
+  @ActivityCallback
+  fun booksPicked(invoke: Invoke, result: ActivityResult) {
+    val data = result.data
+    val none = JSObject().put("added", 0).put("already", 0).put("notBooks", 0).put("noRoom", 0)
+    if (result.resultCode != Activity.RESULT_OK || data == null) return invoke.resolve(none)
+    val uris = data.clipData?.let { c -> (0 until c.itemCount).mapNotNull { c.getItemAt(it).uri } } ?: listOfNotNull(data.data)
+    io.execute {
+      val cr = activity.contentResolver
+      val kept = loadPicked()
+      // Android keeps only so many files' access per app (512; 128 before Android 11), and past that
+      // quietly drops the oldest: perhaps a chosen folder. A few places are left for files opened from Recent.
+      var room = (if (Build.VERSION.SDK_INT >= 30) 512 else 128) - 16 - cr.persistedUriPermissions.size
+      var added = 0
+      var already = 0
+      var notBooks = 0
+      var noRoom = 0
+      for (uri in uris) {
+        if (shelfKind(nameAndSize(uri).first) == null) { notBooks++; continue }
+        if (kept.contains(uri.toString())) { already++; continue }
+        if (room <= 0) { noRoom++; continue }
+        try {
+          cr.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: SecurityException) {
+          noRoom++
+          continue
+        }
+        room--
+        kept.add(uri.toString())
+        added++
+      }
+      savePicked(kept)
+      invoke.resolve(JSObject().put("added", added).put("already", already).put("notBooks", notBooks).put("noRoom", noRoom))
+    }
+  }
+
+  /**
+   * Takes every picked book off the shelf: Paginaut gives its access back, except to files in Recent
+   * (`keep`), which still open from there.
+   */
+  @Command
+  fun forgetPicked(invoke: Invoke) {
+    val keep = invoke.getArgs().optJSONArray("keep")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet()
+    io.execute {
+      for (u in loadPicked()) {
+        if (u in keep) continue
+        try {
+          activity.contentResolver.releasePersistableUriPermission(Uri.parse(u), Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: SecurityException) {
+        }
+      }
+      savePicked(LinkedHashSet())
+      invoke.resolve()
+    }
+  }
+
+  /** The books picked for the shelf, by link, in the order they were picked. */
+  private val pickedFile by lazy { File(activity.filesDir, "shelf-picked.json") }
+
+  private fun loadPicked(): LinkedHashSet<String> = try {
+    val a = JSONArray(pickedFile.readText())
+    (0 until a.length()).mapTo(LinkedHashSet()) { a.getString(it) }
+  } catch (_: Exception) {
+    LinkedHashSet()
+  }
+
+  private fun savePicked(list: Set<String>) {
+    try {
+      pickedFile.writeText(JSONArray(list.toList()).toString())
+    } catch (_: Exception) {
+    }
+  }
+
   /** Stops listing a folder on the shelf (Paginaut gives its access back). */
   @Command
   fun removeFolder(invoke: Invoke) {
@@ -468,6 +580,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
    */
   @Command
   fun allFilesAccess(invoke: Invoke) {
+    if (MainActivity.refused) return invoke.reject(REFUSED)
     val pkg = Uri.fromParts("package", activity.packageName, null)
     try {
       if (Build.VERSION.SDK_INT >= 30) {
@@ -502,6 +615,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
    */
   @Command
   fun scanBooks(invoke: Invoke) {
+    if (MainActivity.refused) return invoke.reject(REFUSED)
     scanner.execute {
       val before = loadIndex()
       val now = HashMap<String, Seen>()
@@ -523,8 +637,11 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
             for (f in list) {
               if (f.name.startsWith(".")) continue
               if (f.isDirectory) {
-                // Android's own folders (other apps' data) are off limits anyway.
-                if (depth < 12 && !(depth == 0 && f.name == "Android")) walk(f, depth + 1)
+                // In Android's own folder only media: where WhatsApp and others keep files they
+                // received (Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents). Other
+                // apps' data and obb folders are theirs alone (Android refuses them anyway).
+                if (depth == 0 && f.name == "Android") File(f, "media").takeIf { it.isDirectory }?.let { walk(it, 2) }
+                else if (depth < 12) walk(f, depth + 1)
               } else add(Uri.fromFile(f).toString(), f.name, f.length(), f.lastModified()) { fingerprint(f) }
             }
           }
@@ -570,6 +687,35 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
           } catch (_: Exception) {
           }
         }
+        // Books picked one by one ("Search and pick books"). One that's gone (deleted, or its access
+        // taken back in Android's settings) leaves the list; the rest stay as they are.
+        val picked = loadPicked()
+        val granted = cr.persistedUriPermissions.filter { it.isReadPermission }.map { it.uri.toString() }.toSet()
+        val gone = HashSet<String>()
+        for (u in picked) {
+          if (u !in granted) { gone.add(u); continue }
+          val uri = Uri.parse(u)
+          try {
+            val cols = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            val row = cr.query(uri, cols, null, null, null)?.use { c ->
+              if (!c.moveToFirst()) null
+              else Triple(c.getString(0), if (c.isNull(1)) -1L else c.getLong(1), c.getColumnIndex(cols[2]).let { i -> if (i < 0 || c.isNull(i)) 0L else c.getLong(i) })
+            }
+            val name = row?.first
+            if (row == null || name == null) { gone.add(u); continue }
+            add(u, name, row.second, row.third) {
+              try {
+                cr.openFileDescriptor(uri, "r")?.use { fingerprint(it.fileDescriptor) } ?: ""
+              } catch (_: Exception) {
+                ""
+              }
+            }
+          } catch (_: java.io.FileNotFoundException) {
+            gone.add(u)
+          } catch (_: Exception) {
+          }
+        }
+        if (gone.isNotEmpty()) savePicked(picked.filterTo(LinkedHashSet()) { it !in gone })
         try {
           indexFile.writeText(org.json.JSONObject(now.mapValues { (_, s) -> JSONArray(listOf(s.size, s.mtime, s.fp)) }).toString())
         } catch (_: Exception) {
@@ -816,6 +962,18 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     private const val FP_PART = 64 * 1024
 
     /** What the picker offers: PDF, XPS, e-books, comics, Markdown, pictures (and unnamed files, as many comics are). */
+    const val REFUSED = "Paginaut stopped: this copy asks for permissions it doesn't use."
+
+    /** The Download folder, where the pickers start. */
+    val DOWNLOAD: Uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download")
+
+    /** What "Search and pick books" shows: e-books and comics, and files of no known type (FB2, FBZ, CBT on Android). */
+    val BOOK_TYPES = arrayOf(
+      "application/epub+zip", "application/x-mobipocket-ebook", "application/x-fictionbook+xml", "application/x-fictionbook",
+      "application/vnd.comicbook+zip", "application/x-cbz", "application/x-cbr", "application/vnd.comicbook-rar",
+      "application/octet-stream",
+    )
+
     val MIME_TYPES = arrayOf(
       "application/pdf",
       "application/vnd.ms-xpsdocument", "application/oxps",
