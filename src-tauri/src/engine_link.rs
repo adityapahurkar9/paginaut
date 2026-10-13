@@ -27,6 +27,12 @@ use tauri::ipc::Channel;
 /// What a call gets when the engine stopped while it waited (`Remote` then tries again on a new one).
 pub const STOPPED: &str = "Paginaut's engine stopped.";
 
+/// Temporary files one engine may ask for (a solid comic book takes one per open copy; reading uses a few).
+const MAX_TEMP_FILES: u64 = 512;
+
+/// Space a runaway engine may take before it's stopped (see `Remote::watch`).
+const MAX_ENGINE_GROWTH: u64 = 512 << 20;
+
 /// Said for a document that stopped the engine twice.
 const REFUSED: &str = "This document stopped Paginaut's reading engine twice, so it was closed. The file may be damaged.";
 
@@ -505,6 +511,18 @@ impl Host {
             // Debug builds only: stops the engine as a crash would (tools/android-engine-test.sh).
             #[cfg(debug_assertions)]
             "crash" => std::process::abort(),
+            // Debug builds only: asks the app for `n` temporary files (how many it got, or its refusal).
+            #[cfg(debug_assertions)]
+            "flood" => {
+                use sandbox::Scratch;
+                let n: u64 = arg(args, "n")?;
+                for i in 0..n {
+                    if let Err(e) = AppFiles.anon() {
+                        return Ok(Reply::value(json!({ "got": i, "error": e })));
+                    }
+                }
+                Ok(Reply::value(json!({ "got": n })))
+            }
             // Debug builds only: stops answering, as a file that makes the engine loop would.
             #[cfg(debug_assertions)]
             "hang" => loop {
@@ -566,6 +584,9 @@ pub struct Remote {
     /// Calls waiting for the engine: when they started, what they are, and on which engine (`watch`).
     waiting: Mutex<HashMap<u64, (Instant, &'static str, u64)>>,
     next_wait: AtomicU64,
+    /// Temporary files the current engine has asked for, and the free space when it started.
+    temp_made: AtomicU64,
+    free_at_start: AtomicU64,
     me: Weak<Remote>,
 }
 
@@ -609,6 +630,8 @@ impl Remote {
             strikes: Mutex::new(HashMap::new()),
             waiting: Mutex::new(HashMap::new()),
             next_wait: AtomicU64::new(1),
+            temp_made: AtomicU64::new(0),
+            free_at_start: AtomicU64::new(0),
             me: me.clone(),
         })
     }
@@ -633,7 +656,9 @@ impl Remote {
     }
 
     /// Every few seconds: an engine that has kept a call waiting too long is let go, as if it had stopped
-    /// (its calls get STOPPED, are tried again on a new engine, and count against their documents).
+    /// (its calls get STOPPED, are tried again on a new engine, and count against their documents). So is one
+    /// filling the phone through its temporary files (the app can't limit what is written into a file once
+    /// handed over): when it ends, Android frees its nameless files at once, and its kept ones go here.
     fn watch(self: &Arc<Self>) {
         let me = Arc::downgrade(self);
         std::thread::spawn(move || loop {
@@ -641,10 +666,41 @@ impl Remote {
             let Some(r) = me.upgrade() else { return };
             let Some((link, gen)) = r.link.lock().clone() else { continue };
             let stuck = r.waiting.lock().values().any(|(at, cmd, g)| *g == gen && at.elapsed() > Remote::patience(cmd));
-            if stuck {
+            if stuck || r.filling() {
                 link.close();
+                if !stuck {
+                    let _ = std::fs::remove_dir_all(&r.files_dir);
+                    let _ = std::fs::create_dir_all(&r.files_dir);
+                }
             }
         });
+    }
+
+    /// Free and total bytes where the engine's files are.
+    fn space(&self) -> Option<(u64, u64)> {
+        let path = std::ffi::CString::new(self.files_dir.to_string_lossy().as_bytes()).ok()?;
+        // SAFETY: statvfs fills the struct it is given.
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(path.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
+        let unit = st.f_frsize as u64;
+        Some((st.f_bavail as u64 * unit, st.f_blocks as u64 * unit))
+    }
+
+    /// The phone is nearly full: under 1 GB free, or 5% of its storage on a small one.
+    fn low_on_space(&self) -> bool {
+        self.space().is_some_and(|(free, total)| free < (1u64 << 30).min(total / 20))
+    }
+
+    /// The engine has made temporary files, the phone is nearly full, and it has filled up since the engine
+    /// started: that engine's doing.
+    fn filling(&self) -> bool {
+        if self.temp_made.load(Ordering::Relaxed) == 0 || !self.low_on_space() {
+            return false;
+        }
+        let (start, now) = (self.free_at_start.load(Ordering::Relaxed), self.space().map_or(u64::MAX, |s| s.0));
+        start.saturating_sub(now) > MAX_ENGINE_GROWTH
     }
 
     /// The engine, started (again) if it isn't running.
@@ -662,6 +718,8 @@ impl Remote {
         // SAFETY: the plugin detached this handle for us.
         let sock = unsafe { UnixStream::from_raw_fd(fd) };
         let gen = self.gen.fetch_add(1, Ordering::SeqCst) + 1;
+        self.temp_made.store(0, Ordering::Relaxed);
+        self.free_at_start.store(self.space().map_or(0, |s| s.0), Ordering::Relaxed);
         let (me1, me2) = (self.me.clone(), self.me.clone());
         let link = Link::start(
             sock,
@@ -709,6 +767,15 @@ impl Remote {
         let part = |p: &Path| PathBuf::from(format!("{}.part", p.display()));
         let rw = |p: &Path| std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(p);
         let with = |fd: OwnedFd| Reply { v: Value::Null, bin: Vec::new(), fds: vec![fd] };
+        // New files: so many per engine, and none on a nearly full phone.
+        if op == "anon" || op == "create" {
+            if self.temp_made.fetch_add(1, Ordering::Relaxed) >= MAX_TEMP_FILES {
+                return Err("The reading engine asked for too many temporary files.".into());
+            }
+            if self.low_on_space() {
+                return Err("The phone is nearly out of space.".into());
+            }
+        }
         match op {
             "anon" => {
                 static N: AtomicU64 = AtomicU64::new(0);
@@ -954,11 +1021,12 @@ impl Remote {
 
     /// Stops the engine as a crash would ("crash"), or makes it stop answering ("hang"): debug builds,
     /// tools/android-engine-test.sh. A hang returns once the watchdog has let that engine go.
-    pub fn trouble_for_test(&self, how: &str) -> Result<(), String> {
+    pub fn trouble_for_test(&self, how: &str) -> Result<Value, String> {
         let (link, gen) = self.link()?;
         match how {
-            "hang" => self.waiting("hang", gen, || link.call("hang", Value::Null, &[], &[])).map(|_| ()),
-            _ => link.call("crash", Value::Null, &[], &[]).map(|_| ()),
+            "hang" => self.waiting("hang", gen, || link.call("hang", Value::Null, &[], &[])).map(|_| Value::Null),
+            "flood" => link.call("flood", json!({ "n": MAX_TEMP_FILES + 20 }), &[], &[]).map(|f| f.head["v"].clone()),
+            _ => link.call("crash", Value::Null, &[], &[]).map(|_| Value::Null),
         }
     }
 

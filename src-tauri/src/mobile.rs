@@ -427,7 +427,7 @@ async fn cancel(remote: State<'_, Arc<Remote>>, ids: Vec<u64>) -> Res<()> {
 /// Stops the engine as a crash would, or makes it stop answering (`how`: "hang"), to test that the app
 /// carries on (debug builds only).
 #[tauri::command]
-async fn engine_crash_test(remote: State<'_, Arc<Remote>>, how: Option<String>) -> Res<()> {
+async fn engine_crash_test(remote: State<'_, Arc<Remote>>, how: Option<String>) -> Res<Value> {
     if !cfg!(debug_assertions) {
         return Err("Not in release builds.".into());
     }
