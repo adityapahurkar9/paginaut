@@ -32,6 +32,8 @@ export interface Settings {
   theme: Theme;
   /** The colour theme: one of the desktop's presets (themedata.ts), by id. */
   look: string;
+  /** Hide from screenshots: nothing outside Paginaut can capture what it shows (Android's secure window). */
+  secure: boolean;
   /** Night mode: pages and text dark, whatever the theme. */
   night: boolean;
   layout: Layout;
@@ -41,6 +43,7 @@ export interface Settings {
 const DEFAULTS: Settings = {
   theme: "system",
   look: "standard",
+  secure: false,
   night: false,
   layout: "scroll",
   text: { size: 18, font: "serif", justify: false, spacing: 1.55, margins: "normal", paper: "auto" },

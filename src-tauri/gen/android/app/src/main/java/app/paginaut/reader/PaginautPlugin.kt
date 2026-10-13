@@ -924,6 +924,21 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
    * swipe from the edge shows them for a moment). Their background is the page's own (it draws
    * under them).
    */
+  /**
+   * Hide from screenshots: Android's secure window. Screenshots, screen recordings, shared and cast
+   * screens show black, and Recent apps no preview. Remembered for the next start (MainActivity sets it
+   * before the first frame).
+   */
+  @Command
+  fun setSecure(invoke: Invoke) {
+    val on = invoke.getArgs().optBoolean("on", false)
+    MainActivity.rememberSecure(activity, on)
+    activity.runOnUiThread {
+      MainActivity.applySecure(activity, on)
+      invoke.resolve()
+    }
+  }
+
   @Command
   fun setBars(invoke: Invoke) {
     val args = invoke.getArgs()

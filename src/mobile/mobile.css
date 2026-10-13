@@ -240,6 +240,7 @@ input { font: inherit; }
 .tc-name { font-size: 12.5px; color: var(--tx2); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .theme-card.on .tc-name { color: var(--tx); font-weight: 600; }
 .theme-only { margin-top: -6px; font-size: 12.5px; }
+.secure-hint { margin-top: -4px; font-size: 12.5px; }
 /* A theme's heading font (theme.ts); High contrast: firmer lines and a touch larger text. */
 .lib-head h1, .sheet h3, .shelf-setup h2, .bar-title strong { font-family: var(--font-display, inherit); }
 :root.hc body { font-size: 16px; }
