@@ -855,13 +855,23 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     val title = args.getString("title", null) ?: File(path).nameWithoutExtension
     val pm = activity.getSystemService(Context.PRINT_SERVICE) as? PrintManager
       ?: return invoke.reject("Printing isn't available on this device.")
+    // A big file read in place: Android lent a handle, and opening its link again is refused; read through
+    // a handle of its own (reads from the start: everyone else reading it uses positioned reads).
+    val held = synchronized(direct) { direct[path] }
+    val open = {
+      if (held != null) {
+        val own = ParcelFileDescriptor.dup(held.fileDescriptor)
+        Os.lseek(own.fileDescriptor, 0, OsConstants.SEEK_SET)
+        ParcelFileDescriptor.AutoCloseInputStream(own)
+      } else FileInputStream(File(path))
+    }
     activity.runOnUiThread {
-      pm.print(title, FileAdapter(File(path), title), PrintAttributes.Builder().build())
+      pm.print(title, FileAdapter(open, title), PrintAttributes.Builder().build())
       invoke.resolve()
     }
   }
 
-  private class FileAdapter(private val file: File, private val title: String) : PrintDocumentAdapter() {
+  private class FileAdapter(private val open: () -> java.io.InputStream, private val title: String) : PrintDocumentAdapter() {
     override fun onLayout(old: PrintAttributes?, new: PrintAttributes?, cancel: CancellationSignal?, cb: LayoutResultCallback, extras: Bundle?) {
       if (cancel?.isCanceled == true) return cb.onLayoutCancelled()
       val info = PrintDocumentInfo.Builder("$title.pdf").setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT).build()
@@ -870,7 +880,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
 
     override fun onWrite(pages: Array<out PageRange>?, dest: ParcelFileDescriptor, cancel: CancellationSignal?, cb: WriteResultCallback) {
       try {
-        FileInputStream(file).use { i -> FileOutputStream(dest.fileDescriptor).use { o -> i.copyTo(o, 1 shl 16) } }
+        open().use { i -> FileOutputStream(dest.fileDescriptor).use { o -> i.copyTo(o, 1 shl 16) } }
         if (cancel?.isCanceled == true) cb.onWriteCancelled() else cb.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
       } catch (e: Exception) {
         cb.onWriteFailed(e.message)
