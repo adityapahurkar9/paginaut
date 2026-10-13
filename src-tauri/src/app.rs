@@ -379,7 +379,7 @@ pub(crate) fn save_cover(mut meta: serde_json::Value, jpg: Option<Vec<u8>>, dir:
 
 // ---------------------------------------------------------------- paginaut:// protocol
 
-fn query(uri: &str) -> HashMap<String, String> {
+pub(crate) fn query(uri: &str) -> HashMap<String, String> {
     uri.split_once('?')
         .map(|(_, q)| q)
         .unwrap_or("")
@@ -389,7 +389,7 @@ fn query(uri: &str) -> HashMap<String, String> {
         .collect()
 }
 
-fn respond(responder: UriSchemeResponder, status: StatusCode, body: Vec<u8>) {
+pub(crate) fn respond(responder: UriSchemeResponder, status: StatusCode, body: Vec<u8>) {
     let resp = Response::builder()
         .status(status)
         .header("Content-Type", "application/octet-stream")
@@ -400,33 +400,27 @@ fn respond(responder: UriSchemeResponder, status: StatusCode, body: Vec<u8>) {
     responder.respond(resp);
 }
 
-/// `paginaut://localhost/render?d=<doc>&p=<page>&s=<scale>&r=<rot>&e=<extras>&c=x0,y0,x1,y1&id=<rid>&q=<prio>`
-/// Responds with 8-byte header (width, height LE) + RGBA pixels; 204 if cancelled.
-pub fn protocol<R: tauri::Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
-    let state = ctx.app_handle().state::<AppState>();
-    let uri = request.uri().to_string();
-    let q = query(&uri);
-    // A book's cover for the shelf (book_cover): covers/<fingerprint>.jpg.
-    if request.uri().path() == "/cover" {
-        let f = q.get("f").filter(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_hexdigit()));
-        let file = f.and_then(|f| Some(ctx.app_handle().path().app_cache_dir().ok()?.join("covers").join(format!("{f}.jpg"))));
-        return match file.and_then(|p| std::fs::read(p).ok()) {
-            Some(b) => {
-                let resp = Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "image/jpeg")
-                    .header("Access-Control-Allow-Origin", "*")
-                    .body(b)
-                    .unwrap();
-                responder.respond(resp)
-            }
-            None => respond(responder, StatusCode::NOT_FOUND, Vec::new()),
-        };
+/// A book's cover for the shelf (book_cover): `/cover?f=<fingerprint>`, covers/<fingerprint>.jpg in `cache`.
+pub(crate) fn cover(responder: UriSchemeResponder, cache: Option<std::path::PathBuf>, q: &HashMap<String, String>) {
+    let f = q.get("f").filter(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_hexdigit()));
+    match f.zip(cache).and_then(|(f, dir)| std::fs::read(dir.join("covers").join(format!("{f}.jpg"))).ok()) {
+        Some(b) => {
+            let resp = Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "image/jpeg")
+                .header("Access-Control-Allow-Origin", "*")
+                .body(b)
+                .unwrap();
+            responder.respond(resp)
+        }
+        None => respond(responder, StatusCode::NOT_FOUND, Vec::new()),
     }
+}
+
+/// A render request's document, page, scale, turn, part, extras, id and priority (`/render?d=&p=&s=…`).
+pub(crate) fn render_request(q: &HashMap<String, String>) -> Option<(DocId, RenderReq, u64, i32)> {
     let num = |k: &str| q.get(k).and_then(|v| v.parse::<f64>().ok());
-    let (Some(doc), Some(page), Some(scale)) = (num("d"), num("p"), num("s")) else {
-        return respond(responder, StatusCode::BAD_REQUEST, b"bad render request".to_vec());
-    };
+    let (doc, page, scale) = (num("d")?, num("p")?, num("s")?);
     let clip = q.get("c").and_then(|c| {
         let v: Vec<i32> = c.split(',').filter_map(|x| x.parse().ok()).collect();
         (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
@@ -438,9 +432,22 @@ pub fn protocol<R: tauri::Runtime>(ctx: UriSchemeContext<'_, R>, request: Reques
         clip,
         extras: num("e").unwrap_or(1.0).clamp(0.0, 2.0) as u8,
     };
-    let rid = num("id").unwrap_or(0.0) as u64;
-    let prio = num("q").unwrap_or(0.0) as i32;
-    state.engine.render(doc as DocId, req, rid, prio, move |res| match res {
+    Some((doc as DocId, req, num("id").unwrap_or(0.0) as u64, num("q").unwrap_or(0.0) as i32))
+}
+
+/// `paginaut://localhost/render?d=<doc>&p=<page>&s=<scale>&r=<rot>&e=<extras>&c=x0,y0,x1,y1&id=<rid>&q=<prio>`
+/// Responds with 8-byte header (width, height LE) + RGBA pixels; 204 if cancelled.
+pub fn protocol<R: tauri::Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
+    let state = ctx.app_handle().state::<AppState>();
+    let uri = request.uri().to_string();
+    let q = query(&uri);
+    if request.uri().path() == "/cover" {
+        return cover(responder, ctx.app_handle().path().app_cache_dir().ok(), &q);
+    }
+    let Some((doc, req, rid, prio)) = render_request(&q) else {
+        return respond(responder, StatusCode::BAD_REQUEST, b"bad render request".to_vec());
+    };
+    state.engine.render(doc, req, rid, prio, move |res| match res {
         Ok(Some(r)) => respond(responder, StatusCode::OK, r.bytes),
         Ok(None) => respond(responder, StatusCode::NO_CONTENT, Vec::new()),
         Err(e) => respond(responder, StatusCode::INTERNAL_SERVER_ERROR, e.into_bytes()),

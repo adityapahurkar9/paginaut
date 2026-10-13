@@ -377,6 +377,14 @@ impl Host {
         let cmd = f.head["cmd"].as_str().unwrap_or("").to_string();
         let args = f.head["args"].clone();
         match cmd.as_str() {
+            // Debug builds only: a stream that starts and then never says anything, as a stuck job would.
+            #[cfg(debug_assertions)]
+            "silent" => link.reply(id, Ok(Reply::value(Value::Null))),
+            // Debug builds only: stops reading the app's messages at all, as a frozen engine would.
+            #[cfg(debug_assertions)]
+            "freeze" => loop {
+                std::thread::sleep(Duration::from_secs(3600));
+            },
             // These only queue work (answered as it's done): on this thread.
             "render" | "search" | "reflow" | "cancel" => {
                 if let Err(e) = self.queue(link, id, &cmd, &args) {
@@ -563,7 +571,15 @@ struct Stream {
     /// Pages already sent: a stream started again on a new engine doesn't send them twice.
     seen: HashSet<usize>,
     gen: u64,
+    /// When the engine last said something about it (the watchdog's measure for streams).
+    last: Instant,
+    /// Being started (start_stream tries again itself if the engine stops meanwhile).
+    starting: bool,
 }
+
+/// How long a stream may go without an event before its engine counts as stuck: searches and Read mode
+/// report every few pages, however long the whole job.
+const STREAM_SILENCE: Duration = Duration::from_secs(90);
 
 pub struct Remote {
     /// Starts an engine (EngineService) and gives the app's end of its socket.
@@ -665,7 +681,8 @@ impl Remote {
             std::thread::sleep(Duration::from_secs(5));
             let Some(r) = me.upgrade() else { return };
             let Some((link, gen)) = r.link.lock().clone() else { continue };
-            let stuck = r.waiting.lock().values().any(|(at, cmd, g)| *g == gen && at.elapsed() > Remote::patience(cmd));
+            let stuck = r.waiting.lock().values().any(|(at, cmd, g)| *g == gen && at.elapsed() > Remote::patience(cmd))
+                || r.streams.lock().values().any(|s| s.gen == gen && !s.starting && s.last.elapsed() > STREAM_SILENCE);
             if stuck || r.filling() {
                 link.close();
                 if !stuck {
@@ -801,6 +818,7 @@ impl Remote {
     fn stream_event(&self, sid: u64, mut v: Value) {
         let mut streams = self.streams.lock();
         let Some(s) = streams.get_mut(&sid) else { return };
+        s.last = Instant::now();
         let page = v["page"].as_u64().map(|p| p as usize);
         match v["kind"].as_str() {
             Some("hits") | Some("page") => {
@@ -821,9 +839,10 @@ impl Remote {
         let _ = s.ch.send(std::mem::take(&mut v));
     }
 
-    /// The engine `gen` stopped: what it was streaming starts again on a new one.
+    /// The engine `gen` stopped: what it was streaming starts again on a new one (not streams being started:
+    /// start_stream tries those again itself).
     fn engine_stopped(&self, gen: u64) {
-        let sids: Vec<u64> = self.streams.lock().iter().filter(|(_, s)| s.gen == gen).map(|(id, _)| *id).collect();
+        let sids: Vec<u64> = self.streams.lock().iter().filter(|(_, s)| s.gen == gen && !s.starting).map(|(id, _)| *id).collect();
         if sids.is_empty() {
             return;
         }
@@ -965,9 +984,12 @@ impl Remote {
     pub fn close(&self, doc: DocId) {
         let Some(o) = self.docs.lock().remove(&doc) else { return };
         self.strikes.lock().remove(&doc);
-        if let Some((link, gen)) = self.link.lock().clone() {
+        // Taken out of the lock first: an `if let` would hold it through the call, and the watchdog needs it to
+        // let a frozen engine go.
+        let current = self.link.lock().clone();
+        if let Some((link, gen)) = current {
             if gen == o.gen && link.alive() {
-                let _ = link.call("close", json!({ "doc": o.server }), &[], &[]);
+                let _ = self.waiting("close", gen, || link.call("close", json!({ "doc": o.server }), &[], &[]));
             }
         }
     }
@@ -985,24 +1007,55 @@ impl Remote {
 
     /// A search or Read mode's pages: streamed to `ch` (started again on a new engine if this one stops).
     pub fn stream(&self, cmd: &'static str, doc: DocId, sid: u64, args: Value, ch: Channel<Value>) -> Result<(), String> {
-        self.streams.lock().insert(sid, Stream { doc, cmd, args, ch, seen: HashSet::new(), gen: 0 });
+        let s = Stream { doc, cmd, args, ch, seen: HashSet::new(), gen: 0, last: Instant::now(), starting: true };
+        self.streams.lock().insert(sid, s);
         self.start_stream(sid).inspect_err(|_| {
             self.streams.lock().remove(&sid);
         })
     }
 
+    /// Starts (or starts again) stream `sid` on the current engine. An engine that stops meanwhile is
+    /// this function's to deal with (engine_stopped leaves streams being started alone): once more on a
+    /// new one, then an error.
     fn start_stream(&self, sid: u64) -> Result<(), String> {
-        let (doc, cmd, mut args) = match self.streams.lock().get(&sid) {
-            Some(s) => (s.doc, s.cmd, s.args.clone()),
+        let (doc, cmd, base) = match self.streams.lock().get_mut(&sid) {
+            Some(s) => {
+                s.starting = true;
+                (s.doc, s.cmd, s.args.clone())
+            }
             None => return Ok(()),
         };
-        let (link, gen) = self.link()?;
-        args["doc"] = json!(self.server_doc(&link, gen, doc)?);
-        args["sid"] = json!(sid);
+        let mut tries = 0;
+        let res = loop {
+            let (link, gen) = match self.link() {
+                Ok(l) => l,
+                Err(e) => break Err(e),
+            };
+            let res = self.server_doc(&link, gen, doc).and_then(|server| {
+                let mut args = base.clone();
+                args["doc"] = json!(server);
+                args["sid"] = json!(sid);
+                if let Some(s) = self.streams.lock().get_mut(&sid) {
+                    s.gen = gen;
+                    s.last = Instant::now();
+                }
+                self.waiting(cmd, gen, || link.call(cmd, args, &[], &[]))
+            });
+            // Stopped while starting, or just after (before engine_stopped could see it as started).
+            let stopped = matches!(&res, Err(e) if e == STOPPED) || (res.is_ok() && !link.alive());
+            if !stopped {
+                break res.map(|_| ());
+            }
+            self.strike(doc, gen);
+            if tries > 0 || self.docs.lock().get(&doc).is_some_and(|o| o.refused) {
+                break Err(if self.docs.lock().get(&doc).is_some_and(|o| o.refused) { REFUSED.into() } else { STOPPED.into() });
+            }
+            tries += 1;
+        };
         if let Some(s) = self.streams.lock().get_mut(&sid) {
-            s.gen = gen;
+            s.starting = false;
         }
-        link.call(cmd, args, &[], &[]).map(|_| ())
+        res
     }
 
     pub fn cancel(&self, ids: Vec<u64>) {
@@ -1012,19 +1065,34 @@ impl Remote {
                 streams.remove(id);
             }
         }
-        if let Some((link, _)) = self.link.lock().clone() {
+        let current = self.link.lock().clone();
+        if let Some((link, gen)) = current {
             if link.alive() {
-                let _ = link.call("cancel", json!({ "ids": ids }), &[], &[]);
+                let _ = self.waiting("cancel", gen, || link.call("cancel", json!({ "ids": ids }), &[], &[]));
             }
         }
     }
 
     /// Stops the engine as a crash would ("crash"), or makes it stop answering ("hang"): debug builds,
     /// tools/android-engine-test.sh. A hang returns once the watchdog has let that engine go.
-    pub fn trouble_for_test(&self, how: &str) -> Result<Value, String> {
+    pub fn trouble_for_test(&self, how: &str, doc: Option<DocId>) -> Result<Value, String> {
         let (link, gen) = self.link()?;
         match how {
+            // A stream on `doc` that goes quiet: answers once the watchdog has started a new engine for it.
+            "silent" => {
+                let doc = doc.ok_or("silent needs a document")?;
+                let sid = u64::MAX - gen;
+                self.stream("silent", doc, sid, Value::Null, Channel::new(|_| Ok(())))?;
+                let from = Instant::now();
+                while self.gen.load(Ordering::SeqCst) == gen && from.elapsed() < Duration::from_secs(150) {
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                self.cancel(vec![sid]);
+                Ok(json!({ "seconds": from.elapsed().as_secs(), "newEngine": self.gen.load(Ordering::SeqCst) != gen }))
+            }
             "hang" => self.waiting("hang", gen, || link.call("hang", Value::Null, &[], &[])).map(|_| Value::Null),
+            // Not counted as waiting: whatever the app asks next is what the watchdog has to notice.
+            "freeze" => link.call("freeze", Value::Null, &[], &[]).map(|_| Value::Null),
             "flood" => link.call("flood", json!({ "n": MAX_TEMP_FILES + 20 }), &[], &[]).map(|f| f.head["v"].clone()),
             _ => link.call("crash", Value::Null, &[], &[]).map(|_| Value::Null),
         }

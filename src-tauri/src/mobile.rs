@@ -8,7 +8,7 @@ use crate::engine::DocId;
 use crate::engine_link::Remote;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tauri::http::{Request, Response, StatusCode};
+use tauri::http::{Request, StatusCode};
 use tauri::ipc::Channel;
 use tauri::{UriSchemeContext, UriSchemeResponder};
 use std::path::{Component, Path, PathBuf};
@@ -427,11 +427,11 @@ async fn cancel(remote: State<'_, Arc<Remote>>, ids: Vec<u64>) -> Res<()> {
 /// Stops the engine as a crash would, or makes it stop answering (`how`: "hang"), to test that the app
 /// carries on (debug builds only).
 #[tauri::command]
-async fn engine_crash_test(remote: State<'_, Arc<Remote>>, how: Option<String>) -> Res<Value> {
+async fn engine_crash_test(remote: State<'_, Arc<Remote>>, how: Option<String>, doc: Option<DocId>) -> Res<Value> {
     if !cfg!(debug_assertions) {
         return Err("Not in release builds.".into());
     }
-    with(&remote, move |r| r.trouble_for_test(how.as_deref().unwrap_or("crash"))).await
+    with(&remote, move |r| r.trouble_for_test(how.as_deref().unwrap_or("crash"), doc)).await
 }
 
 #[tauri::command]
@@ -452,52 +452,22 @@ async fn save_repaired(remote: State<'_, Arc<Remote>>, doc: DocId, target: Strin
 
 // ---------------------------------------------------------------- paginaut:// protocol
 
-fn respond(responder: UriSchemeResponder, status: StatusCode, kind: &str, body: Vec<u8>) {
-    let resp = Response::builder()
-        .status(status)
-        .header("Content-Type", kind)
-        .header("Access-Control-Allow-Origin", "*")
-        .header("Cache-Control", "no-store")
-        .body(body)
-        .unwrap();
-    responder.respond(resp);
-}
-
-/// As the desktop's (app::protocol): `/render?d=&p=&s=&r=&e=&c=&id=&q=` gives 8 bytes of size and RGBA pixels
-/// (204 if the drawing was cancelled), drawn by the engine's process; `/cover?f=` a shelf cover from the cache.
+/// As the desktop's (app::protocol), with the drawing done by the engine's process: `/render?…` gives 8 bytes
+/// of size and RGBA pixels (204 if the drawing was cancelled), `/cover?f=` a shelf cover from the cache.
 fn protocol<R: tauri::Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
-    let uri = request.uri().to_string();
-    let q: std::collections::HashMap<String, String> =
-        uri.split_once('?').map(|(_, q)| q).unwrap_or("").split('&').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let q = app::query(&request.uri().to_string());
     if request.uri().path() == "/cover" {
-        let f = q.get("f").filter(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_hexdigit()));
-        return match f.and_then(|f| std::fs::read(cache().ok()?.join("covers").join(format!("{f}.jpg"))).ok()) {
-            Some(b) => respond(responder, StatusCode::OK, "image/jpeg", b),
-            None => respond(responder, StatusCode::NOT_FOUND, "application/octet-stream", Vec::new()),
-        };
+        return app::cover(responder, cache().ok().map(Path::to_path_buf), &q);
     }
-    let num = |k: &str| q.get(k).and_then(|v| v.parse::<f64>().ok());
-    let (Some(doc), Some(page), Some(scale)) = (num("d"), num("p"), num("s")) else {
-        return respond(responder, StatusCode::BAD_REQUEST, "text/plain", b"bad render request".to_vec());
+    let Some((doc, req, rid, prio)) = app::render_request(&q) else {
+        return app::respond(responder, StatusCode::BAD_REQUEST, b"bad render request".to_vec());
     };
-    let clip = q.get("c").and_then(|c| {
-        let v: Vec<i32> = c.split(',').filter_map(|x| x.parse().ok()).collect();
-        (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
-    });
-    let args = json!({
-        "page": page as usize,
-        "scale": scale as f32,
-        "rotate": num("r").unwrap_or(0.0) as i32,
-        "clip": clip,
-        "extras": num("e").unwrap_or(1.0).clamp(0.0, 2.0) as u8,
-        "rid": num("id").unwrap_or(0.0) as u64,
-        "prio": num("q").unwrap_or(0.0) as i32,
-    });
+    let args = json!({ "page": req.page, "scale": req.scale, "rotate": req.rotate, "clip": req.clip, "extras": req.extras, "rid": rid, "prio": prio });
     let remote = ctx.app_handle().state::<Arc<Remote>>().inner().clone();
-    // Waits for the engine: not on WebView's thread.
-    std::thread::spawn(move || match remote.render(doc as DocId, args) {
-        Ok(Some(px)) => respond(responder, StatusCode::OK, "application/octet-stream", px),
-        Ok(None) => respond(responder, StatusCode::NO_CONTENT, "application/octet-stream", Vec::new()),
-        Err(e) => respond(responder, StatusCode::INTERNAL_SERVER_ERROR, "text/plain", e.into_bytes()),
+    // Waits for the engine: on the blocking pool, not WebView's thread.
+    tauri::async_runtime::spawn_blocking(move || match remote.render(doc, args) {
+        Ok(Some(px)) => app::respond(responder, StatusCode::OK, px),
+        Ok(None) => app::respond(responder, StatusCode::NO_CONTENT, Vec::new()),
+        Err(e) => app::respond(responder, StatusCode::INTERNAL_SERVER_ERROR, e.into_bytes()),
     });
 }
