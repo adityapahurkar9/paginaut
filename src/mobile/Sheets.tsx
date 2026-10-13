@@ -10,7 +10,9 @@ import { back, pushLayer } from "./nav";
 import { bookmarksOf, refreshStorage, storage, toggleBookmark, unlistAll } from "./records";
 import { sizeText, StorageSheet } from "./Storage";
 import { ShelfSheet } from "./ShelfView";
-import { doc, errorText, isTablet, layout, mode, page, say, settings, sheet, updateSettings, updateText, type Layout, type Mode, type Sheet, type Theme } from "./state";
+import { doc, errorText, isTablet, layout, look, mode, page, say, settings, sheet, updateSettings, updateText, wantsDark, type Layout, type Mode, type Sheet, type Theme } from "./state";
+import { PRESETS, lookFor, type Theme as Look } from "../themedata";
+import { displayFont } from "./theme";
 import { startReading } from "./speech";
 import { goTo } from "./views";
 
@@ -181,7 +183,7 @@ function ViewSheet() {
             <Seg value={t.margins} onChange={(v) => updateText({ margins: v })} options={[["narrow", "Narrow"], ["normal", "Normal"], ["wide", "Wide"]]} />
           </Row>
           <Row label="Paper">
-            <Seg value={t.paper} onChange={(v) => updateText({ paper: v })} options={[["auto", "Plain"], ["sepia", "Sepia"]]} />
+            <Seg value={t.paper} onChange={(v) => updateText({ paper: v })} options={[["auto", look.value.id === "standard" ? "Plain" : look.value.name], ["sepia", "Sepia"]]} />
           </Row>
           <Toggle label="Justify lines" on={t.justify} onChange={(v) => updateText({ justify: v })} />
         </div>
@@ -439,6 +441,46 @@ function MoreSheet() {
 
 // ---------------------------------------------------------------- settings
 
+/** A theme in small: its bar, a page, the reading paper and the accent (in its light or dark look, as shown now). */
+function ThemeCard({ t, on }: { t: Look; on: boolean }) {
+  const l = lookFor(t, wantsDark.value);
+  const p = l.pal;
+  const font = displayFont(t.id) ?? undefined;
+  return (
+    <button class={`theme-card ${on ? "on" : ""}`} aria-pressed={on} onClick={() => updateSettings({ look: t.id })}>
+      <span class="tc-prev" aria-hidden="true" style={{ background: p.canvas }}>
+        <i style={{ background: p.panel, boxShadow: `0 1px 0 ${p.canvas}` }} />
+        <span class="tc-page" style={{ background: p.panel, color: p.tx, fontFamily: font }}>
+          Aa
+        </span>
+        <span class="tc-page" style={{ background: l.paper.paper, color: l.paper.ink, fontFamily: font }}>
+          Aa
+        </span>
+        <b style={{ background: p.acc }} />
+      </span>
+      <span class="tc-name">{t.name}</span>
+    </button>
+  );
+}
+
+function ThemePicker() {
+  const cur = look.value;
+  const strip = useRef<HTMLDivElement>(null);
+  // The chosen theme in view when Settings opens.
+  useEffect(() => strip.current?.querySelector<HTMLElement>(".theme-card.on")?.scrollIntoView({ inline: "center", block: "nearest" }), []);
+  return (
+    <div class="theme-pick">
+      <span class="row-label">Colour theme</span>
+      <div class="theme-strip" ref={strip}>
+        {PRESETS.map((t) => (
+          <ThemeCard key={t.id} t={t} on={t.id === cur.id} />
+        ))}
+      </div>
+      <p class="hint">{cur.blurb}</p>
+    </div>
+  );
+}
+
 function SettingsSheet() {
   const [version, setVersion] = useState("");
   useEffect(() => {
@@ -449,47 +491,55 @@ function SettingsSheet() {
   return (
     <>
       <h3>Settings</h3>
-      <Row label="Theme">
-        <Seg<Theme>
-          value={settings.value.theme}
-          onChange={(v) => updateSettings({ theme: v })}
-          options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]}
-        />
-      </Row>
-      <button
-        class="row"
-        onClick={() => {
-          // In place of Settings: closing it goes back to the library.
-          sheet.value = "storage";
-        }}
-      >
-        <span class="row-label">Storage</span>
-        <span class="row-value">
-          {sizeText(kept)} of copies <ChevronRight size={18} />
-        </span>
-      </button>
-      <button class="row link-row" onClick={() => unlistAll()}>
-        <span class="row-label">Clear the Recent list</span>
-      </button>
-      <div class="about">
-        <strong>Paginaut {version}</strong>
-        <p>A quiet reader for PDF, e-books, comics, XPS and Markdown. No account, no ads, no tracking: it doesn't use the internet at all.</p>
-        <p>Free software under the GNU AGPL 3.0, built on MuPDF by Artifex Software. RAR comics: unarr (LGPL 3.0) and libarchive (BSD).</p>
-        <details class="notice">
-          <summary>libarchive's licence</summary>
-          <p>Copyright (c) 2003-2018 Tim Kientzle and the libarchive authors. All rights reserved.</p>
-          <p>
-            Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met: 1. Redistributions of source code
-            must retain the above copyright notice, this list of conditions and the following disclaimer in this position and unchanged. 2. Redistributions in binary form must reproduce the
-            above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+      <div class="sheet-scroll settings-scroll">
+        <ThemePicker />
+        <Row label="Light or dark">
+          <Seg<Theme>
+            value={settings.value.theme}
+            onChange={(v) => updateSettings({ theme: v })}
+            options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]}
+          />
+        </Row>
+        {(!look.value.light || !look.value.dark) && (
+          <p class="hint theme-only">
+            {look.value.name} is {look.value.dark ? "dark" : "light"} only.
           </p>
-          <p>
-            THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-            A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-            LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
-            STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-          </p>
-        </details>
+        )}
+        <button
+          class="row"
+          onClick={() => {
+            // In place of Settings: closing it goes back to the library.
+            sheet.value = "storage";
+          }}
+        >
+          <span class="row-label">Storage</span>
+          <span class="row-value">
+            {sizeText(kept)} of copies <ChevronRight size={18} />
+          </span>
+        </button>
+        <button class="row link-row" onClick={() => unlistAll()}>
+          <span class="row-label">Clear the Recent list</span>
+        </button>
+        <div class="about">
+          <strong>Paginaut {version}</strong>
+          <p>A quiet reader for PDF, e-books, comics, XPS and Markdown. No account, no ads, no tracking: it doesn't use the internet at all.</p>
+          <p>Free software under the GNU AGPL 3.0, built on MuPDF by Artifex Software. RAR comics: unarr (LGPL 3.0) and libarchive (BSD).</p>
+          <details class="notice">
+            <summary>libarchive's licence</summary>
+            <p>Copyright (c) 2003-2018 Tim Kientzle and the libarchive authors. All rights reserved.</p>
+            <p>
+              Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met: 1. Redistributions of source code
+              must retain the above copyright notice, this list of conditions and the following disclaimer in this position and unchanged. 2. Redistributions in binary form must reproduce the
+              above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+            </p>
+            <p>
+              THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+              A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+              LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+              STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+            </p>
+          </details>
+        </div>
       </div>
     </>
   );
