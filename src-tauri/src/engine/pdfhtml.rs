@@ -23,6 +23,10 @@ const MIN_PICTURE: usize = 20_000;
 /// while it's being made waits for it.
 pub fn as_pdf(path: &str, temp: &Path) -> Option<String> {
     let key = book_key(path)?;
+    #[cfg(unix)]
+    if let Some(s) = super::sandbox::scratch() {
+        return as_pdf_given(path, key, s);
+    }
     let out = temp.join(format!("paginaut-book-{key:016x}.pdf"));
     if out.exists() {
         return Some(out.to_string_lossy().into_owned());
@@ -52,6 +56,46 @@ pub fn as_pdf(path: &str, temp: &Path) -> Option<String> {
     made.then(|| out.to_string_lossy().into_owned())
 }
 
+/// `as_pdf` in the isolated engine: the book is drawn into a file the app keeps by name (made once, like
+/// in `temp`), held open while this engine runs.
+#[cfg(unix)]
+fn as_pdf_given(path: &str, key: u64, s: &dyn super::sandbox::Scratch) -> Option<String> {
+    use super::sandbox::{fd_path, hold};
+    use std::os::fd::AsRawFd;
+    static MADE: parking_lot::Mutex<Vec<(u64, String)>> = parking_lot::Mutex::new(Vec::new());
+    let name = format!("paginaut-book-{key:016x}.pdf");
+    let lock = {
+        let mut building = BUILDING.lock();
+        match building.iter().find(|(k, _)| *k == key) {
+            Some((_, l)) => l.clone(),
+            None => {
+                let l = std::sync::Arc::new(parking_lot::Mutex::new(()));
+                building.push((key, l.clone()));
+                l
+            }
+        }
+    };
+    let _one = lock.lock();
+    let found = MADE.lock().iter().find(|(k, _)| *k == key).map(|(_, p)| p.clone());
+    let out = found.or_else(|| {
+        let made = match s.open(&name) {
+            Some(fd) => Some(hold(fd, &name)),
+            None => {
+                let script = Pinned::script(&Source::read(path)?, usize::MAX)?;
+                let fd = s.create(&name).ok()?;
+                let ok = super::mupdf::pinned_pdf(path, &script, &fd_path(fd.as_raw_fd(), &name)).is_ok() && s.commit(&name).is_ok();
+                ok.then(|| hold(fd, &name))
+            }
+        };
+        if let Some(p) = &made {
+            MADE.lock().push((key, p.clone()));
+        }
+        made
+    });
+    BUILDING.lock().retain(|(k, _)| *k != key);
+    out
+}
+
 /// A book being made, and the lock a second open of it waits on.
 static BUILDING: parking_lot::Mutex<Vec<(u64, std::sync::Arc<parking_lot::Mutex<()>>)>> = parking_lot::Mutex::new(Vec::new());
 
@@ -60,11 +104,11 @@ fn book_key(path: &str) -> Option<u64> {
     if !path.to_ascii_lowercase().ends_with(".epub") {
         return None;
     }
-    let meta = std::fs::metadata(path).ok()?;
-    let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    let (len, mtime) = super::sandbox::stat(path)?;
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (path, meta.len(), mtime).hash(&mut h);
+    // A handle's number changes with each open: the file's name stands for it.
+    (super::sandbox::file_name(path), len, mtime).hash(&mut h);
     Some(h.finish())
 }
 
@@ -88,6 +132,14 @@ pub fn preview(path: &str, temp: &Path) -> Option<Preview> {
     let key = book_key(path)?;
     let src = Source::read(path)?;
     let script = Pinned::script(&src, 1)?;
+    #[cfg(unix)]
+    if let Some(s) = super::sandbox::scratch() {
+        use std::os::fd::AsRawFd;
+        let fd = s.anon().ok()?;
+        super::mupdf::pinned_pdf(path, &script, &super::sandbox::fd_path(fd.as_raw_fd(), "cover.pdf")).ok()?;
+        let pdf = super::sandbox::hold(fd, "cover.pdf");
+        return Some(Preview { pdf, title: element_text(&src.opf, "dc:title"), author: element_text(&src.opf, "dc:creator"), pages: src.page_count() });
+    }
     let part = part_file(temp, "cover", key);
     if super::mupdf::pinned_pdf(path, &script, &part.to_string_lossy()).is_err() {
         let _ = std::fs::remove_file(&part);
@@ -100,7 +152,7 @@ pub fn preview(path: &str, temp: &Path) -> Option<Preview> {
 
 /// Whether `path` (a document's file) is a book drawn again here.
 pub fn is_rebuilt(path: &str) -> bool {
-    Path::new(path).file_name().is_some_and(|n| {
+    Path::new(super::sandbox::file_name(path)).file_name().is_some_and(|n| {
         let n = n.to_string_lossy();
         n.starts_with("paginaut-book-") && n.ends_with(".pdf")
     })
@@ -116,30 +168,21 @@ pub fn title_author(path: &str) -> (String, String) {
 /// An ordinary, flowing EPUB at `target` made from the pdf2htmlEX EPUB at `path`.
 pub fn repaired_epub(path: &str, target: &str) -> Result<(), String> {
     let book = Source::read(path).map(|s| Book::read(path, &s)).ok_or("This e-book isn't one made from a PDF.")?;
-    let dir = Path::new(target).with_extension("parts");
-    book.write(&dir).map_err(|e| e.to_string())?;
-    let packed = pack(&dir, target);
-    let _ = std::fs::remove_dir_all(&dir);
-    packed
+    super::sandbox::write_target(target, &pack(book.files()))
 }
 
-/// Packs an unpacked EPUB (the folder `root`) into an EPUB file at `target`: the "mimetype" entry
-/// first and every entry stored as it is (the pictures are compressed already).
-fn pack(root: &Path, target: &str) -> Result<(), String> {
-    let mut files = vec!["mimetype".to_string(), "META-INF/container.xml".to_string()];
-    let mut rest: Vec<String> = std::fs::read_dir(root)
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n != "mimetype")
-        .collect();
-    rest.sort();
-    files.extend(rest);
+/// An EPUB file of these entries: "mimetype" and the container first, the rest by name, every entry
+/// stored as it is (the pictures are compressed already).
+fn pack(mut files: Vec<(String, Vec<u8>)>) -> Vec<u8> {
+    let rank = |n: &str| match n {
+        "mimetype" => 0,
+        "META-INF/container.xml" => 1,
+        _ => 2,
+    };
+    files.sort_by(|a, b| rank(&a.0).cmp(&rank(&b.0)).then_with(|| a.0.cmp(&b.0)));
     let mut zip = Vec::new();
     let mut central = Vec::new();
-    for name in &files {
-        let data = std::fs::read(root.join(name)).map_err(|e| e.to_string())?;
+    for (name, data) in &files {
         let crc = crc32(&data);
         let at = zip.len() as u32;
         let (len, name_len) = (data.len() as u32, name.len() as u16);
@@ -172,16 +215,7 @@ fn pack(root: &Path, target: &str) -> Result<(), String> {
     zip.extend_from_slice(&size.to_le_bytes());
     zip.extend_from_slice(&start.to_le_bytes());
     zip.extend_from_slice(&0u16.to_le_bytes());
-    // Written beside the target first: saving over the original e-book is allowed.
-    if let Some(dir) = Path::new(target).parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let part = format!("{target}.part");
-    std::fs::write(&part, &zip).map_err(|e| e.to_string())?;
-    std::fs::rename(&part, target).map_err(|e| {
-        let _ = std::fs::remove_file(&part);
-        e.to_string()
-    })
+    zip
 }
 
 fn crc32(data: &[u8]) -> u32 {
@@ -840,15 +874,15 @@ impl Book {
         Book { title: element_text(opf, "dc:title"), creator: element_text(opf, "dc:creator"), language: element_text(opf, "dc:language"), blocks, pictures }
     }
 
-    fn write(&self, dir: &Path) -> std::io::Result<()> {
-        let tmp: PathBuf = dir.with_extension("part");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(tmp.join("META-INF"))?;
-        std::fs::write(tmp.join("mimetype"), "application/epub+zip")?;
-        std::fs::write(
-            tmp.join("META-INF").join("container.xml"),
-            r#"<?xml version="1.0" encoding="UTF-8"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
-        )?;
+    /// The entries of an ordinary EPUB of this book (packed by `pack`).
+    fn files(&self) -> Vec<(String, Vec<u8>)> {
+        let mut files = vec![
+            ("mimetype".to_string(), b"application/epub+zip".to_vec()),
+            (
+                "META-INF/container.xml".to_string(),
+                br#"<?xml version="1.0" encoding="UTF-8"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#.to_vec(),
+            ),
+        ];
         let mut items = String::new();
         for (i, (entry, bytes)) in self.pictures.iter().enumerate() {
             let ext = entry.rsplit('.').next().unwrap_or("png").to_ascii_lowercase();
@@ -858,7 +892,7 @@ impl Book {
                 "gif" => "image/gif",
                 _ => "image/png",
             };
-            std::fs::write(tmp.join(format!("p{i}.{ext}")), bytes)?;
+            files.push((format!("p{i}.{ext}"), bytes.clone()));
             let _ = write!(items, r#"<item id="p{i}" href="p{i}.{ext}" media-type="{mime}"/>"#);
         }
         let mut body = String::new();
@@ -876,24 +910,25 @@ impl Book {
                 }
             }
         }
-        std::fs::write(
-            tmp.join("book.xhtml"),
+        files.push((
+            "book.xhtml".to_string(),
             format!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>{}</title><style>p{{margin:0 0 0.6em}} h2{{margin:1.2em 0 0.5em;font-size:1.25em}} .pic{{margin:0.8em 0;text-align:center}} img{{max-width:100%}}</style></head><body>\n{body}</body></html>",
                 escape(&self.title)
-            ),
-        )?;
-        std::fs::write(
-            tmp.join("book.opf"),
+            )
+            .into_bytes(),
+        ));
+        files.push((
+            "book.opf".to_string(),
             format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0" unique-identifier="id"><metadata><dc:identifier id="id">paginaut-rebuilt</dc:identifier><dc:title>{}</dc:title><dc:creator>{}</dc:creator><dc:language>{}</dc:language></metadata><manifest><item id="book" href="book.xhtml" media-type="application/xhtml+xml"/>{items}</manifest><spine><itemref idref="book"/></spine></package>"#,
                 escape(&self.title),
                 escape(&self.creator),
                 escape(if self.language.is_empty() { "en" } else { &self.language })
-            ),
-        )?;
-        let _ = std::fs::remove_dir_all(dir);
-        std::fs::rename(&tmp, dir)
+            )
+            .into_bytes(),
+        ));
+        files
     }
 }
 
@@ -1196,7 +1231,8 @@ mod tests {
         )
         .unwrap();
         let epub = temp.join("styles.epub");
-        pack(&dir, &epub.to_string_lossy()).unwrap();
+        let files = ["mimetype", "META-INF/container.xml", "content.opf", "page.xhtml"].map(|n| (n.to_string(), std::fs::read(dir.join(n)).unwrap())).to_vec();
+        std::fs::write(&epub, pack(files)).unwrap();
         let pdf = as_pdf(&epub.to_string_lossy(), &temp).expect("drawn as a PDF");
         let doc = super::super::mupdf::Document::open(&pdf).unwrap();
         let page = doc.load_page(0).unwrap();

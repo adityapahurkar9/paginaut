@@ -321,7 +321,131 @@ static fz_stream *open_lent(fz_context *ctx, int handle)
 	stm->seek = seek_lent;
 	return stm;
 }
+
+/*
+ * Files the isolated engine is given (engine.rs): paths "fd:N/name", where N is a handle the app passed
+ * over and name tells MuPDF the kind of file. Read through the handle like a lent file, and written
+ * through it: the engine itself can't open or make any file.
+ */
+static int fd_path(const char *p)
+{
+	if (strncmp(p, "fd:", 3))
+		return -1;
+	return atoi(p + 3);
+}
+
+static const char *fd_name(const char *p)
+{
+	const char *s = strchr(p, '/');
+	return s ? s + 1 : p;
+}
+
+typedef struct
+{
+	int fd;
+} fd_out;
+
+static void fd_out_write(fz_context *ctx, void *state, const void *data, size_t n)
+{
+	fd_out *o = state;
+	const char *s = data;
+	while (n)
+	{
+		ssize_t k = write(o->fd, s, n);
+		if (k < 0 && errno == EINTR)
+			continue;
+		if (k <= 0)
+			fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot write: %s", strerror(errno));
+		s += k;
+		n -= (size_t)k;
+	}
+}
+
+static void fd_out_seek(fz_context *ctx, void *state, int64_t offset, int whence)
+{
+	fd_out *o = state;
+	if (lseek(o->fd, (off_t)offset, whence) < 0)
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot seek: %s", strerror(errno));
+}
+
+static int64_t fd_out_tell(fz_context *ctx, void *state)
+{
+	fd_out *o = state;
+	return (int64_t)lseek(o->fd, 0, SEEK_CUR);
+}
+
+static void fd_out_drop(fz_context *ctx, void *state)
+{
+	fd_out *o = state;
+	close(o->fd);
+	fz_free(ctx, o);
+}
+
+/* An output writing the handle's file from its start (emptied first). */
+static fz_output *fd_output(fz_context *ctx, int handle)
+{
+	fd_out *o;
+	fz_output *out;
+	int fd = dup(handle);
+	if (fd < 0)
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot write the file: %s", strerror(errno));
+	if (ftruncate(fd, 0) < 0 || lseek(fd, 0, SEEK_SET) < 0)
+	{
+		close(fd);
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot write the file: %s", strerror(errno));
+	}
+	fz_try(ctx)
+		o = fz_malloc_struct(ctx, fd_out);
+	fz_catch(ctx)
+	{
+		close(fd);
+		fz_rethrow(ctx);
+	}
+	o->fd = fd;
+	out = fz_new_output(ctx, 8192, o, fd_out_write, NULL, fd_out_drop);
+	out->seek = fd_out_seek;
+	out->tell = fd_out_tell;
+	return out;
+}
+#else
+static int fd_path(const char *p)
+{
+	(void)p;
+	return -1;
+}
 #endif
+
+/* An archive (EPUB, CBZ…) at `p`: a path, or a handle the isolated engine was given. */
+static fz_archive *open_archive_at(fz_context *ctx, const char *p)
+{
+#ifdef __ANDROID__
+	int h = fd_path(p);
+	if (h >= 0)
+	{
+		fz_archive *zip = NULL;
+		fz_stream *stm = open_lent(ctx, h);
+		fz_try(ctx)
+			zip = fz_open_archive_with_stream(ctx, stm);
+		fz_always(ctx)
+			fz_drop_stream(ctx, stm);
+		fz_catch(ctx)
+			fz_rethrow(ctx);
+		return zip;
+	}
+#endif
+	return fz_open_archive(ctx, p);
+}
+
+/* Where a document writer or a PDF save writes: a path, or a handle the isolated engine was given. */
+static fz_output *open_output_at(fz_context *ctx, const char *p)
+{
+#ifdef __ANDROID__
+	int h = fd_path(p);
+	if (h >= 0)
+		return fd_output(ctx, h);
+#endif
+	return fz_new_output_with_path(ctx, p, 0);
+}
 
 fo_doc *fo_open(fo_ctx *c, const char *path)
 {
@@ -333,7 +457,19 @@ fo_doc *fo_open(fo_ctx *c, const char *path)
 		p = os_path(CTX, path);
 #ifdef __ANDROID__
 		{
-			int handle = lent_handle(p);
+			int handle = fd_path(p);
+			if (handle >= 0)
+			{
+				fz_stream *stm = open_lent(CTX, handle);
+				fz_try(CTX)
+					doc = fz_open_document_with_stream(CTX, fd_name(p), stm);
+				fz_always(CTX)
+					fz_drop_stream(CTX, stm);
+				fz_catch(CTX)
+					fz_rethrow(CTX);
+				break;
+			}
+			handle = lent_handle(p);
 			if (handle >= 0)
 			{
 				fz_stream *stm = open_lent(CTX, handle);
@@ -2160,7 +2296,23 @@ int fo_pdf_save(fo_ctx *c, fo_doc *d, const char *path, int incremental)
 	{
 		char *p = os_path(CTX, path);
 		fz_try(CTX)
-			pdf_save_document(CTX, pdf, p, &opts);
+		{
+			if (fd_path(p) >= 0)
+			{
+				fz_output *out = open_output_at(CTX, p);
+				fz_try(CTX)
+				{
+					pdf_write_document(CTX, pdf, out, &opts);
+					fz_close_output(CTX, out);
+				}
+				fz_always(CTX)
+					fz_drop_output(CTX, out);
+				fz_catch(CTX)
+					fz_rethrow(CTX);
+			}
+			else
+				pdf_save_document(CTX, pdf, p, &opts);
+		}
 		fz_always(CTX)
 			fz_free(CTX, p);
 		fz_catch(CTX)
@@ -2191,7 +2343,7 @@ int fo_write_document(fo_ctx *c, fo_doc *d, const char *path, const char *format
 	{
 		char *p = os_path(CTX, path);
 		fz_try(CTX)
-			w = fz_new_document_writer(CTX, p, format, options);
+			w = fd_path(p) >= 0 ? fz_new_document_writer_with_output(CTX, open_output_at(CTX, p), format, options) : fz_new_document_writer(CTX, p, format, options);
 		fz_always(CTX)
 			fz_free(CTX, p);
 		fz_catch(CTX)
@@ -5834,7 +5986,23 @@ int fo_pdf_save_with(fo_ctx *c, fo_doc *d, const char *path, int encrypt, int pe
 	{
 		char *p = os_path(CTX, path);
 		fz_try(CTX)
-			pdf_save_document(CTX, pdf, p, &opts);
+		{
+			if (fd_path(p) >= 0)
+			{
+				fz_output *out = open_output_at(CTX, p);
+				fz_try(CTX)
+				{
+					pdf_write_document(CTX, pdf, out, &opts);
+					fz_close_output(CTX, out);
+				}
+				fz_always(CTX)
+					fz_drop_output(CTX, out);
+				fz_catch(CTX)
+					fz_rethrow(CTX);
+			}
+			else
+				pdf_save_document(CTX, pdf, p, &opts);
+		}
 		fz_always(CTX)
 			fz_free(CTX, p);
 		fz_catch(CTX)
@@ -8675,7 +8843,7 @@ int fo_zip_list(fo_ctx *c, const char *path, unsigned char **data, size_t *len)
 	fz_try(CTX)
 	{
 		p = os_path(CTX, path);
-		zip = fz_open_archive(CTX, p);
+		zip = open_archive_at(CTX, p);
 		buf = fz_new_buffer(CTX, 4096);
 		n = fz_count_archive_entries(CTX, zip);
 		for (i = 0; i < n; i++)
@@ -8719,7 +8887,7 @@ int fo_zip_read(fo_ctx *c, const char *path, const char *entry, unsigned char **
 	fz_try(CTX)
 	{
 		p = os_path(CTX, path);
-		zip = fz_open_archive(CTX, p);
+		zip = open_archive_at(CTX, p);
 		if (!fz_has_archive_entry(CTX, zip, entry))
 			missing = 1;
 		else
@@ -8811,11 +8979,11 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 	{
 		const char *s = script, *eof = script + len;
 		p = os_path(CTX, epub);
-		zip = fz_open_archive(CTX, p);
+		zip = open_archive_at(CTX, p);
 		fz_free(CTX, p);
 		p = NULL;
 		p = os_path(CTX, out);
-		w = fz_new_pdf_writer(CTX, p, "compress");
+		w = fd_path(p) >= 0 ? fz_new_pdf_writer_with_output(CTX, open_output_at(CTX, p), "compress") : fz_new_pdf_writer(CTX, p, "compress");
 		while (s < eof)
 		{
 			const char *end = memchr(s, '\n', eof - s);

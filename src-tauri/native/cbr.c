@@ -17,6 +17,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #include "libarchive/archive.h"
 #include "libarchive/archive_entry.h"
@@ -80,6 +83,14 @@ void po_set_temp_dir(const char *dir)
 	}
 	free(temp_dir);
 	temp_dir = d;
+}
+
+/* The isolated engine can't make files: it asks the app for a nameless one instead (po_set_scratch). */
+static int (*scratch_fd)(void) = NULL;
+
+void po_set_scratch(int (*fn)(void))
+{
+	scratch_fd = fn;
 }
 
 /* ---------------------------------------------------------------- RAR 5: libarchive's callbacks */
@@ -444,6 +455,18 @@ static FILE *begin_unpacked(rar_archive *arch)
 {
 	char path[1024];
 	FILE *f;
+#ifndef _WIN32
+	if (!temp_dir && scratch_fd)
+	{
+		int fd = scratch_fd();
+		if (fd < 0)
+			return NULL;
+		f = fdopen(fd, "w+b");
+		if (!f)
+			close(fd);
+		return f;
+	}
+#endif
 	if (!temp_dir)
 		return NULL;
 	snprintf(path, sizeof path, "%s/paginaut-rar-%p.tmp", temp_dir, (void *)arch);

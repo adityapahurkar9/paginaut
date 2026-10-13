@@ -62,6 +62,9 @@
             </intent-filter>
         </activity>
 
+        <!-- The reading engine: a process of its own with no permissions, no files and no network (engine_link.rs). -->
+        <service android:name=".EngineService" android:isolatedProcess="true" android:process=":engine" android:exported="false" />
+
         <!-- Shown instead of the app by a copy asking for permissions Paginaut doesn't use (MainActivity). -->
         <!-- Its own process: the app's ends as MainActivity closes (mobile.rs exits at once). -->
         <activity android:name=".RefusedActivity" android:exported="false" android:process=":refused" />
