@@ -151,8 +151,9 @@ function ShelfSetup({ kind }: { kind: ShelfItem["kind"] }) {
       </button>
       <p class="hint">
         Looking through the whole phone needs Android's "All files access" for Paginaut. It only reads e-books and comics, never changes a file, and you can turn it off any time (Settings ›
-        Storage). Android doesn't let apps choose the Download folder itself; a folder inside it works.
+        Storage).
       </p>
+      <DownloadTip />
     </div>
   );
 }
@@ -185,6 +186,7 @@ export function ShelfAccess() {
       <button class="row link-row" onClick={() => void addFolder()}>
         <span class="row-label">Add a folder</span>
       </button>
+      {!st.allFiles && <DownloadTip />}
       <div class="row">
         <span class="row-label row-two">
           All files access
@@ -200,6 +202,20 @@ export function ShelfAccess() {
         </button>
       )}
     </>
+  );
+}
+
+/** Android 11 and later: the folder picker refuses Download itself (and the storage's top folder). */
+const PICKER_REFUSES_DOWNLOAD = Number(/Android (\d+)/.exec(navigator.userAgent)?.[1] ?? 99) >= 11;
+
+/** Why Download itself can't be chosen, and what to do with books saved straight into it. */
+function DownloadTip() {
+  if (!PICKER_REFUSES_DOWNLOAD) return null;
+  return (
+    <p class="hint">
+      Books in Download? The folder picker opens there, but Android won't let apps choose Download itself, only a folder inside it. For books saved straight into Download, tap
+      "Create new folder" in the picker, move the books into it with your Files app, and choose that folder.
+    </p>
   );
 }
 

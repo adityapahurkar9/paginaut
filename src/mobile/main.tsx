@@ -11,8 +11,9 @@ import { checkIntent, passwordAsk, savePosition } from "./open";
 import { Reader } from "./Reader";
 import { Sheets } from "./Sheets";
 import { tidyCache } from "./records";
+import "./theme";
 import { scanIfStale, scanShelf } from "./shelf";
-import { busy, chrome, doc, isDark, searching, settings, sheet, toast } from "./state";
+import { busy, chrome, doc, isDark, look, searching, settings, sheet, toast } from "./state";
 
 function App() {
   const d = doc.value;
@@ -82,6 +83,7 @@ effect(() => {
   const reading = !!doc.value;
   const immersive = reading && !chrome.value && !sheet.value && !searching.value;
   const dark = isDark.value || (reading && settings.value.night);
+  void look.value; // a new colour theme repaints the bars too
   // Read after the theme's colours apply.
   requestAnimationFrame(() => {
     const css = getComputedStyle(document.documentElement);

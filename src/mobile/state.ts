@@ -1,6 +1,7 @@
 // The Android viewer's state: settings, the open document and what's shown over it.
 import { computed, effect, signal } from "@preact/signals";
 import type { DocInfo } from "../api";
+import { PRESETS, type Theme as Look } from "../themedata";
 
 // ---------------------------------------------------------------- settings
 
@@ -27,7 +28,10 @@ export interface TextSettings {
 }
 
 export interface Settings {
+  /** Light or dark (a theme with only one of them keeps it). */
   theme: Theme;
+  /** The colour theme: one of the desktop's presets (themedata.ts), by id. */
+  look: string;
   /** Night mode: pages and text dark, whatever the theme. */
   night: boolean;
   layout: Layout;
@@ -36,6 +40,7 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   theme: "system",
+  look: "standard",
   night: false,
   layout: "scroll",
   text: { size: 18, font: "serif", justify: false, spacing: 1.55, margins: "normal", paper: "auto" },
@@ -73,8 +78,19 @@ export function updateText(patch: Partial<TextSettings>) {
 const systemDark = signal(matchMedia("(prefers-color-scheme: dark)").matches);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => (systemDark.value = e.matches));
 
-/** The app's own colours are dark (the theme, or the system's when it follows it). */
-export const isDark = computed(() => (settings.value.theme === "system" ? systemDark.value : settings.value.theme === "dark"));
+/** Light or dark as chosen (the system's when it follows it), whatever the theme. */
+export const wantsDark = computed(() => (settings.value.theme === "system" ? systemDark.value : settings.value.theme === "dark"));
+
+/** The colour theme chosen (Standard if it's gone). */
+export const look = computed<Look>(() => PRESETS.find((t) => t.id === settings.value.look) ?? PRESETS[0]);
+
+/** The app's own colours are dark (the theme, or the system's when it follows it; a dark-only or light-only theme decides). */
+export const isDark = computed(() => {
+  const t = look.value;
+  if (!t.light) return true;
+  if (!t.dark) return false;
+  return wantsDark.value;
+});
 
 effect(() => {
   document.documentElement.dataset.theme = isDark.value ? "dark" : "light";

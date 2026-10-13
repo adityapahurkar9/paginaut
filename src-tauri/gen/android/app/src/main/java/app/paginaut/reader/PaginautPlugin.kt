@@ -421,11 +421,19 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
   /** Scans run apart from opening files (a whole phone takes a while). */
   private val scanner = Executors.newSingleThreadExecutor()
 
-  /** Asks for a folder for the shelf (Android's own picker); Paginaut keeps access to it. */
+  /**
+   * Asks for a folder for the shelf (Android's own picker); Paginaut keeps access to it. The picker
+   * opens in Download, where most books land: Android 11 and later won't hand over Download itself,
+   * but any folder inside it is fine.
+   */
   @Command
   fun addFolder(invoke: Invoke) {
+    val pick = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+    if (Build.VERSION.SDK_INT >= 26) {
+      pick.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download"))
+    }
     try {
-      startActivityForResult(invoke, Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), "folderPicked")
+      startActivityForResult(invoke, pick, "folderPicked")
     } catch (e: ActivityNotFoundException) {
       invoke.reject("No folder picker is available on this device.")
     }

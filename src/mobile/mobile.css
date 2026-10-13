@@ -83,7 +83,7 @@ input { font: inherit; }
 
 .open-card {
   width: 100%; display: flex; align-items: center; gap: 14px; padding: 16px; border: 0; border-radius: 18px; text-align: left;
-  background: linear-gradient(135deg, #0a1433 0%, #2b58d1 100%); color: #fff; box-shadow: 0 8px 24px rgba(10, 20, 51, 0.28);
+  background: linear-gradient(135deg, var(--card-from, #0a1433) 0%, var(--card-to, #2b58d1) 100%); color: #fff; box-shadow: 0 8px 24px rgba(10, 20, 51, 0.28);
 }
 .open-card:active { filter: brightness(1.08); }
 .open-ic { width: 50px; height: 50px; flex: none; border-radius: 14px; background: rgba(255, 255, 255, 0.14); display: flex; align-items: center; justify-content: center; }
@@ -222,6 +222,28 @@ input { font: inherit; }
 .sheet h3 { margin: 2px 0 0; font-size: 18px; }
 .sheet-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 -18px; padding: 0 18px; }
 .hint { margin: 0; font-size: 13.5px; color: var(--tx2); }
+
+/* Settings › Colour theme: the desktop's presets, a strip of little previews. */
+.settings-scroll { display: flex; flex-direction: column; gap: 12px; }
+.theme-pick { display: flex; flex-direction: column; gap: 8px; }
+.theme-strip { display: flex; gap: 10px; overflow-x: auto; margin: 0 -18px; padding: 2px 18px 4px; scroll-snap-type: x proximity; scroll-padding-inline: 18px; scrollbar-width: none; }
+.theme-strip::-webkit-scrollbar { display: none; }
+.theme-card { flex: none; width: 92px; display: flex; flex-direction: column; gap: 6px; padding: 0; border: 0; background: none; scroll-snap-align: start; }
+.tc-prev {
+  position: relative; display: flex; gap: 5px; align-items: flex-end; height: 70px; padding: 18px 7px 7px; box-sizing: border-box;
+  border-radius: 12px; outline: 1px solid var(--bd); outline-offset: -1px; overflow: hidden;
+}
+.tc-prev i { position: absolute; left: 0; right: 0; top: 0; height: 12px; }
+.tc-page { flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; border-radius: 4px; font-size: 15px; font-weight: 600; }
+.tc-prev b { position: absolute; right: 7px; top: 3px; width: 16px; height: 6px; border-radius: 3px; }
+.theme-card.on .tc-prev { outline: 2.5px solid var(--acc); outline-offset: 1px; }
+.tc-name { font-size: 12.5px; color: var(--tx2); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.theme-card.on .tc-name { color: var(--tx); font-weight: 600; }
+.theme-only { margin-top: -6px; font-size: 12.5px; }
+/* A theme's heading font (theme.ts); High contrast: firmer lines and a touch larger text. */
+.lib-head h1, .sheet h3, .shelf-setup h2, .bar-title strong { font-family: var(--font-display, inherit); }
+:root.hc body { font-size: 16px; }
+:root.hc .rec + .rec, :root.hc .store-list li + li { border-top-width: 2px; }
 
 .seg { display: flex; gap: 3px; padding: 3px; border-radius: 12px; background: var(--hover); }
 .seg button {

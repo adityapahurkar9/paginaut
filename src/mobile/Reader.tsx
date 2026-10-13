@@ -19,6 +19,7 @@ import { bookmarksOf, toggleBookmark } from "./records";
 import { chrome, doc, errorText, isDark, layout as docLayout, mode, page, say, searching, settings, sheet, updateSettings, type OpenDoc, type TextSettings } from "./state";
 import { shareRepaired } from "./native";
 import { bookInfo, goTo, movedByApp, views } from "./views";
+import { paperVars, themePaper } from "./theme";
 
 export function Reader({ d }: { d: OpenDoc }) {
   const night = settings.value.night;
@@ -322,6 +323,9 @@ function Reflow({ d }: { d: OpenDoc }) {
   const [error, setError] = useState<string | null>(null);
   const t = settings.value.text;
   const paper = t.paper === "sepia" && !settings.value.night ? "sepia" : settings.value.night || isDark.value ? "dark" : "white";
+  // Plain paper takes the colour theme's (its dark one at night or in dark mode).
+  const tp = paper !== "sepia" ? themePaper.value : null;
+  const paperStyle = tp ? paperVars(paper === "dark" ? tp.dark : tp.light, paper === "dark") : {};
 
   useEffect(() => {
     let alive = true;
@@ -360,7 +364,7 @@ function Reflow({ d }: { d: OpenDoc }) {
   useTaps(() => host.current, undefined, m === "book");
 
   return (
-    <div class={`rf-host paper-${paper} ${m}`} style={textVars(t)}>
+    <div class={`rf-host paper-${paper} ${m}`} style={{ ...textVars(t), ...paperStyle }}>
       <div class="rf-mount" ref={host} />
       {!flow && !error && (
         <div class="rf-loading">
