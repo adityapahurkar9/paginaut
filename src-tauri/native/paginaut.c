@@ -381,15 +381,16 @@ static void fd_out_drop(fz_context *ctx, void *state)
 	fz_free(ctx, o);
 }
 
-/* An output writing the handle's file from its start (emptied first). */
-static fz_output *fd_output(fz_context *ctx, int handle)
+/* An output writing the handle's file: from its start (emptied first), or after what's there (`append`: an
+ * incremental save adds its changes to the file as it is, as pdf_save_document's own append does). */
+static fz_output *fd_output(fz_context *ctx, int handle, int append)
 {
 	fd_out *o;
 	fz_output *out;
 	int fd = dup(handle);
 	if (fd < 0)
 		fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot write the file: %s", strerror(errno));
-	if (ftruncate(fd, 0) < 0 || lseek(fd, 0, SEEK_SET) < 0)
+	if (append ? lseek(fd, 0, SEEK_END) < 0 : (ftruncate(fd, 0) < 0 || lseek(fd, 0, SEEK_SET) < 0))
 	{
 		close(fd);
 		fz_throw(ctx, FZ_ERROR_SYSTEM, "cannot write the file: %s", strerror(errno));
@@ -436,15 +437,16 @@ static fz_archive *open_archive_at(fz_context *ctx, const char *p)
 	return fz_open_archive(ctx, p);
 }
 
-/* Where a document writer or a PDF save writes: a path, or a handle the isolated engine was given. */
-static fz_output *open_output_at(fz_context *ctx, const char *p)
+/* Where a document writer or a PDF save writes: a path, or a handle the isolated engine was given (`append`:
+ * after what the file has). */
+static fz_output *open_output_at(fz_context *ctx, const char *p, int append)
 {
 #ifdef __ANDROID__
 	int h = fd_path(p);
 	if (h >= 0)
-		return fd_output(ctx, h);
+		return fd_output(ctx, h, append);
 #endif
-	return fz_new_output_with_path(ctx, p, 0);
+	return fz_new_output_with_path(ctx, p, append);
 }
 
 fo_doc *fo_open(fo_ctx *c, const char *path)
@@ -2299,7 +2301,7 @@ int fo_pdf_save(fo_ctx *c, fo_doc *d, const char *path, int incremental)
 		{
 			if (fd_path(p) >= 0)
 			{
-				fz_output *out = open_output_at(CTX, p);
+				fz_output *out = open_output_at(CTX, p, opts.do_incremental);
 				fz_try(CTX)
 				{
 					pdf_write_document(CTX, pdf, out, &opts);
@@ -2343,7 +2345,7 @@ int fo_write_document(fo_ctx *c, fo_doc *d, const char *path, const char *format
 	{
 		char *p = os_path(CTX, path);
 		fz_try(CTX)
-			w = fd_path(p) >= 0 ? fz_new_document_writer_with_output(CTX, open_output_at(CTX, p), format, options) : fz_new_document_writer(CTX, p, format, options);
+			w = fd_path(p) >= 0 ? fz_new_document_writer_with_output(CTX, open_output_at(CTX, p, 0), format, options) : fz_new_document_writer(CTX, p, format, options);
 		fz_always(CTX)
 			fz_free(CTX, p);
 		fz_catch(CTX)
@@ -5989,7 +5991,7 @@ int fo_pdf_save_with(fo_ctx *c, fo_doc *d, const char *path, int encrypt, int pe
 		{
 			if (fd_path(p) >= 0)
 			{
-				fz_output *out = open_output_at(CTX, p);
+				fz_output *out = open_output_at(CTX, p, 0);
 				fz_try(CTX)
 				{
 					pdf_write_document(CTX, pdf, out, &opts);
@@ -8983,7 +8985,7 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 		fz_free(CTX, p);
 		p = NULL;
 		p = os_path(CTX, out);
-		w = fd_path(p) >= 0 ? fz_new_pdf_writer_with_output(CTX, open_output_at(CTX, p), "compress") : fz_new_pdf_writer(CTX, p, "compress");
+		w = fd_path(p) >= 0 ? fz_new_pdf_writer_with_output(CTX, open_output_at(CTX, p, 0), "compress") : fz_new_pdf_writer(CTX, p, "compress");
 		while (s < eof)
 		{
 			const char *end = memchr(s, '\n', eof - s);

@@ -335,15 +335,19 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
 
   /**
    * A book on the phone's shared storage that a path may name (the shelf with all-files access): an
-   * e-book or comic, not reached through a link, and not in another app's data or obb folder. The
-   * engine checks the same again (mobile.rs, `readable`).
+   * e-book or comic that really is on shared storage (links resolved, so none leads out of it), and not
+   * in another app's data or obb folder. Both sides compared resolved: on some phones the storage root
+   * itself is a link. The engine checks the same again (mobile.rs, `readable`).
    */
   private fun sharedBook(f: File): Boolean {
-    val root = Environment.getExternalStorageDirectory().canonicalPath + "/"
-    val real = try { f.canonicalPath } catch (_: Exception) { return false }
-    if (!real.startsWith(root) || real != f.absolutePath) return false
+    val (root, real) = try {
+      Environment.getExternalStorageDirectory().canonicalPath + "/" to f.canonicalPath
+    } catch (_: Exception) {
+      return false
+    }
+    if (!real.startsWith(root)) return false
     val rest = real.removePrefix(root).lowercase()
-    return !rest.startsWith("android/data/") && !rest.startsWith("android/obb/") && shelfKind(f.name) != null
+    return !rest.startsWith("android/data/") && !rest.startsWith("android/obb/") && shelfKind(File(real).name) != null
   }
 
   /** Paginaut may read every file on the phone (the user turned on "All files access"). */
@@ -878,13 +882,36 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
       cb.onLayoutFinished(info, old != new)
     }
 
+    /**
+     * Android calls this on the main thread: a big document (hundreds of MB read in place) is copied on a
+     * thread of its own, stopping if printing is cancelled, and the answer given back on the main thread.
+     */
     override fun onWrite(pages: Array<out PageRange>?, dest: ParcelFileDescriptor, cancel: CancellationSignal?, cb: WriteResultCallback) {
-      try {
-        open().use { i -> FileOutputStream(dest.fileDescriptor).use { o -> i.copyTo(o, 1 shl 16) } }
-        if (cancel?.isCanceled == true) cb.onWriteCancelled() else cb.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
-      } catch (e: Exception) {
-        cb.onWriteFailed(e.message)
-      }
+      val main = android.os.Handler(android.os.Looper.getMainLooper())
+      Thread({
+        val failed: String? = try {
+          open().use { i ->
+            FileOutputStream(dest.fileDescriptor).use { o ->
+              val buf = ByteArray(1 shl 16)
+              while (cancel?.isCanceled != true) {
+                val n = i.read(buf)
+                if (n < 0) break
+                o.write(buf, 0, n)
+              }
+            }
+          }
+          null
+        } catch (e: Exception) {
+          e.message ?: "The document couldn't be read."
+        }
+        main.post {
+          when {
+            cancel?.isCanceled == true -> cb.onWriteCancelled()
+            failed != null -> cb.onWriteFailed(failed)
+            else -> cb.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+          }
+        }
+      }, "print").start()
     }
   }
 
