@@ -573,6 +573,12 @@ export function ViewControls({ tab }: { tab: Tab | null }) {
       <button class="ib sm" disabled={!tab} onClick={A.zoomIn} aria-label={text ? "Larger text" : "Zoom in"} title={text ? "Larger text (Ctrl+=)" : "Zoom in (Ctrl+=)"}>
         <Plus size={15} />
       </button>
+      {!text && (
+        <div class="modeseg" role="group" aria-label="Fit">
+          <IB icon={I(MoveHorizontal, 15)} label="Fit width" title="Fit width (Ctrl+2)" on={tab?.fit.value === "width"} disabled={!tab} onClick={A.fitWidth} />
+          <IB icon={I(Expand, 15)} label="Fit page" title="Fit page (Ctrl+1)" on={tab?.fit.value === "page"} disabled={!tab} onClick={A.fitPage} />
+        </div>
+      )}
       <div class="sep" />
       <div class="modeseg" role="group" aria-label="View mode">
         {MODES.map(([mode, label, icon, title]) => (
