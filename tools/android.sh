@@ -85,4 +85,4 @@ rm -rf "src-tauri/gen/android/app/build/outputs/apk/$arch/$profile"
 (cd src-tauri/gen/android && ./gradlew "assemble$Arch$Profile" -x "rustBuild$Arch$Profile" --console=plain -q)
 apk=$(ls src-tauri/gen/android/app/build/outputs/apk/"$arch"/"$profile"/*.apk | head -1)
 echo "APK: $apk ($(du -h "$apk" | cut -f1))"
-[ "$install" = 1 ] && "$adb" install -r "$apk"
+if [ "$install" = 1 ]; then "$adb" install -r "$apk"; fi
