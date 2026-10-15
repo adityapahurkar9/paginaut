@@ -36,6 +36,11 @@ let dropTimer = 0;
 // Before any file opens: which program converts Office files.
 initOffice();
 
+// The files Paginaut was started with (put in the page by appwindows.rs open_main): opening before the first frame,
+// so the window shows their tabs at once instead of Home, and the engine reads them while the UI starts.
+const launch = (window as { __paginautLaunch?: string[] }).__paginautLaunch;
+if (launch?.length) void openFiles(launch, true);
+
 render(<App />, document.getElementById("app")!);
 
 // Comments are signed with the Windows user name.

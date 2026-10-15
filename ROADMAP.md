@@ -689,6 +689,18 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       first); source made public first (AGPL); 1.0 for the store release
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
+## 0.9.3 (Windows, Linux): faster start with a file (opened from Explorer while Paginaut is closed)
+Measured on the dev PC, five cold starts each: the first page sharp ~700 ms after launch → ~490 ms. WebView2 itself
+takes ~250 ms of that and doesn't get faster with browser switches (tried: component updates, background networking off).
+- [x] The main window is made in setup (`create: false` in tauri.conf.json, appwindows.rs `open_main`) with the launch
+      files put in its page; main.tsx opens them before the first frame. Before, the page drew Home (9 book covers,
+      a library scan) and asked for the files after 5 listen calls, all waiting on the start-up script
+- [x] Launch files skip the "open in another window?" check (no other window yet)
+- [x] The sidebar no longer slides open beside the first document: each frame re-fitted the page (7–8 renders of page 1)
+- [x] The viewer keeps its pages when the real sizes arrive and equal the first page's (most documents): the first
+      sharp render was cancelled and started again
+- [x] Files from a second launch while the first window is still being made were dropped; they open with the launch files
+
 ## 0.9.1 (Windows, Linux): fixes from the 0.9.0 review
 - [x] Linux DSC tokens: cryptoki 0.12 no longer finishes a token driver (C_Finalize) when it's let go, so a driver
       that stays loaded refused to start a second time: listing the certificates worked, signing after it failed

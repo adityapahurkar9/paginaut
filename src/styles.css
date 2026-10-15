@@ -187,7 +187,7 @@ svg { display: block; flex-shrink: 0; }
   overflow: hidden; transition: width 0.2s var(--ease), border-color 0.2s; position: relative;
 }
 .sidebar.closed { border-right-color: transparent; }
-.sidebar.dragging { transition: none; }
+.sidebar.dragging, .sidebar.instant { transition: none; }
 .sidebar-inner { display: flex; flex-direction: column; height: 100%; }
 .resizer { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 5; }
 .resizer:hover, .resizer.on { background: linear-gradient(to right, transparent 2px, var(--acc) 2px, var(--acc) 4px, transparent 4px); }
