@@ -692,7 +692,7 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
 ## PDF/A: archival PDFs (planned)
 PDF/A (ISO 19005) is the PDF that still opens and looks the same decades later: what courts, government portals and
 archives ask for. First PDF/A-2b (looks preserved; allows transparency, JPEG 2000 and layers), then -1b (older
-portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags, so they wait for tagging (PDF/UA, not planned yet);
+portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags, so they wait for tagging (below);
 "u" (every letter maps to Unicode) comes with -2b's checks. MuPDF has no PDF/A support: checks and fixes are ours.
 - [ ] Check: whether a file claims PDF/A (XMP pdfaid) and which rules it breaks, in plain words and grouped: fonts not
       embedded or letters without Unicode, device colours without an output intent, JavaScript or launch actions,
@@ -711,6 +711,50 @@ portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags,
 - [ ] Signed files: converting rewrites the file, so its signatures stop being valid; said before converting (sign the
       PDF/A copy). Signing a PDF/A file keeps it PDF/A (the signature's appearance and the incremental save follow the rules)
 - [ ] Tests: veraPDF's corpus for the checker; the user's portal files for Save as PDF/A
+
+## PDF/UA: checking accessible PDFs (planned, after PDF/A)
+PDF/UA (ISO 14289) is the accessible PDF: tagged, so a screen reader reads it in order, with pictures described and
+tables explained. Accessibility laws (government, education, banks) ask for it. PDF/UA-1 first (PDF 1.7, what checkers
+and portals use), PDF/UA-2 (PDF 2.0) later. MuPDF reads tag trees (structured text with structure, its tree check) and
+keeps marked content through its content filter; the checks are ours.
+- [ ] Check: the Matterhorn Protocol's failure conditions a program can decide (87 of 136), in plain words, grouped and
+      tied to the page and the thing at fault: content neither tagged nor marked as decoration, pictures without
+      alternative text, headings that skip levels, tables without header cells, broken lists, language or title
+      missing (or the title not shown in the window), letters without Unicode, links, comments and fields without
+      tags or descriptions, tab order not following the tags, no PDF/UA identifier in the XMP. The checks only a person
+      can make (the alternative text says what the picture shows, the order makes sense, colour isn't the only signal)
+      as a list to tick
+- [ ] Tags panel (a side bar tab): the file's tag tree; picking a tag shows its content on the page; the reading order
+      as numbered boxes on the pages (view only here; editing comes with tagging below)
+- [ ] Tags kept through Paginaut's own tools: every tool that rewrites pages or the catalog checked on a tagged file
+      (page delete, insert, reorder, merge, split: MuPDF's rearrange rebuilds the catalog, so restore_catalog must carry
+      StructTreeRoot, ParentTree, MarkInfo, RoleMap, Lang; redaction, Edit mode, stamps, OCR text, flatten, Sanitize,
+      Reduce size, Save as PDF/A). Each keeps the tree consistent (content moved or removed updates the tree) or says
+      the file will lose its tags. Engine test: one tagged file through every tool, then the checker
+- [ ] Tests: the PDF Association's PDF/UA reference files; the free PAC checker's results on the same files to
+      compare against
+
+## Accessibility tagging and repair (planned, after PDF/UA checking)
+Tags added to a file that has none (most PDFs), then put right by hand. The hardest of the three: the big apps tag
+with machine learning trained on huge numbers of documents. Ours starts from Read mode's analysis (headings,
+paragraphs, lists, columns, running headers and footers, footnotes) and the table finder (engine/table.rs): good on
+plain documents (letters, reports, books), hand-fixing expected on complex layouts. UI wording our own (no other
+app's feature names).
+- [ ] Add tags: the tag tree written from the analysis (H1–H6, P, L/LI, Table/TR/TH/TD, Figure, Caption, Note), page
+      content marked to match through the content filter (as Edit mode and Redact rewrite pages), running headers,
+      footers and page numbers marked as decoration; ParentTree, RoleMap, MarkInfo, language, title shown in the
+      window, PDF/UA identifier. Scans after OCR (its text tagged)
+- [ ] Put right by hand: reading order as numbered boxes (drag to reorder, draw a box for a new block, change a
+      block's kind); the tag tree editable (move, change kind, merge, split, mark as decoration); alternative text
+      per picture (asked for every picture without it); tables: header cells and their scope, spans, from the grid
+      Read mode's table menu shows; descriptions for links and fields; tab order set to follow the tags
+- [ ] Checked again after each change (the PDF/UA check above, its list updating); saving keeps the tags
+- [ ] With tags: PDF/A-2a and -3a offered in Save as PDF/A; Word and LibreOffice exports in Convert keep their tags
+      (their accessibility tag options switched on)
+- [ ] Files that have tags read better: Read mode and Read aloud follow the file's own tags and alternative text
+      instead of guessing
+- [ ] Tests: untagged documents of rising difficulty (letter, report, two columns, tables, forms, a scanned book):
+      add tags, then the checker; compared with Acrobat's results on the same files (installed on the user's PC)
 
 ## 0.9.5 (Windows, Linux): fixes from the review of 0.9.3–0.9.4
 - [x] An Office file opened from Explorer used Microsoft Office even with LibreOffice (or Built-in) chosen: its open
