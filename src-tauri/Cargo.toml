@@ -1,6 +1,6 @@
 [package]
 name = "paginaut"
-version = "0.9.4"
+version = "0.9.5"
 description = "Fast PDF reader, annotator and toolkit"
 edition = "2021"
 license = "AGPL-3.0-or-later"

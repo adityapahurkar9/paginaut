@@ -33,13 +33,23 @@ import { dropAt } from "./ui/TabDrag";
 
 let dropTimer = 0;
 
+/** True the first time this window's page starts (session storage outlives a reload, not the window). */
+function firstLoad() {
+  try {
+    if (sessionStorage.getItem("paginaut.started")) return false;
+    sessionStorage.setItem("paginaut.started", "1");
+  } catch {}
+  return true;
+}
+
 // Before any file opens: which program converts Office files.
 initOffice();
 
 // The files Paginaut was started with (put in the page by appwindows.rs open_main): opening before the first frame,
 // so the window shows their tabs at once instead of Home, and the engine reads them while the UI starts.
+// Once: the script that hands them over runs again if the page reloads, when they may be closed or in another window.
 const launch = (window as { __paginautLaunch?: string[] }).__paginautLaunch;
-if (launch?.length) void openFiles(launch, true);
+if (launch?.length && firstLoad()) void openFiles(launch, true);
 
 render(<App />, document.getElementById("app")!);
 

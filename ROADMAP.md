@@ -689,6 +689,21 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       first); source made public first (AGPL); 1.0 for the store release
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
+## 0.9.5 (Windows, Linux): fixes from the review of 0.9.3–0.9.4
+- [x] An Office file opened from Explorer used Microsoft Office even with LibreOffice (or Built-in) chosen: its open
+      raced the page telling the app the preference. Conversions with no converter named now wait for it (3 s at most;
+      only the app turns the wait on, so the examples don't wait)
+- [x] Moves on a viewer without a size (a background tab, Linux before the window shows) change the view it will show:
+      a jump, zoom or fit made while hidden is no longer undone when it's shown. A hidden viewer reports its last view
+      (positions saved for background tabs)
+- [x] Launch files open once per window: a reload (development, or WebView2 reloading the page) doesn't reopen files
+      that were closed or moved to another window
+- [x] A size that changes every frame (sidebar or a pane sliding, a window dragged bigger) re-fits each frame but
+      renders sharp pages once it settles (was one render per frame: 7–8 for an F4 toggle, now 1)
+- [x] The viewer keeps unchanged pages, and renders already on their way, when the page list is replaced (real sizes
+      arriving, page edits); a mixed-size document opened at a saved page rendered its pages twice
+- [x] A pass asked for at once stays at once when a scroll or resize asks again in the same frame
+
 ## 0.9.4 (Windows, Linux): the faster start on Linux
 - [x] The viewer waits for a size before showing the view it's given (fit, page, place on it). On Linux, WebKitGTK lays out
       nothing until the window is shown, and since 0.9.3 a launched document gets its viewer before that: it came out at the

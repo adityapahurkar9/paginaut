@@ -445,6 +445,7 @@ fn run_desktop() {
             // Office files open through PDFs made by Microsoft Office or LibreOffice (see office/).
             let local = app.path().app_local_data_dir().unwrap_or_default();
             let office = std::sync::Arc::new(office::Office::new(&local));
+            office.await_preference();
             let o = office.clone();
             converter.set_converter(std::sync::Arc::new(move |path: &str, engine: Option<&str>| o.convert(path, engine)));
             app.manage(office);

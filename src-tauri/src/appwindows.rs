@@ -156,24 +156,21 @@ pub fn forward_files(app: &AppHandle, files: Vec<String>) {
         }
         return;
     }
-    let Some(w) = last_window(app) else {
-        // The first window is still being made (WebView2 answers other launches meanwhile): its page takes them with
-        // the files it starts with.
-        if let Some(s) = app.state::<Windows>().starts.lock().get_mut("main") {
-            s.files.extend(files);
-        }
-        return;
-    };
-    let _ = w.unminimize();
-    let _ = w.set_focus();
+    // No window yet: the first is still being made (WebView2 answers other launches meanwhile).
+    let win = last_window(app);
+    let label = win.as_ref().map_or("main", |w| w.label());
+    if let Some(w) = &win {
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
     // A window still starting up (its page not listening yet) takes them with what it starts with.
     let state = app.state::<Windows>();
     let mut starts = state.starts.lock();
-    if let Some(s) = starts.get_mut(w.label()) {
+    if let Some(s) = starts.get_mut(label) {
         s.files.extend(files);
-    } else {
+    } else if win.is_some() {
         drop(starts);
-        let _ = app.emit_to(w.label(), "open-files", files);
+        let _ = app.emit_to(label, "open-files", files);
     }
 }
 

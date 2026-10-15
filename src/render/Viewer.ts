@@ -237,6 +237,7 @@ export class Viewer {
   private mounted = new Map<number, PageView>();
   private group: string;
   private raf = 0;
+  private rafImmediate = false;
   private renderTimer = 0;
   private lastPage = -1;
   private ro: ResizeObserver;
@@ -254,6 +255,8 @@ export class Viewer {
    * document opened at launch gets here first (fitted then, it would come out at the smallest zoom, scrolled to the top).
    */
   private waiting: ViewState | null = null;
+  /** The view when last laid out with a size: a hidden viewer (a background tab) has no scroll position to read. */
+  private lastView: ViewState | null = null;
   private lastSharpAt = 0;
   private zoomChangedAt = 0;
   private lastTop = 0;
@@ -433,10 +436,6 @@ export class Viewer {
 
   /** Replaces the displayed page list (after sizes load or page edits), keeping the reading position. */
   setPages(pages: PageSpec[], keepPage?: number) {
-    // The real sizes of a document whose pages are all the size of its first (what the viewer starts with): nothing
-    // to redo, and the first page's render, already on its way, carries on.
-    const same = (a: PageSpec, b: PageSpec) => a.src === b.src && a.rot === b.rot && a.w === b.w && a.h === b.h;
-    if (keepPage === undefined && pages.length === this.pages.length && pages.every((p, i) => same(p, this.pages[i]))) return;
     const st = this.viewState();
     if (keepPage !== undefined) {
       st.page = keepPage;
@@ -444,17 +443,24 @@ export class Viewer {
     }
     this.pages = pages;
     this.indexPages();
-    // Anything drawn for a changed page (new rotation, new position) is stale.
-    for (const pv of this.mounted.values()) {
+    // Anything drawn for a changed page (new rotation, new size, another page in its place) is stale. Pages that
+    // stay as they were keep their pictures and the renders on their way (the real sizes arriving just after
+    // opening mostly match the first page's, which the viewer starts with).
+    const same = (a: PageSpec, b: PageSpec | undefined) => !!b && a.src === b.src && a.rot === b.rot && a.w === b.w && a.h === b.h;
+    let changed = false;
+    for (const [i, pv] of this.mounted) {
+      if (same(pv.spec, pages[i])) continue;
+      changed = true;
       this.dropPage(pv);
+      this.mounted.delete(i);
     }
-    this.mounted.clear();
-    this.sharpWants = [];
-    this.sharpScale = 0;
-    this.links.clear();
-    this.imageRects.clear();
-    this.scanPhotos.clear();
-    if (this.selection) this.clearSelection();
+    const kept = new Set([...this.mounted.values()].map((pv) => pv.spec.src));
+    // Renders on their way stay wanted while their page is in the document: a render doesn't depend on the page's
+    // place or size, so a page laid out again (its real size in place of the first page's) takes the same one.
+    this.sharpWants = this.sharpWants.filter((w) => this.srcToView.has(w.params.page));
+    for (const map of [this.links, this.imageRects]) for (const src of [...map.keys()]) if (!kept.has(src)) map.delete(src);
+    for (const key of [...this.scanPhotos.keys()]) if (!kept.has(Number(key.split(":")[0]))) this.scanPhotos.delete(key);
+    if (changed && this.selection) this.clearSelection();
     st.page = Math.min(st.page, Math.max(0, pages.length - 1));
     this.layout();
     this.restore(st);
@@ -501,6 +507,7 @@ export class Viewer {
    */
   turnFrom(page: number, dir: -1 | 0 | 1, smooth: boolean) {
     if (!this.pages.length) return;
+    if (!this.live()) return this.waitAt(page + dir);
     const rows = this.rowFirst.length;
     const r = Math.min(Math.max(0, this.rowOf[Math.min(Math.max(0, page), this.pages.length - 1)] + dir), rows - 1);
     this.here = this.rowFirst[r];
@@ -510,6 +517,7 @@ export class Viewer {
 
   viewState(): ViewState {
     if (this.waiting) return { ...this.waiting };
+    if (!this.el.clientWidth && this.lastView) return { ...this.lastView };
     if (!this.pages.length) return { page: 0, frac: 0, zoom: this.zoom, fit: this.fit };
     if (this.slots && this.here >= 0 && this.fit !== "none") return { page: Math.min(this.here, this.pages.length - 1), frac: 0, zoom: this.zoom, fit: this.fit };
     const top = this.el.scrollTop;
@@ -519,6 +527,29 @@ export class Viewer {
   }
 
   restore(st: ViewState) {
+    this.show(st, true);
+  }
+
+  /**
+   * Whether the view can move now. A viewer waiting for a size shows its view first if it has one by now;
+   * otherwise moves change the view it waits with (moving the unsized layout would be undone when the size comes).
+   */
+  private live(): boolean {
+    // Hidden since it was last shown: moves wait for it to be shown again, from where it was.
+    if (!this.waiting && !this.el.clientWidth && this.lastView) this.waiting = { ...this.lastView };
+    if (this.waiting && this.el.clientWidth) this.show(this.waiting, false);
+    return !this.waiting;
+  }
+
+  /** The view to show at a page once there's a size (`y`: points down the page). */
+  private waitAt(page: number, y = 0) {
+    const p = Math.min(Math.max(0, page), Math.max(0, this.pages.length - 1));
+    const h = this.pages[p]?.h ?? 0;
+    this.waiting = { ...this.waiting!, page: p, frac: h > 0 ? Math.max(0, y) / h : 0 };
+  }
+
+  /** Lays the view out for `st`; `schedule`: and asks for its pages (update() calling it does that itself next). */
+  private show(st: ViewState, schedule: boolean) {
     if (!this.el.clientWidth) {
       this.waiting = { ...st };
       return;
@@ -542,11 +573,12 @@ export class Viewer {
       this.el.scrollLeft = (this.contentW - this.el.clientWidth) / 2;
     }
     this.cb.onZoom(this.zoom, this.fit);
-    this.schedule(true);
+    if (schedule) this.schedule(true);
   }
 
   goToPage(page: number, yPt?: number) {
     if (!this.pages.length) return;
+    if (!this.live()) return this.waitAt(page, yPt);
     const p = Math.min(Math.max(0, page), this.pages.length - 1);
     const r = this.pageRect(p);
     const y = yPt !== undefined && yPt > 0 ? r.y + yPt * this.cssScale - 16 : this.slots ? this.rowY[this.rowOf[p]] : r.y - GAP / 2;
@@ -561,6 +593,7 @@ export class Viewer {
    */
   stepRow(dir: 1 | -1) {
     if (!this.pages.length) return;
+    if (!this.live()) return this.waitAt(this.waiting!.page + dir);
     const vh = this.el.clientHeight;
     const row = this.rowOf[this.pageAtY(this.el.scrollTop + vh / 2)];
     const r = Math.min(Math.max(0, row + dir), this.rowFirst.length - 1);
@@ -603,6 +636,7 @@ export class Viewer {
   /** Scrolls so the point `y` points down page `page` (as shown) is `offset` px below the top of the view. */
   scrollToPoint(page: number, y: number, offset: number) {
     if (!this.pages.length) return;
+    if (!this.live()) return this.waitAt(page, y);
     const p = Math.min(Math.max(0, page), this.pages.length - 1);
     this.el.scrollTop = Math.max(0, this.pageRect(p).y + y * this.cssScale - offset);
     this.schedule(true);
@@ -643,9 +677,11 @@ export class Viewer {
   }
 
   setFit(fit: FitMode) {
+    const live = this.live();
     const st = this.viewState();
     this.fit = fit;
-    if (fit !== "none") {
+    if (!live) this.waiting = { ...st, fit };
+    else if (fit !== "none") {
       st.fit = fit;
       this.restore(st);
     }
@@ -654,6 +690,10 @@ export class Viewer {
   /** Zooms to `z`, keeping the document point under (ax, ay) (viewport px) fixed. */
   setZoom(z: number, ax?: number, ay?: number) {
     z = clampZoom(z);
+    if (!this.live()) {
+      this.waiting = { ...this.waiting!, zoom: z, fit: "none" };
+      return;
+    }
     if (Math.abs(z - this.zoom) < 1e-4 && this.fit === "none") return;
     if (!this.pages.length) return;
     const vx = ax ?? this.el.clientWidth / 2;
@@ -679,6 +719,7 @@ export class Viewer {
 
   /** Animated zoom step (buttons, Ctrl+= / Ctrl+-): a quick GPU scale, then a real re-layout. */
   zoomBy(factor: number) {
+    if (!this.live()) return this.setZoom(this.waiting!.zoom * factor);
     if (this.animating || this.pinch) {
       this.setZoom(this.zoom * factor);
       return;
@@ -723,6 +764,7 @@ export class Viewer {
     const v = this.srcToView.get(src);
     if (v === undefined) return;
     const spec = this.pages[v];
+    if (!this.live()) return this.waitAt(v, quadBox(spec, quad)[1]);
     const r = this.pageRect(v);
     const s = this.cssScale;
     const [x0, y0] = quadBox(spec, quad);
@@ -810,8 +852,14 @@ export class Viewer {
     if (this.waiting) return this.restore(this.waiting);
     const st = this.viewState();
     this.layout();
-    if (this.fit !== "none") this.restore(st);
-    else this.schedule();
+    if (this.fit !== "none") {
+      const z = this.zoom;
+      this.show(st, false);
+      // A size that changes every frame (a pane or the sidebar sliding, the window dragged bigger) re-fits every
+      // frame: sharp pages wait for it to settle, as they do while zooming.
+      if (Math.abs(this.zoom - z) > 1e-4) this.zoomChangedAt = performance.now();
+    }
+    this.schedule();
   }
 
   /**
@@ -1110,12 +1158,18 @@ export class Viewer {
   schedule(immediate = false) {
     if (this.destroyed) return;
     cancelAnimationFrame(this.raf);
-    this.raf = requestAnimationFrame(() => this.update(immediate));
+    // A pass asked for at once stays at once when a scroll or resize asks again in the same frame.
+    this.rafImmediate ||= immediate;
+    this.raf = requestAnimationFrame(() => {
+      const now = this.rafImmediate;
+      this.rafImmediate = false;
+      this.update(now);
+    });
   }
 
   private update(immediate: boolean) {
     // Sized now, though the resize observer may not have said so yet: the view first.
-    if (this.waiting && this.el.clientWidth) this.restore(this.waiting);
+    this.live();
     const n = this.pages.length;
     const vh = this.el.clientHeight;
     if (!n || !vh) {
@@ -1124,6 +1178,7 @@ export class Viewer {
       return;
     }
     if (!this.pinch && !this.animating) this.updateWidth();
+    this.lastView = this.viewState();
     const top = this.el.scrollTop;
 
     const first = this.pageAtY(top);

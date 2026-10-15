@@ -9,7 +9,7 @@ pub mod com;
 pub mod libre;
 
 use crate::engine::Converted;
-use parking_lot::RwLock;
+use parking_lot::{Condvar, Mutex, RwLock};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -71,6 +71,10 @@ pub struct Office {
     /// PDFs made from Office files.
     cache: PathBuf,
     preference: RwLock<String>,
+    /// True until the page has said which converter it prefers (`await_preference`): a file opened at launch asks
+    /// for its PDF while that's still on its way.
+    preference_pending: Mutex<bool>,
+    preference_told: Condvar,
     /// Detected once (asking Windows is quick, but not free); refreshed after installing or removing.
     found: RwLock<Option<(Option<MsOffice>, Option<libre::Lo>)>>,
 }
@@ -84,6 +88,8 @@ impl Office {
             data: local_data.to_path_buf(),
             cache,
             preference: RwLock::new("auto".into()),
+            preference_pending: Mutex::new(false),
+            preference_told: Condvar::new(),
             found: RwLock::new(None),
         }
     }
@@ -92,6 +98,14 @@ impl Office {
         if matches!(p, "auto" | "msoffice" | "libreoffice" | "builtin") {
             *self.preference.write() = p.into();
         }
+        *self.preference_pending.lock() = false;
+        self.preference_told.notify_all();
+    }
+
+    /// Conversions without a converter named wait (a few seconds at most) until `set_preference` is called: the app
+    /// keeps the preference in the page, which tells it as it starts.
+    pub fn await_preference(&self) {
+        *self.preference_pending.lock() = true;
     }
 
     fn detect(&self) -> (Option<MsOffice>, Option<libre::Lo>) {
@@ -131,6 +145,11 @@ impl Office {
             com::App::PowerPoint => m.powerpoint,
         });
         let has_lo = self.libreoffice().is_some();
+        if engine.is_none() {
+            let mut pending = self.preference_pending.lock();
+            let until = std::time::Instant::now() + Duration::from_secs(3);
+            while *pending && !self.preference_told.wait_until(&mut pending, until).timed_out() {}
+        }
         let pref = engine.map(str::to_string).unwrap_or_else(|| self.preference.read().clone());
         let pick = match pref.as_str() {
             "msoffice" if has_ms => Some("msoffice"),
