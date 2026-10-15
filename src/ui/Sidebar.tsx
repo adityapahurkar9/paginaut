@@ -140,11 +140,20 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
+  // The sidebar slides when it's opened or closed, not when it comes and goes with the documents: sliding in beside
+  // the first one, it would re-fit the page every frame (each fit a new render) just as the document appears.
+  const box = useRef<HTMLDivElement>(null);
+  const hadTab = useRef(!!tab);
+  const instant = hadTab.current !== !!tab;
+  hadTab.current = !!tab;
+  // Its new width takes effect now, while it isn't animated (a later render drops the class).
+  useLayoutEffect(() => void (instant && box.current?.offsetWidth));
+
   const open = s.sidebarOpen && !!tab && !bookScreen.value;
   const hasFiles = !!tab?.attachments.value?.length;
   const files = hasFiles && s.sidebarTab === "files";
   return (
-    <div class={`sidebar ${open ? "" : "closed"} ${dragging ? "dragging" : ""}`} style={{ width: open ? width : 0 }}>
+    <div ref={box} class={`sidebar ${open ? "" : "closed"} ${dragging ? "dragging" : ""} ${instant ? "instant" : ""}`} style={{ width: open ? width : 0 }}>
       <div class="sidebar-inner" style={{ width }}>
         <div style={{ padding: "10px 10px 6px" }}>
           <div class="seg">

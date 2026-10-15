@@ -356,7 +356,8 @@ export function showToast(text: string, ms = 2600) {
 
 // ---------------------------------------------------------------- document lifecycle
 
-export async function openFiles(paths: string[]) {
+/** `launch`: the files Paginaut was started with, in its first window (no other window to have them open). */
+export async function openFiles(paths: string[], launch = false) {
   let last: Tab | null = null;
   for (const path of paths) {
     const existing = tabs.value.find((t) => t.path.toLowerCase() === path.toLowerCase());
@@ -366,7 +367,7 @@ export async function openFiles(paths: string[]) {
     }
     // Open in another window already: that window comes forward at it (two copies would overwrite each other's
     // saves).
-    const owner = await api.windowWith(path).catch(() => null);
+    const owner = launch ? null : await api.windowWith(path).catch(() => null);
     if (owner) {
       void api.tabFocus(owner, path).catch(() => {});
       continue;

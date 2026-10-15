@@ -428,6 +428,10 @@ export class Viewer {
 
   /** Replaces the displayed page list (after sizes load or page edits), keeping the reading position. */
   setPages(pages: PageSpec[], keepPage?: number) {
+    // The real sizes of a document whose pages are all the size of its first (what the viewer starts with): nothing
+    // to redo, and the first page's render, already on its way, carries on.
+    const same = (a: PageSpec, b: PageSpec) => a.src === b.src && a.rot === b.rot && a.w === b.w && a.h === b.h;
+    if (keepPage === undefined && pages.length === this.pages.length && pages.every((p, i) => same(p, this.pages[i]))) return;
     const st = this.viewState();
     if (keepPage !== undefined) {
       st.page = keepPage;

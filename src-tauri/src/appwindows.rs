@@ -37,11 +37,27 @@ pub struct Windows {
 }
 
 impl Windows {
-    /// "main" starts with the files Paginaut was started with.
-    pub fn new(launch: Vec<String>) -> Self {
-        let starts = HashMap::from([("main".to_owned(), WindowStart { files: launch, tab: None })]);
+    /// "main" gets the files Paginaut was started with in its page (`open_main`); what arrives while it starts
+    /// up waits here.
+    pub fn new() -> Self {
+        let starts = HashMap::from([("main".to_owned(), WindowStart::default())]);
         Windows { starts: Mutex::new(starts), reports: Mutex::default(), last_focused: Mutex::new("main".into()), next: AtomicU64::new(1) }
     }
+}
+
+/// The first window, from the config (`create: false` there). The files Paginaut was started with are put in its
+/// page before it loads, so it opens them before drawing anything: no Home screen first, and no wait for the page
+/// to ask (its first requests wait for its whole start-up script).
+pub fn open_main(app: &AppHandle, launch: &[String]) -> Result<WebviewWindow, String> {
+    let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or("no main window in the config")?;
+    let mut b = WebviewWindowBuilder::from_config(app, config).map_err(|e| e.to_string())?;
+    if !launch.is_empty() {
+        let files = serde_json::to_string(launch).map_err(|e| e.to_string())?;
+        b = b.initialization_script(format!("window.__paginautLaunch = {files};"));
+    }
+    let win = b.build().map_err(|e| e.to_string())?;
+    window_ready(&win);
+    Ok(win)
 }
 
 /// A window's number: 0 for "main", n for "w-n" (the page counts its request ids from it too, api.ts).
@@ -140,18 +156,24 @@ pub fn forward_files(app: &AppHandle, files: Vec<String>) {
         }
         return;
     }
-    if let Some(w) = last_window(app) {
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-        // A window still starting up (its page not listening yet) takes them with what it starts with.
-        let state = app.state::<Windows>();
-        let mut starts = state.starts.lock();
-        if let Some(s) = starts.get_mut(w.label()) {
+    let Some(w) = last_window(app) else {
+        // The first window is still being made (WebView2 answers other launches meanwhile): its page takes them with
+        // the files it starts with.
+        if let Some(s) = app.state::<Windows>().starts.lock().get_mut("main") {
             s.files.extend(files);
-        } else {
-            drop(starts);
-            let _ = app.emit_to(w.label(), "open-files", files);
         }
+        return;
+    };
+    let _ = w.unminimize();
+    let _ = w.set_focus();
+    // A window still starting up (its page not listening yet) takes them with what it starts with.
+    let state = app.state::<Windows>();
+    let mut starts = state.starts.lock();
+    if let Some(s) = starts.get_mut(w.label()) {
+        s.files.extend(files);
+    } else {
+        drop(starts);
+        let _ = app.emit_to(w.label(), "open-files", files);
     }
 }
 

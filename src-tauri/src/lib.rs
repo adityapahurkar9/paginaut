@@ -267,7 +267,7 @@ fn run_desktop() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { engine, started: std::time::Instant::now() })
-        .manage(appwindows::Windows::new(launch))
+        .manage(appwindows::Windows::new())
         .on_window_event(appwindows::on_window_event)
         .register_asynchronous_uri_scheme_protocol("paginaut", app::protocol)
         .invoke_handler(tauri::generate_handler![
@@ -424,6 +424,9 @@ fn run_desktop() {
             memory_level,
         ])
         .setup(move |app| {
+            // First, as WebView2 takes most of the start-up. Shown by the UI once the first frame is painted, so
+            // there's no white flash.
+            appwindows::open_main(app.handle(), &launch)?;
             // Only the one instance gets here (a second one hands its files over, or asks for a window, and quits first):
             // what earlier runs left in the temp folder can go.
             clear_temp();
@@ -445,10 +448,6 @@ fn run_desktop() {
             let o = office.clone();
             converter.set_converter(std::sync::Arc::new(move |path: &str, engine: Option<&str>| o.convert(path, engine)));
             app.manage(office);
-            // Shown by the UI once the first frame is painted, so there's no white flash.
-            if let Some(win) = app.get_webview_window("main") {
-                appwindows::window_ready(&win);
-            }
             Ok(())
         })
         .build(tauri::generate_context!())
