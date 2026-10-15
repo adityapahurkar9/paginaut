@@ -689,6 +689,27 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       first); source made public first (AGPL); 1.0 for the store release
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
+## PDF/A: archival PDFs (planned)
+PDF/A (ISO 19005) is the PDF that still opens and looks the same decades later: what courts, government portals and
+archives ask for. First PDF/A-2b (looks preserved; allows transparency, JPEG 2000 and layers), then -1b (older
+portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags, so they wait for PDF/UA (below);
+"u" (every letter maps to Unicode) comes with -2b's checks. MuPDF has no PDF/A support: checks and fixes are ours.
+- [ ] Check: whether a file claims PDF/A (XMP pdfaid) and which rules it breaks, in plain words and grouped: fonts not
+      embedded or letters without Unicode, device colours without an output intent, JavaScript or launch actions,
+      encryption, annotations and fields without appearances or the print flag, metadata where the document info and
+      XMP disagree, attachments, and for -1b transparency and LZW. Own checker over MuPDF's objects (Rust); veraPDF
+      (the reference validator, Java) only checks the checker on a test set (veraPDF's test corpus), not shipped
+- [ ] Save as PDF/A (new file, "… (PDF-A).pdf"): embed missing fonts from the system's (by name; a substitute is
+      flagged, as it changes the look), sRGB output intent (lcms), XMP metadata written from the document info with the
+      pdfaid part and level, JavaScript, encryption and forbidden actions removed (Sanitize does most of it),
+      appearances made for annotations and fields, LZW recompressed; for -1b, transparency flattened (a page
+      rendered to a picture as the last resort, said so). Checked again after saving; what still fails is listed
+- [ ] In the app: PDF/A in the Convert pane's targets; Properties (Ctrl+D) shows a file's PDF/A claim and a Check
+      button; saving changes to a PDF/A file warns that they may break it (or re-applies the fixes)
+- [ ] Office files to PDF/A: Word's and LibreOffice's own PDF/A export in Convert › Files to PDF (an option that's
+      already there in both)
+- [ ] Tests: veraPDF's corpus for the checker; the user's portal files for Save as PDF/A
+
 ## 0.9.5 (Windows, Linux): fixes from the review of 0.9.3–0.9.4
 - [x] An Office file opened from Explorer used Microsoft Office even with LibreOffice (or Built-in) chosen: its open
       raced the page telling the app the preference. Conversions with no converter named now wait for it (3 s at most;
