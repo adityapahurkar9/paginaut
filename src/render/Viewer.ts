@@ -249,6 +249,11 @@ export class Viewer {
   private destroyed = false;
   private sharpWants: Want[] = [];
   private sharpScale = 0;
+  /**
+   * A view to show once the viewer has a size: Linux's WebKitGTK lays out nothing in a window not yet shown, and a
+   * document opened at launch gets here first (fitted then, it would come out at the smallest zoom, scrolled to the top).
+   */
+  private waiting: ViewState | null = null;
   private lastSharpAt = 0;
   private zoomChangedAt = 0;
   private lastTop = 0;
@@ -504,6 +509,7 @@ export class Viewer {
   }
 
   viewState(): ViewState {
+    if (this.waiting) return { ...this.waiting };
     if (!this.pages.length) return { page: 0, frac: 0, zoom: this.zoom, fit: this.fit };
     if (this.slots && this.here >= 0 && this.fit !== "none") return { page: Math.min(this.here, this.pages.length - 1), frac: 0, zoom: this.zoom, fit: this.fit };
     const top = this.el.scrollTop;
@@ -513,6 +519,11 @@ export class Viewer {
   }
 
   restore(st: ViewState) {
+    if (!this.el.clientWidth) {
+      this.waiting = { ...st };
+      return;
+    }
+    this.waiting = null;
     if (st.fit !== "none") {
       this.fit = st.fit;
       this.zoom = this.fitZoom(st.fit, st.page);
@@ -796,6 +807,7 @@ export class Viewer {
 
   private onResize() {
     if (this.destroyed || !this.el.clientWidth) return;
+    if (this.waiting) return this.restore(this.waiting);
     const st = this.viewState();
     this.layout();
     if (this.fit !== "none") this.restore(st);
@@ -1102,6 +1114,8 @@ export class Viewer {
   }
 
   private update(immediate: boolean) {
+    // Sized now, though the resize observer may not have said so yet: the view first.
+    if (this.waiting && this.el.clientWidth) this.restore(this.waiting);
     const n = this.pages.length;
     const vh = this.el.clientHeight;
     if (!n || !vh) {
