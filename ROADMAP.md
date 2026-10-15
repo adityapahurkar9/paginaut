@@ -692,7 +692,7 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
 ## PDF/A: archival PDFs (planned)
 PDF/A (ISO 19005) is the PDF that still opens and looks the same decades later: what courts, government portals and
 archives ask for. First PDF/A-2b (looks preserved; allows transparency, JPEG 2000 and layers), then -1b (older
-portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags, so they wait for PDF/UA (below);
+portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags, so they wait for tagging (PDF/UA, not planned yet);
 "u" (every letter maps to Unicode) comes with -2b's checks. MuPDF has no PDF/A support: checks and fixes are ours.
 - [ ] Check: whether a file claims PDF/A (XMP pdfaid) and which rules it breaks, in plain words and grouped: fonts not
       embedded or letters without Unicode, device colours without an output intent, JavaScript or launch actions,
@@ -708,6 +708,8 @@ portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags,
       button; saving changes to a PDF/A file warns that they may break it (or re-applies the fixes)
 - [ ] Office files to PDF/A: Word's and LibreOffice's own PDF/A export in Convert › Files to PDF (an option that's
       already there in both)
+- [ ] Signed files: converting rewrites the file, so its signatures stop being valid; said before converting (sign the
+      PDF/A copy). Signing a PDF/A file keeps it PDF/A (the signature's appearance and the incremental save follow the rules)
 - [ ] Tests: veraPDF's corpus for the checker; the user's portal files for Save as PDF/A
 
 ## 0.9.5 (Windows, Linux): fixes from the review of 0.9.3–0.9.4
