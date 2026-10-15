@@ -689,6 +689,14 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       first); source made public first (AGPL); 1.0 for the store release
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
+## 0.9.4 (Windows, Linux): the faster start on Linux
+- [x] The viewer waits for a size before showing the view it's given (fit, page, place on it). On Linux, WebKitGTK lays out
+      nothing until the window is shown, and since 0.9.3 a launched document gets its viewer before that: it came out at the
+      smallest zoom for a moment (the sidebar marked page 2) and a saved reading position was lost (opened at page 1).
+      Tabs opened in the background (hidden, so no size either) keep their reading position the same way.
+- Linux launch on Debian 13 (Xvfb, screenshots every ~50 ms): first page sharp ~1000 ms (0.9.2) → ~845 ms, with the final
+  layout in the first frame. The 0.9.3 Linux packages have the bug above: don't hand them out.
+
 ## 0.9.3 (Windows, Linux): faster start with a file (opened from Explorer while Paginaut is closed)
 Measured on the dev PC, five cold starts each: the first page sharp ~700 ms after launch → ~490 ms. WebView2 itself
 takes ~250 ms of that and doesn't get faster with browser switches (tried: component updates, background networking off).
