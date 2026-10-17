@@ -3,7 +3,7 @@ import { BookImage, BookOpen, Combine, File, FileText, FolderOpen, Home as HomeI
 import * as A from "../actions";
 import { Logo } from "./Logo";
 import { startMerge } from "./PagesUI";
-import { forgetFile, openFiles, recent } from "../store";
+import { forgetFile, openFiles, recent, storeItem } from "../store";
 import { shelfCount } from "../shelf";
 import { ShelfPane } from "./Shelf";
 
@@ -46,11 +46,7 @@ export function Home() {
   });
   const setPage = (p: Page) => {
     setPageState(p);
-    try {
-      localStorage.setItem(PAGE_KEY, p);
-    } catch {
-      /* not kept */
-    }
+    storeItem(PAGE_KEY, p);
   };
   const pages: { id: Page; label: string; Icon: typeof FileText; n?: number }[] = [
     { id: "start", label: "Start", Icon: HomeIcon },

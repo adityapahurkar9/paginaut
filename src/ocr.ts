@@ -7,7 +7,7 @@ import { api, newId } from "./api";
 import { DOC_STEP } from "./edits";
 import { formsChanged } from "./forms";
 import * as P from "./pages";
-import { ask, baseName, settings, showToast, tabs, updateSettings, type Tab } from "./store";
+import { ask, baseName, settings, showToast, storeItem, tabs, updateSettings, type Tab } from "./store";
 
 export type OcrQuality = "fast" | "best";
 
@@ -75,11 +75,7 @@ export function offerDismissed(tab: Tab) {
 /** Stops offering recognition for this file. */
 export function dismissOffer(tab: Tab) {
   const list = [tab.path.toLowerCase(), ...dismissedList().filter((p) => p !== tab.path.toLowerCase())].slice(0, 200);
-  try {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify(list));
-  } catch {
-    /* storage unavailable: the offer comes back next time */
-  }
+  storeItem(DISMISSED_KEY, JSON.stringify(list));
   looksScanned(tab).value = false;
 }
 

@@ -21,11 +21,59 @@ export function load<T>(key: string, fallback: T): T {
 }
 
 export function save(key: string, value: unknown) {
+  storeItem(key, JSON.stringify(value));
+}
+
+// Everything kept under "paginaut." is mirrored in storage.json in the app's data folder (prefs.rs), which a
+// reinstall can't take: the WebView once started its storage over, and settings, recent files and the shelf went
+// with it. Writes go through storeItem, which stamps the storage and writes the file soon after. index.html puts
+// the file back when it's newer than the stamp.
+const STAMP = "paginaut.saved";
+
+/** Stores a raw text (null removes it) and has it mirrored. */
+export function storeItem(key: string, text: string | null) {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    if (text === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, text);
+    localStorage.setItem(STAMP, String(Date.now()));
   } catch {
-    /* storage full or unavailable: settings just won't persist */
+    /* storage full or unavailable: not persisted */
+    return;
   }
+  // Drags and scrolls store many times a second: the file takes the last.
+  window.clearTimeout(mirrorTimer);
+  mirrorTimer = window.setTimeout(writeMirror, 500);
+}
+
+let mirrorTimer = 0;
+function writeMirror() {
+  window.clearTimeout(mirrorTimer);
+  mirrorTimer = 0;
+  try {
+    const items: Record<string, string> = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith("paginaut.") && k !== STAMP) items[k] = localStorage.getItem(k) ?? "";
+    }
+    api.storageWrite(JSON.stringify({ saved: Date.now(), items })).catch(() => {
+      /* the storage still has it */
+    });
+  } catch {
+    /* no storage to mirror */
+  }
+}
+// A change in the last moment before the window closes still reaches the file.
+window.addEventListener("pagehide", () => mirrorTimer && writeMirror());
+
+// A first start (from 0.9.6 or before), or a storage newer than the file (a reload since): write the file.
+try {
+  localStorage.removeItem("paginaut.settings.saved"); // 0.9.6's stamp, for settings alone
+  const fileSaved = (window as { __paginautStorage?: { saved: number } }).__paginautStorage?.saved ?? 0;
+  const stamp = Number(localStorage.getItem(STAMP)) || 0;
+  if (!stamp) localStorage.setItem(STAMP, String(Date.now()));
+  if (!stamp || stamp > fileSaved) writeMirror();
+} catch {
+  /* no storage */
 }
 
 export interface Settings {
@@ -91,15 +139,7 @@ export interface ReflowSettings {
 
 export const REFLOW_DEFAULTS: ReflowSettings = { font: "sitka", size: 19, spacing: 1.55, margins: "normal", justify: true, paper: "auto" };
 
-// Settings are kept twice: in the WebView's storage and in settings.json in the app's data folder (prefs.rs), which
-// a reinstall can't take (the WebView once started its storage over). Each copy says when it was saved; a window
-// starts from the newer, and puts it back where it was missing or older (the first start copies the storage's
-// settings into the file).
 const SETTINGS_KEY = "paginaut.settings";
-const SAVED_KEY = "paginaut.settings.saved";
-const fileSettings = (window as { __paginautSettings?: { saved: number; settings: Partial<Settings> } }).__paginautSettings;
-const storageSaved = load(SAVED_KEY, { at: 0 }).at;
-const fromFile = fileSettings && fileSettings.saved >= storageSaved ? fileSettings : null;
 
 export const settings = signal<Settings>(
   {
@@ -109,35 +149,13 @@ export const settings = signal<Settings>(
     dsc: { reason: "I approve this document", location: "", showDate: true, lock: false, newFile: true, place: "box", cert: "" },
     ocr: { langs: ["eng"], quality: "fast" },
     officeEngine: "auto",
-    ...(fromFile ? fromFile.settings : load(SETTINGS_KEY, {} as Partial<Settings>)),
+    ...load(SETTINGS_KEY, {} as Partial<Settings>),
   },
 );
-
-let fileTimer = 0;
-function writeSettingsFile() {
-  window.clearTimeout(fileTimer);
-  fileTimer = 0;
-  api.settingsWrite(JSON.stringify({ saved: Date.now(), settings: settings.value })).catch(() => {
-    /* the storage's copy still has them */
-  });
-}
-// A change in the last moment before the window closes still reaches the file.
-window.addEventListener("pagehide", () => fileTimer && writeSettingsFile());
-
-if (!fromFile) {
-  if (Object.keys(load(SETTINGS_KEY, {})).length) writeSettingsFile();
-} else if (storageSaved < fromFile.saved) {
-  save(SETTINGS_KEY, settings.value);
-  save(SAVED_KEY, { at: fromFile.saved });
-}
 
 export function updateSettings(patch: Partial<Settings>) {
   settings.value = { ...settings.value, ...patch };
   save(SETTINGS_KEY, settings.value);
-  save(SAVED_KEY, { at: Date.now() });
-  // Sliders and drags change settings many times a second: the file takes the last.
-  window.clearTimeout(fileTimer);
-  fileTimer = window.setTimeout(writeSettingsFile, 300);
 }
 
 /** The interface is dark now (set by themes.ts, which applies the theme). */

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { FolderPlus, RefreshCw, Search, X } from "lucide-preact";
 import { coverUrl } from "../api";
+import { storeItem } from "../store";
 import { SortToggle, type SortState } from "../mobile/SortToggle";
 import { addFolder, defaultFolders, metas, openBook, removeFolder, scanIfStale, scanning, scanShelf, sections, shelf, shelfFolders, type ShelfKind, type ShelfSort, type Shelved } from "../shelf";
 
@@ -20,11 +21,7 @@ export function ShelfPane({ kind }: { kind: ShelfKind }) {
   const [find, setFind] = useState("");
   const setSort = (s: SortState<ShelfSort>) => {
     setSortState(s);
-    try {
-      localStorage.setItem(SORT_KEY, JSON.stringify(s));
-    } catch {
-      /* not kept */
-    }
+    storeItem(SORT_KEY, JSON.stringify(s));
   };
   useEffect(() => void scanIfStale(), []);
   // Read for the sections below to follow new covers and scans.

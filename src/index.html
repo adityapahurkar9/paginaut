@@ -6,6 +6,16 @@
     <title>Paginaut</title>
     <link rel="stylesheet" href="styles.css" />
     <script>
+      // The app keeps a copy of this storage in storage.json in its data folder (prefs.rs, store.ts), handed to the
+      // page before it loads. When that copy is newer (the WebView started its storage over, as on a reinstall),
+      // put it back before anything reads the storage.
+      try {
+        var kept = window.__paginautStorage;
+        if (kept && kept.saved > (Number(localStorage.getItem("paginaut.saved")) || 0)) {
+          for (var key in kept.items) localStorage.setItem(key, kept.items[key]);
+          localStorage.setItem("paginaut.saved", String(kept.saved));
+        }
+      } catch (e) {}
       // The app was called Folio up to 0.4.0: carry its saved settings, recent files,
       // reading positions and layout fixes over to the new names (once).
       try {

@@ -756,6 +756,14 @@ app's feature names).
 - [ ] Tests: untagged documents of rising difficulty (letter, report, two columns, tables, forms, a scanned book):
       add tags, then the checker; compared with Acrobat's results on the same files (installed on the user's PC)
 
+## 0.9.7 (Windows, Linux): everything the app remembers survives a reinstall
+- [x] Not just settings: everything kept in the WebView's storage under "paginaut." (recent files and reading positions,
+      the shelf, layout fixes for Read and Book modes, search options, the Home page shown, the scan offers turned
+      down) is mirrored in storage.json in the app's data folder (prefs.rs). Every write goes through store.ts
+      `storeItem`, which stamps the storage and writes the file half a second later (at once when the window closes).
+      index.html puts the file back before anything reads the storage when the file is newer than the stamp
+- [x] 0.9.6's settings.json is read as a copy of the settings until the first storage.json is written, then removed
+
 ## 0.9.6 (Windows, Linux): settings survive a reinstall
 - [x] Settings are also kept in settings.json in the app's data folder (prefs.rs). After an uninstall and reinstall the
       WebView had started its storage over, so the theme and every other choice were back to the defaults. Each copy
