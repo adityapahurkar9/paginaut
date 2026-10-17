@@ -67,6 +67,8 @@ pub mod xml;
 pub mod dsc;
 #[cfg(desktop)]
 mod shelf;
+#[cfg(desktop)]
+mod prefs;
 
 #[cfg(desktop)]
 use app::AppState;
@@ -354,6 +356,7 @@ fn run_desktop() {
             desk::signed_version,
             desk::sig_add,
             desk::sig_delete,
+            prefs::settings_write,
             desk::ocr_languages,
             desk::ocr_download,
             desk::ocr_download_stop,
