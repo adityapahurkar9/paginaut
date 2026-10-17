@@ -756,6 +756,12 @@ app's feature names).
 - [ ] Tests: untagged documents of rising difficulty (letter, report, two columns, tables, forms, a scanned book):
       add tags, then the checker; compared with Acrobat's results on the same files (installed on the user's PC)
 
+## 0.9.6 (Windows, Linux): settings survive a reinstall
+- [x] Settings are also kept in settings.json in the app's data folder (prefs.rs). After an uninstall and reinstall the
+      WebView had started its storage over, so the theme and every other choice were back to the defaults. Each copy
+      says when it was saved; a window starts from the newer and fixes the other. The first start copies the WebView's
+      settings into the file. Each window gets the file in its page before it runs (no wait at start)
+
 ## 0.9.5 (Windows, Linux): fixes from the review of 0.9.3–0.9.4
 - [x] An Office file opened from Explorer used Microsoft Office even with LibreOffice (or Built-in) chosen: its open
       raced the page telling the app the preference. Conversions with no converter named now wait for it (3 s at most;

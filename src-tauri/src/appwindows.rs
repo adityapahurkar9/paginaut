@@ -51,6 +51,9 @@ impl Windows {
 pub fn open_main(app: &AppHandle, launch: &[String]) -> Result<WebviewWindow, String> {
     let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or("no main window in the config")?;
     let mut b = WebviewWindowBuilder::from_config(app, config).map_err(|e| e.to_string())?;
+    if let Some(script) = crate::prefs::script(app) {
+        b = b.initialization_script(script);
+    }
     if !launch.is_empty() {
         let files = serde_json::to_string(launch).map_err(|e| e.to_string())?;
         b = b.initialization_script(format!("window.__paginautLaunch = {files};"));
@@ -136,6 +139,9 @@ pub fn open_window(app: &AppHandle, at: Option<PhysicalPosition<f64>>, start: Wi
         .visible(false);
     if at.is_none() && pos.is_none() {
         b = b.center();
+    }
+    if let Some(script) = crate::prefs::script(app) {
+        b = b.initialization_script(script);
     }
     let win = b.build().map_err(|e| {
         state.starts.lock().remove(&label);

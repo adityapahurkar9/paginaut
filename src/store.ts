@@ -91,6 +91,16 @@ export interface ReflowSettings {
 
 export const REFLOW_DEFAULTS: ReflowSettings = { font: "sitka", size: 19, spacing: 1.55, margins: "normal", justify: true, paper: "auto" };
 
+// Settings are kept twice: in the WebView's storage and in settings.json in the app's data folder (prefs.rs), which
+// a reinstall can't take (the WebView once started its storage over). Each copy says when it was saved; a window
+// starts from the newer, and puts it back where it was missing or older (the first start copies the storage's
+// settings into the file).
+const SETTINGS_KEY = "paginaut.settings";
+const SAVED_KEY = "paginaut.settings.saved";
+const fileSettings = (window as { __paginautSettings?: { saved: number; settings: Partial<Settings> } }).__paginautSettings;
+const storageSaved = load(SAVED_KEY, { at: 0 }).at;
+const fromFile = fileSettings && fileSettings.saved >= storageSaved ? fileSettings : null;
+
 export const settings = signal<Settings>(
   {
     theme: "system", night: false, sidebarOpen: true, sidebarWidth: 232, sidebarTab: "pages", gridSize: 190, autoSaveRotations: false,
@@ -99,13 +109,35 @@ export const settings = signal<Settings>(
     dsc: { reason: "I approve this document", location: "", showDate: true, lock: false, newFile: true, place: "box", cert: "" },
     ocr: { langs: ["eng"], quality: "fast" },
     officeEngine: "auto",
-    ...load("paginaut.settings", {} as Partial<Settings>),
+    ...(fromFile ? fromFile.settings : load(SETTINGS_KEY, {} as Partial<Settings>)),
   },
 );
 
+let fileTimer = 0;
+function writeSettingsFile() {
+  window.clearTimeout(fileTimer);
+  fileTimer = 0;
+  api.settingsWrite(JSON.stringify({ saved: Date.now(), settings: settings.value })).catch(() => {
+    /* the storage's copy still has them */
+  });
+}
+// A change in the last moment before the window closes still reaches the file.
+window.addEventListener("pagehide", () => fileTimer && writeSettingsFile());
+
+if (!fromFile) {
+  if (Object.keys(load(SETTINGS_KEY, {})).length) writeSettingsFile();
+} else if (storageSaved < fromFile.saved) {
+  save(SETTINGS_KEY, settings.value);
+  save(SAVED_KEY, { at: fromFile.saved });
+}
+
 export function updateSettings(patch: Partial<Settings>) {
   settings.value = { ...settings.value, ...patch };
-  save("paginaut.settings", settings.value);
+  save(SETTINGS_KEY, settings.value);
+  save(SAVED_KEY, { at: Date.now() });
+  // Sliders and drags change settings many times a second: the file takes the last.
+  window.clearTimeout(fileTimer);
+  fileTimer = window.setTimeout(writeSettingsFile, 300);
 }
 
 /** The interface is dark now (set by themes.ts, which applies the theme). */
@@ -127,7 +159,7 @@ const OWN_LAYOUT = ["sidebarOpen", "sidebarWidth", "sidebarTab", "ribbon"] as co
 window.addEventListener("storage", (e) => {
   if (!e.newValue) return;
   try {
-    if (e.key === "paginaut.settings") {
+    if (e.key === SETTINGS_KEY) {
       const theirs = JSON.parse(e.newValue) as Settings;
       const mine = settings.value;
       const keep = Object.fromEntries(OWN_LAYOUT.map((k) => [k, mine[k]]));

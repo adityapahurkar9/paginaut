@@ -585,6 +585,8 @@ export const api = {
     return invoke<number | null>("print_doc", { doc, name, pages, current, onEvent: ch });
   },
   printStop: () => invoke<void>("print_stop"),
+  /** Writes settings.json in the app's data folder (`{"saved", "settings"}`, see store.ts). */
+  settingsWrite: (json: string) => invoke<void>("settings_write", { json }),
   piperVoices: () => invoke<import("./speech").PiperVoice[]>("piper_voices"),
   piperDownload: (id: string, onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
     const ch = new Channel<{ kind: "progress"; done: number; total: number }>();
