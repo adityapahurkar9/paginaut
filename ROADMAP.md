@@ -756,6 +756,10 @@ app's feature names).
 - [ ] Tests: untagged documents of rising difficulty (letter, report, two columns, tables, forms, a scanned book):
       add tags, then the checker; compared with Acrobat's results on the same files (installed on the user's PC)
 
+## 0.9.8 (Windows, Linux), not built yet
+- [x] Linux: storage.json is the user's alone (0600). The temp file is made new with that mode, and one written by
+      0.9.7 (readable by other accounts) is fixed when a window opens. It lists the files you've opened
+
 ## 0.9.7 (Windows, Linux): everything the app remembers survives a reinstall
 - [x] Not just settings: everything kept in the WebView's storage under "paginaut." (recent files and reading positions,
       the shelf, layout fixes for Read and Book modes, search options, the Home page shown, the scan offers turned
