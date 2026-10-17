@@ -3,7 +3,7 @@
 // updated in place — never rebuilt as one big list on each update.
 import { signal } from "@preact/signals";
 import { api, newId } from "./api";
-import type { Tab } from "./store";
+import { storeItem, type Tab } from "./store";
 import { sourceCount } from "./edits";
 
 /** Search options shared by the find bar and the command palette (remembered). */
@@ -23,11 +23,7 @@ function loadOpts(): SearchOpts {
 export const searchOpts = signal<SearchOpts>(loadOpts());
 export function setSearchOpts(patch: Partial<SearchOpts>) {
   searchOpts.value = { ...searchOpts.value, ...patch };
-  try {
-    localStorage.setItem("paginaut.searchOpts", JSON.stringify(searchOpts.value));
-  } catch {
-    /* not persisted */
-  }
+  storeItem("paginaut.searchOpts", JSON.stringify(searchOpts.value));
 }
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -2,7 +2,7 @@
 import { signal, type Signal } from "@preact/signals";
 import type { ItemKind, LayoutOverrides, PageOverride } from "./model";
 import type { Box } from "./model";
-import type { Tab } from "../store";
+import { storeItem, type Tab } from "../store";
 
 const storageKey = (path: string) => `paginaut.layout.${path.toLowerCase()}`;
 const bySignal = new WeakMap<Tab, { path: string; ov: Signal<LayoutOverrides> }>();
@@ -24,13 +24,8 @@ export function overridesOf(tab: Tab): Signal<LayoutOverrides> {
 
 function store(tab: Tab, next: LayoutOverrides) {
   overridesOf(tab).value = next;
-  try {
-    const empty = !next.columns && !Object.keys(next.pages ?? {}).length;
-    if (empty) localStorage.removeItem(storageKey(tab.path));
-    else localStorage.setItem(storageKey(tab.path), JSON.stringify(next));
-  } catch {
-    /* not persisted */
-  }
+  const empty = !next.columns && !Object.keys(next.pages ?? {}).length;
+  storeItem(storageKey(tab.path), empty ? null : JSON.stringify(next));
 }
 
 /** Changes one page's corrections; an empty correction is removed. */
