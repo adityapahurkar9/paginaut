@@ -59,7 +59,15 @@ export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
         void api.close(info.docId);
         return true;
       }
-      const unlocked = await api.unlock(info.docId, pw).catch(() => null);
+      let unlocked: DocInfo | null;
+      try {
+        unlocked = await api.unlock(info.docId, pw);
+      } catch (e) {
+        // Not a wrong password: the file couldn't be read (the reading engine stopped, say).
+        void api.close(info.docId);
+        say(`Couldn't open ${name}: ${errorText(e)}`);
+        return false;
+      }
       if (unlocked) {
         info = unlocked;
         break;

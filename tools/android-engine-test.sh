@@ -22,6 +22,11 @@ js "window.T = {
   I: window.__TAURI_INTERNALS__.invoke,
   async open(u) { const p = await this.I('reopen', { uri: u }); return (await this.I('open_document', { path: p.path })).docId; },
   async draw(d, page) { const r = await fetch('http://paginaut.localhost/render?d=' + d + '&p=' + page + '&s=0.5&r=0&e=1&id=' + (1e6 + page) + '&q=0'); return r.status; },
+  // Whether a page draws anything (a locked file read with the wrong keys draws blank, still with 200).
+  async inked(d, page) { const r = await fetch('http://paginaut.localhost/render?d=' + d + '&p=' + page + '&s=0.5&r=0&e=1&id=' + (2e6 + page) + '&q=0');
+    const b = new Uint8Array(await r.arrayBuffer()); let n = 0;
+    for (let k = 8; k < b.length; k += 4) if (b[k] < 250 || b[k + 1] < 250 || b[k + 2] < 250) n++;
+    return r.status === 200 && n > 0; },
   search(d, needle, sid) { return new Promise((done) => {
     let hits = 0, pages = new Set();
     const id = window.__TAURI_INTERNALS__.transformCallback((m) => { const e = m && m.message !== undefined ? m.message : m;
@@ -85,9 +90,12 @@ check "a new engine starts with none" "$(js "T.I('engine_crash_test').catch(() =
 
 # 6. A locked document stays unlocked across a restart.
 l=$(js "T.open('$(uri locked.pdf)')")
-check "unlock" "$(js "T.I('unlock_document', { doc: $l, password: 'test' }).then(i => !!i)")" true
+check "unlock" "$(js "T.I('unlock_document', { doc: $l, password: 'test' }).then(i => !!i && !i.needsPassword)")" true
+check "unlocked document draws" "$(js "T.inked($l, 0)")" true
+check "wrong password after unlocking" "$(js "T.I('unlock_document', { doc: $l, password: 'nope' }).then(i => i === null)")" true
+check "still draws after a wrong password" "$(js "T.inked($l, 0)")" true
 kill_engine
-check "locked document after restart" "$(js "T.draw($l, 0)")" 200
+check "locked document after restart" "$(js "T.inked($l, 0)")" true
 js "T.I('close_document', { doc: $l })" >/dev/null
 
 # 7. Files written through handles: a cover, a print PDF, a repaired e-book.

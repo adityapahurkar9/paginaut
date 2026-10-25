@@ -72,6 +72,10 @@ fn main() {
     // Asking MuPDF whether it needs a password after unlocking used to replace its keys: every page drew blank.
     let d = diff(&thumb_of(&engine, info.doc_id), &thumb(&engine, &format!("{dir}/text-1000.pdf")));
     check("unlocked pages draw", !info.needs_password && d < 1.0, format!("differs by {d:.1}"));
+    // A wrong password tried on it afterwards is refused, and its pages still draw.
+    let refused = engine.unlock(info.doc_id, "nope").map(|r| r.is_none()).unwrap_or(false);
+    let d = diff(&thumb_of(&engine, info.doc_id), &thumb(&engine, &format!("{dir}/text-1000.pdf")));
+    check("wrong password after unlocking", refused && d < 1.0, format!("refused={refused}, differs by {d:.1}"));
     let s = engine.security(info.doc_id).unwrap();
     check("open password isn't the owner's", !s.owner && s.perms & COPY == 0, String::new());
     let (order, rot) = all(info.page_count);
