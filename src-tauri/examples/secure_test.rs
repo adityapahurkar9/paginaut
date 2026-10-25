@@ -13,14 +13,19 @@ fn size(p: &str) -> u64 {
 /// Page 1 of `path` rendered small (RGBA), to compare how pages look.
 fn thumb(engine: &Engine, path: &str) -> Vec<u8> {
     let info = engine.open(path).unwrap();
-    let d = engine.doc(info.doc_id).unwrap();
+    let buf = thumb_of(engine, info.doc_id);
+    engine.close(info.doc_id);
+    buf
+}
+
+/// Page 1 of an open document, as `thumb`.
+fn thumb_of(engine: &Engine, doc: u64) -> Vec<u8> {
+    let d = engine.doc(doc).unwrap();
     let list = d.list(0, 0).unwrap();
     let b = d.bounds(0).unwrap();
     let (w, h) = render_size(&b, 0.25, 0);
     let mut buf = vec![0u8; (w * h * 4) as usize];
     list.render(&b, 0.25, 0, [0, 0, w as i32, h as i32], &mut buf, None).unwrap();
-    drop(list);
-    engine.close(info.doc_id);
     buf
 }
 
@@ -64,6 +69,9 @@ fn main() {
     check("needs a password", info.needs_password, String::new());
     check("wrong password refused", engine.unlock(info.doc_id, "nope").map(|r| r.is_none()).unwrap_or(false), String::new());
     let info = engine.unlock(info.doc_id, "open1").unwrap().expect("unlocks");
+    // Asking MuPDF whether it needs a password after unlocking used to replace its keys: every page drew blank.
+    let d = diff(&thumb_of(&engine, info.doc_id), &thumb(&engine, &format!("{dir}/text-1000.pdf")));
+    check("unlocked pages draw", !info.needs_password && d < 1.0, format!("differs by {d:.1}"));
     let s = engine.security(info.doc_id).unwrap();
     check("open password isn't the owner's", !s.owner && s.perms & COPY == 0, String::new());
     let (order, rot) = all(info.page_count);

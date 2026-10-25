@@ -12,6 +12,7 @@
 //! Every handle remembers its kind and always uses the matching context.
 
 use super::ffi::*;
+use std::cell::Cell;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 
@@ -282,7 +283,8 @@ pub struct PageSizeOptions {
     pub color: [f32; 3],
 }
 
-pub struct Document(*mut fo_doc, Kind);
+/// The third field: a password opened it (see `needs_password`).
+pub struct Document(*mut fo_doc, Kind, Cell<bool>);
 unsafe impl Send for Document {}
 
 impl Document {
@@ -303,7 +305,7 @@ impl Document {
             if doc.is_null() {
                 Err(last_error(c))
             } else {
-                Ok(Document(doc, Kind::Shared))
+                Ok(Document(doc, Kind::Shared, Cell::new(false)))
             }
         })
     }
@@ -362,7 +364,7 @@ impl Document {
             if d.is_null() {
                 Err(last_error(c))
             } else {
-                Ok(Document(d, Kind::Shared))
+                Ok(Document(d, Kind::Shared, Cell::new(false)))
             }
         })
     }
@@ -374,18 +376,22 @@ impl Document {
             if d.is_null() {
                 Err(last_error(c))
             } else {
-                Ok(Document(d, kind))
+                Ok(Document(d, kind, Cell::new(false)))
             }
         })
     }
 
     pub fn needs_password(&self) -> bool {
-        with_kind(self.1, |c| unsafe { fo_needs_password(c, self.0) } != 0)
+        // MuPDF answers by trying the empty password, which replaces the keys a real one gave: asked after
+        // unlocking, every page would come out blank.
+        !self.2.get() && with_kind(self.1, |c| unsafe { fo_needs_password(c, self.0) } != 0)
     }
 
     pub fn authenticate(&self, password: &str) -> bool {
         let pw = CString::new(password).unwrap_or_default();
-        with_kind(self.1, |c| unsafe { fo_authenticate(c, self.0, pw.as_ptr()) } > 0)
+        let ok = with_kind(self.1, |c| unsafe { fo_authenticate(c, self.0, pw.as_ptr()) } > 0);
+        self.2.set(self.2.get() || ok);
+        ok
     }
 
     pub fn is_reflowable(&self) -> bool {

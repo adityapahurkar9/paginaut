@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "build": {
     "frontendDist": "../dist-mobile",
     "beforeBuildCommand": "node build.mjs --mobile --prod",
