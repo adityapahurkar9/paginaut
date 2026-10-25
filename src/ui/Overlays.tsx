@@ -463,17 +463,24 @@ function PaletteInner() {
 export function PasswordDialog({ tab }: { tab: Tab }) {
   const [pw, setPw] = useState("");
   const [wrong, setWrong] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => input.current?.focus(), []);
   const submit = async () => {
     setBusy(true);
-    const ok = await unlockTab(tab, pw);
-    setBusy(false);
-    if (!ok) {
-      setWrong(true);
-      input.current?.select();
+    let ok = false;
+    let error: string | null = null;
+    try {
+      ok = await unlockTab(tab, pw);
+    } catch (e) {
+      // Not a wrong password: the file couldn't be read.
+      error = String(e);
     }
+    setBusy(false);
+    setFailed(error);
+    setWrong(!ok && !error);
+    if (!ok) input.current?.select();
   };
   return (
     <div class="overlay" style={{ position: "absolute" }}>
@@ -490,6 +497,7 @@ export function PasswordDialog({ tab }: { tab: Tab }) {
         <span style={{ color: "var(--tx2)" }}>{baseName(tab.path)} is protected. Enter its password to open it.</span>
         <input ref={input} class="inp" type="password" value={pw} onInput={(e) => setPw((e.currentTarget as HTMLInputElement).value)} aria-label="Password" />
         {wrong && <span class="error-text">That password didn't work. Try again.</span>}
+        {failed && <span class="error-text">Couldn't open it: {failed}</span>}
         <div class="row">
           <button type="button" class="btn" onClick={() => A.closeActive()}>
             Cancel

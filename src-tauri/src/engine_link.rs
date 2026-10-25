@@ -913,7 +913,12 @@ impl Remote {
         let info = self.open_on(link, gen, &path)?;
         let server = info["docId"].as_u64().ok_or("The engine didn't open it.")?;
         if let Some(pw) = password {
-            self.waiting("unlock", gen, || link.call("unlock", json!({ "doc": server, "password": pw }), &[], &[]))?;
+            let unlocked = self.waiting("unlock", gen, || link.call("unlock", json!({ "doc": server, "password": pw }), &[], &[]))?;
+            // The password that opened it no longer does (the file changed meanwhile): its pages can't be read.
+            if unlocked.head["v"].is_null() {
+                let _ = self.waiting("close", gen, || link.call("close", json!({ "doc": server }), &[], &[]));
+                return Err("This file has changed: its password no longer opens it. Open it again.".into());
+            }
         }
         if let Some(o) = self.docs.lock().get_mut(&doc) {
             o.gen = gen;

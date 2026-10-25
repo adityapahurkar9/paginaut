@@ -452,10 +452,11 @@ async function loadTab(tab: Tab) {
   }
 }
 
+/** False when the password is wrong; throws when the file couldn't be read with it. */
 export async function unlockTab(tab: Tab, password: string): Promise<boolean> {
   const info = tab.info.value;
   if (!info) return false;
-  const res = await api.unlock(info.docId, password).catch(() => null);
+  const res = await api.unlock(info.docId, password);
   tab.passwordTries++;
   if (!res) return false;
   ready(tab, res);
