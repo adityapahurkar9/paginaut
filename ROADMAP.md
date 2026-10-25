@@ -756,7 +756,10 @@ app's feature names).
 - [ ] Tests: untagged documents of rising difficulty (letter, report, two columns, tables, forms, a scanned book):
       add tags, then the checker; compared with Acrobat's results on the same files (installed on the user's PC)
 
-## 0.9.8 (Windows, Linux), not built yet
+## 0.9.8 (Windows, Linux): password-protected PDFs show their pages
+- [x] A PDF opened with its password no longer shows blank pages. MuPDF's needs-password check tries the empty
+      password, which replaces the keys the real one unlocked, and the engine asked it again right after unlocking.
+      Documents now remember that a password opened them (mupdf.rs). Same fix as Android 0.6.4
 - [x] Linux: storage.json is the user's alone (0600). The temp file is made new with that mode, and one written by
       0.9.7 (readable by other accounts) is fixed when a window opens. It lists the files you've opened
 
