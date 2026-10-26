@@ -254,7 +254,7 @@ export interface PdfaReport {
 export interface PdfaSaved {
   path: string;
   done: string[];
-  /** Fonts not on this computer and what was put in instead. */
+  /** Fonts that couldn't be put in as they are (not on this computer, or their licence forbids it), and what was instead. */
   substitutes: string[];
   left: PdfaReport;
 }
