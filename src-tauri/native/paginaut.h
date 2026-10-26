@@ -308,6 +308,12 @@ int fo_zip_list(fo_ctx *c, const char *path, unsigned char **data, size_t *len);
 /* A PDF at `out` drawn from a pdf2htmlEX EPUB's pages as `script` describes them (pdfhtml.rs). */
 int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, const char *out);
 
+/* PDF/A (parts 2 and 3, level b). Check: JSON of what's claimed and found (engine/pdfa.rs). Fix: makes the
+ * document conform as far as it can (fonts: lines "num\tpath\tbase14" to embed, no path: MuPDF's copy of that
+ * base 14 font; now: "D:...\tISO"); JSON of what was done. The caller saves it unencrypted. */
+char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part);
+char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char *now);
+
 void fo_free(fo_ctx *c, void *p);
 
 #endif

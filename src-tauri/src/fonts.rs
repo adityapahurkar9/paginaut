@@ -79,6 +79,124 @@ fn reg_values(root: windows::Win32::System::Registry::HKEY, key: &str) -> Vec<St
     out
 }
 
+/// The installed TrueType file of the font a PDF names ("Arial-BoldMT", "TimesNewRomanPS-ItalicMT", "Calibri,Bold"),
+/// in that style; `exact` false when only a stand-in was found (Linux: fontconfig's choice of another family).
+pub struct Found {
+    pub path: PathBuf,
+    pub family: String,
+    pub exact: bool,
+}
+
+/// "TimesNewRomanPS-BoldItalicMT" → ("timesnewroman", "bolditalic"); styles from `bold`/`italic` when the name has none.
+fn pdf_font_key(name: &str, bold: bool, italic: bool) -> (String, String) {
+    let name = match name.split_once('+') {
+        Some((tag, rest)) if tag.len() == 6 => rest,
+        _ => name,
+    };
+    let (family, style) = name.split_once([',', '-']).unwrap_or((name, ""));
+    let norm = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+    let trim = |mut s: String| {
+        for suffix in ["psmt", "mt", "ps"] {
+            if s.len() > suffix.len() + 2 && s.ends_with(suffix) {
+                s.truncate(s.len() - suffix.len());
+                break;
+            }
+        }
+        s
+    };
+    let family = trim(norm(family));
+    let mut style = trim(norm(style)).replace("oblique", "italic");
+    if style.is_empty() || style == "regular" || style == "roman" {
+        style = match (bold, italic) {
+            (true, true) => "bolditalic",
+            (true, false) => "bold",
+            (false, true) => "italic",
+            _ => "",
+        }
+        .into();
+    }
+    (family, style)
+}
+
+fn is_truetype(p: &Path) -> bool {
+    let mut head = [0u8; 4];
+    std::fs::File::open(p).and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head)).is_ok() && (head == [0, 1, 0, 0] || &head == b"true")
+}
+
+#[cfg(windows)]
+pub fn find(name: &str, bold: bool, italic: bool) -> Option<Found> {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    let (family, style) = pdf_font_key(name, bold, italic);
+    let fonts_dir = PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into())).join("Fonts");
+    let wanted: Vec<String> = if style.is_empty() { vec![family.clone(), format!("{family}regular")] } else { vec![format!("{family}{style}")] };
+    for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        for (value, data) in reg_pairs(root, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts") {
+            let full = value.split(" (").next().unwrap_or(&value);
+            // One file can hold several faces ("Cambria & Cambria Math"): collections aren't PDF fonts anyway.
+            let key: String = full.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+            if !wanted.contains(&key) {
+                continue;
+            }
+            let path = if data.contains(['\\', '/']) { PathBuf::from(&data) } else { fonts_dir.join(&data) };
+            if is_truetype(&path) {
+                return Some(Found { path, family: full.to_string(), exact: true });
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+pub fn find(name: &str, bold: bool, italic: bool) -> Option<Found> {
+    let (family, style) = pdf_font_key(name, bold, italic);
+    // fontconfig wants the family with its spaces: "TimesNewRoman" → "Times New Roman".
+    let raw = name.split_once('+').filter(|(t, _)| t.len() == 6).map_or(name, |(_, r)| r);
+    let raw = raw.split([',', '-']).next().unwrap_or(raw).trim_end_matches("PSMT").trim_end_matches("MT").trim_end_matches("PS");
+    let mut spaced = String::new();
+    for (i, ch) in raw.chars().enumerate() {
+        if i > 0 && ch.is_ascii_uppercase() && !raw[..i].ends_with(|c: char| c.is_ascii_uppercase() || c == ' ') {
+            spaced.push(' ');
+        }
+        spaced.push(ch);
+    }
+    let pattern = format!("{spaced}:style={}", match style.as_str() { "bold" => "Bold", "italic" => "Italic", "bolditalic" => "Bold Italic", _ => "Regular" });
+    let out = std::process::Command::new("fc-match").args(["-f", "%{file}\n%{family}\n", &pattern]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines();
+    let path = PathBuf::from(lines.next()?);
+    let got = lines.next()?.split(',').next()?.to_string();
+    let norm = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+    is_truetype(&path).then(|| Found { exact: norm(&got) == family, path, family: got })
+}
+
+#[cfg(windows)]
+fn reg_pairs(root: windows::Win32::System::Registry::HKEY, key: &str) -> Vec<(String, String)> {
+    use windows::core::{HSTRING, PWSTR};
+    use windows::Win32::System::Registry::{RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, KEY_READ};
+    let mut out = Vec::new();
+    let mut h = HKEY::default();
+    unsafe {
+        if RegOpenKeyExW(root, &HSTRING::from(key), None, KEY_READ, &mut h).is_err() {
+            return out;
+        }
+        for i in 0.. {
+            let mut name = [0u16; 512];
+            let mut len = name.len() as u32;
+            let mut data = [0u16; 1024];
+            let mut size = (data.len() * 2) as u32;
+            let mut kind = 0u32;
+            if RegEnumValueW(h, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, Some(&mut kind as *mut u32), Some(data.as_mut_ptr().cast()), Some(&mut size as *mut u32)).is_err() {
+                break;
+            }
+            let chars = (size as usize / 2).min(data.len());
+            let value = String::from_utf16_lossy(&data[..chars]).trim_end_matches('\0').to_string();
+            out.push((String::from_utf16_lossy(&name[..len as usize]), value));
+        }
+        let _ = RegCloseKey(h);
+    }
+    out
+}
+
 fn is_font(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()).is_some_and(|e| EXTS.contains(&e.to_ascii_lowercase().as_str()))
 }

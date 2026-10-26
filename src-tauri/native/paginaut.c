@@ -2273,6 +2273,7 @@ int fo_pdf_save(fo_ctx *c, fo_doc *d, const char *path, int incremental)
 {
 	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
 	pdf_write_options opts = pdf_default_write_options;
+	int sections = -1;
 	/* Compress streams that aren't yet (pictures and appearances we added).
 	 * Streams that already are, such as scans, are copied as they are. */
 	opts.do_compress = 1;
@@ -2286,7 +2287,9 @@ int fo_pdf_save(fo_ctx *c, fo_doc *d, const char *path, int incremental)
 		opts.do_incremental = 1;
 	else if (incremental == 2)
 	{
-		/* A plain copy: no clean-up, so the document in memory is left as it is. */
+		/* A plain copy: no clean-up, so the document in memory is left as it is. MuPDF marks what it writes as
+		 * saved; the changes are still the document's own (unsaved), so that's put back below. */
+		sections = pdf->num_incremental_sections;
 	}
 	else
 	{
@@ -2325,6 +2328,8 @@ int fo_pdf_save(fo_ctx *c, fo_doc *d, const char *path, int incremental)
 		FAIL();
 		return -1;
 	}
+	if (sections >= 0)
+		pdf->num_incremental_sections = sections;
 	return 0;
 }
 
@@ -5458,7 +5463,8 @@ char *fo_pdf_sanitize(fo_ctx *c, fo_doc *d, int what)
 			pdf_obj *tree = pdf_load_name_tree(CTX, pdf, PDF_NAME(EmbeddedFiles));
 			files += pdf_dict_len(CTX, tree);
 			pdf_drop_obj(CTX, tree);
-			pdf_dict_del(CTX, names, PDF_NAME(EmbeddedFiles));
+			if (pdf_is_dict(CTX, names))
+				pdf_dict_del(CTX, names, PDF_NAME(EmbeddedFiles));
 			if (pdf_dict_get(CTX, root, PDF_NAME(AF)))
 				pdf_dict_del(CTX, root, PDF_NAME(AF));
 		}
@@ -6393,7 +6399,8 @@ static void write_embedded_files(fz_context *ctx, pdf_document *doc, pdf_obj *tr
 	int n = pdf_dict_len(ctx, tree);
 	if (!n)
 	{
-		pdf_dict_del(ctx, names, PDF_NAME(EmbeddedFiles));
+		if (pdf_is_dict(ctx, names))
+			pdf_dict_del(ctx, names, PDF_NAME(EmbeddedFiles));
 		return;
 	}
 	if (!names)
@@ -6432,6 +6439,9 @@ int fo_pdf_attachment_add(fo_ctx *c, fo_doc *d, const char *name, const char *mi
 		buf = fz_new_buffer_from_copied_data(CTX, data, len);
 		fs = pdf_add_embedded_file(CTX, pdf, name, mime && mime[0] ? mime : NULL, buf, modified, modified, 1);
 		tree = pdf_load_name_tree(CTX, pdf, PDF_NAME(EmbeddedFiles));
+		/* None yet: MuPDF gives no tree at all. */
+		if (!tree)
+			tree = pdf_new_dict(CTX, pdf, 1);
 		/* A name already used gets a number, as Explorer does. */
 		fz_strlcpy(key, name, sizeof key);
 		while (pdf_dict_gets(CTX, tree, key))
@@ -9123,4 +9133,1670 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 		return -1;
 	}
 	return 0;
+}
+
+/* ---------------------------------------------------------------- PDF/A
+ *
+ * PDF/A (ISO 19005) parts 2 and 3, level b: the file looks the same wherever and whenever it's opened. MuPDF has
+ * no PDF/A support, so these are our own. fo_pdfa_check looks at what a reader reaches from the catalog (actions,
+ * LZW data, pictures, transfer functions...), runs every page's and appearance's content through a processor that
+ * notes the fonts and device colours really used, and looks at the pages, annotations and attachments.
+ * fo_pdfa_fix makes a document (a copy opened for it) conform as far as it can; the caller saves it unencrypted
+ * and checks the result again. */
+
+#define PA_GRAY 1
+#define PA_RGB 2
+#define PA_CMYK 4
+
+/* Deletes a key from a dictionary that may not be there (MuPDF throws for those). */
+static void pa_del(fz_context *ctx, pdf_obj *dict, pdf_obj *key)
+{
+	if (pdf_is_dict(ctx, dict))
+		pdf_dict_del(ctx, dict, key);
+}
+
+/* Pages (0-based, rising) where something was found. */
+typedef struct
+{
+	int *v;
+	int n, cap;
+} pa_list;
+
+static void pa_add(fz_context *ctx, pa_list *l, int x)
+{
+	if (l->n && l->v[l->n - 1] >= x)
+	{
+		for (int i = l->n - 1; i >= 0 && l->v[i] >= x; i--)
+			if (l->v[i] == x)
+				return;
+	}
+	if (l->n == l->cap)
+	{
+		int cap = l->cap ? l->cap * 2 : 16;
+		l->v = fz_realloc_array(ctx, l->v, cap, int);
+		l->cap = cap;
+	}
+	l->v[l->n++] = x;
+}
+
+typedef struct
+{
+	int part;
+	int fix;
+	int oi;          /* components of the PDF/A output intent's profile; 0 none */
+	int bad_oi;      /* PDF/A output intents that differ, or one without a profile */
+	int encrypted, version, xfa, need_ap;
+	int scripts, actions, lzw, lzw_left, external, postscript, reference, images, transfer, transparency;
+	int attachments, layers;
+	char action_names[160];
+	pa_list gray, rgb, cmyk, font_pages, annot_types, annot_flags, annot_ap;
+	pdf_obj *fonts;  /* fonts used and not embedded */
+	pdf_obj *owners; /* [where mask kind]: where device colour is used uncovered (kind 1 resources, 0 their owner) */
+} pa_found;
+
+static void pa_found_drop(fz_context *ctx, pa_found *f)
+{
+	fz_free(ctx, f->gray.v);
+	fz_free(ctx, f->rgb.v);
+	fz_free(ctx, f->cmyk.v);
+	fz_free(ctx, f->font_pages.v);
+	fz_free(ctx, f->annot_types.v);
+	fz_free(ctx, f->annot_flags.v);
+	fz_free(ctx, f->annot_ap.v);
+	pdf_drop_obj(ctx, f->fonts);
+	pdf_drop_obj(ctx, f->owners);
+}
+
+static void pa_note_action(pa_found *f, const char *name)
+{
+	size_t n = strlen(f->action_names);
+	if (strstr(f->action_names, name) || n + strlen(name) + 3 >= sizeof f->action_names)
+		return;
+	if (n)
+		strcat(f->action_names, ", ");
+	strcat(f->action_names, name);
+}
+
+/* Which device colour spaces (PA_*) a colour space ends in: through Indexed bases, Separation and DeviceN
+ * alternates, and uncoloured patterns' underlying spaces. */
+static int pa_family(fz_context *ctx, pdf_obj *cs, int depth)
+{
+	pdf_obj *first;
+	if (depth > 8 || !cs)
+		return 0;
+	if (pdf_is_name(ctx, cs))
+	{
+		const char *n = pdf_to_name(ctx, cs);
+		if (!strcmp(n, "DeviceGray") || !strcmp(n, "G"))
+			return PA_GRAY;
+		if (!strcmp(n, "DeviceRGB") || !strcmp(n, "RGB"))
+			return PA_RGB;
+		if (!strcmp(n, "DeviceCMYK") || !strcmp(n, "CMYK"))
+			return PA_CMYK;
+		return 0;
+	}
+	if (!pdf_is_array(ctx, cs))
+		return 0;
+	first = pdf_array_get(ctx, cs, 0);
+	if (pdf_name_eq(ctx, first, PDF_NAME(Indexed)) || pdf_name_eq(ctx, first, PDF_NAME(I)) || pdf_name_eq(ctx, first, PDF_NAME(Pattern)))
+		return pa_family(ctx, pdf_array_get(ctx, cs, 1), depth + 1);
+	if (pdf_name_eq(ctx, first, PDF_NAME(Separation)) || pdf_name_eq(ctx, first, PDF_NAME(DeviceN)))
+		return pa_family(ctx, pdf_array_get(ctx, cs, 2), depth + 1);
+	return 0;
+}
+
+static int pa_font_embedded(fz_context *ctx, pdf_obj *font)
+{
+	pdf_obj *desc;
+	if (pdf_name_eq(ctx, pdf_dict_get(ctx, font, PDF_NAME(Subtype)), PDF_NAME(Type3)))
+		return 1;
+	if (pdf_name_eq(ctx, pdf_dict_get(ctx, font, PDF_NAME(Subtype)), PDF_NAME(Type0)))
+		font = pdf_array_get(ctx, pdf_dict_get(ctx, font, PDF_NAME(DescendantFonts)), 0);
+	desc = pdf_dict_get(ctx, font, PDF_NAME(FontDescriptor));
+	return pdf_dict_get(ctx, desc, PDF_NAME(FontFile)) || pdf_dict_get(ctx, desc, PDF_NAME(FontFile2)) || pdf_dict_get(ctx, desc, PDF_NAME(FontFile3));
+}
+
+/* The content processor: fonts and device colours as content uses them. */
+typedef struct
+{
+	pdf_processor super;
+	pdf_document *doc;
+	pa_found *f;
+	int page;
+	pdf_obj *owner; /* the page, form, pattern or appearance whose content is being read */
+} pa_proc;
+
+static void pa_colour(fz_context *ctx, pa_proc *p, int fam)
+{
+	pa_found *f = p->f;
+	pdf_resource_stack *rs = p->super.rstack;
+	pdf_obj *where, *entry;
+	int missing = 0, kind, n;
+	if (!fam)
+		return;
+	if ((fam & PA_GRAY) && !f->oi && !pdf_lookup_resource(ctx, rs, PDF_NAME(ColorSpace), "DefaultGray"))
+		missing |= PA_GRAY;
+	if ((fam & PA_RGB) && f->oi != 3 && !pdf_lookup_resource(ctx, rs, PDF_NAME(ColorSpace), "DefaultRGB"))
+		missing |= PA_RGB;
+	if ((fam & PA_CMYK) && f->oi != 4 && !pdf_lookup_resource(ctx, rs, PDF_NAME(ColorSpace), "DefaultCMYK"))
+		missing |= PA_CMYK;
+	if (!missing)
+		return;
+	if (missing & PA_GRAY)
+		pa_add(ctx, &f->gray, p->page);
+	if (missing & PA_RGB)
+		pa_add(ctx, &f->rgb, p->page);
+	if (missing & PA_CMYK)
+		pa_add(ctx, &f->cmyk, p->page);
+	/* Where a default colour space would cover it: the resources in use, or (none) their owner. */
+	where = rs && rs->resources ? rs->resources : p->owner;
+	kind = rs && rs->resources ? 1 : 0;
+	if (!where)
+		return;
+	n = pdf_array_len(ctx, f->owners);
+	for (int i = 0; i < n; i++)
+	{
+		entry = pdf_array_get(ctx, f->owners, i);
+		if (pdf_resolve_indirect(ctx, pdf_array_get(ctx, entry, 0)) == pdf_resolve_indirect(ctx, where))
+		{
+			pdf_array_put_int(ctx, entry, 1, pdf_array_get_int(ctx, entry, 1) | missing);
+			return;
+		}
+	}
+	entry = pdf_array_push_array(ctx, f->owners, 3);
+	pdf_array_push(ctx, entry, where);
+	pdf_array_push_int(ctx, entry, missing);
+	pdf_array_push_int(ctx, entry, kind);
+}
+
+static int pa_named(fz_context *ctx, pa_proc *p, const char *name)
+{
+	if (!name)
+		return 0;
+	if (!strcmp(name, "DeviceGray"))
+		return PA_GRAY;
+	if (!strcmp(name, "DeviceRGB"))
+		return PA_RGB;
+	if (!strcmp(name, "DeviceCMYK"))
+		return PA_CMYK;
+	return pa_family(ctx, pdf_lookup_resource(ctx, p->super.rstack, PDF_NAME(ColorSpace), name), 0);
+}
+
+static void pa_contents(fz_context *ctx, pa_proc *p, pdf_obj *owner, pdf_obj *res, pdf_obj *stm)
+{
+	pdf_obj *saved = p->owner;
+	if (pdf_mark_obj(ctx, owner))
+		return;
+	fz_try(ctx)
+	{
+		p->owner = owner;
+		if (!res && p->super.rstack)
+			res = p->super.rstack->resources;
+		pdf_process_contents(ctx, &p->super, p->doc, res, stm, NULL, NULL);
+	}
+	fz_always(ctx)
+	{
+		p->owner = saved;
+		pdf_unmark_obj(ctx, owner);
+	}
+	fz_catch(ctx)
+	{
+		fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+		fz_ignore_error(ctx); /* damaged content: what was read counts */
+	}
+}
+
+static void pa_pattern(fz_context *ctx, pa_proc *p, const char *name)
+{
+	pdf_obj *pat = pdf_lookup_resource(ctx, p->super.rstack, PDF_NAME(Pattern), name);
+	if (pdf_dict_get_int(ctx, pat, PDF_NAME(PatternType)) == 2)
+		pa_colour(ctx, p, pa_family(ctx, pdf_dict_getp(ctx, pat, "Shading/ColorSpace"), 0));
+	else if (pdf_is_stream(ctx, pat))
+		pa_contents(ctx, p, pat, pdf_dict_get(ctx, pat, PDF_NAME(Resources)), pat);
+}
+
+static void pa_op_g(fz_context *ctx, pdf_processor *proc, float g) { (void)g; pa_colour(ctx, (pa_proc *)proc, PA_GRAY); }
+static void pa_op_rgb(fz_context *ctx, pdf_processor *proc, float r, float g, float b) { (void)r; (void)g; (void)b; pa_colour(ctx, (pa_proc *)proc, PA_RGB); }
+static void pa_op_cmyk(fz_context *ctx, pdf_processor *proc, float c, float m, float y, float k) { (void)c; (void)m; (void)y; (void)k; pa_colour(ctx, (pa_proc *)proc, PA_CMYK); }
+static void pa_op_cs(fz_context *ctx, pdf_processor *proc, const char *name, fz_colorspace *cs) { (void)cs; pa_colour(ctx, (pa_proc *)proc, pa_named(ctx, (pa_proc *)proc, name)); }
+static void pa_op_sc_pattern(fz_context *ctx, pdf_processor *proc, const char *name, pdf_pattern *pat, int n, float *color) { (void)pat; (void)n; (void)color; pa_pattern(ctx, (pa_proc *)proc, name); }
+static void pa_op_sc_shade(fz_context *ctx, pdf_processor *proc, const char *name, fz_shade *shade) { (void)shade; pa_pattern(ctx, (pa_proc *)proc, name); }
+
+static void pa_op_sh(fz_context *ctx, pdf_processor *proc, const char *name, fz_shade *shade)
+{
+	pa_proc *p = (pa_proc *)proc;
+	(void)shade;
+	pa_colour(ctx, p, pa_family(ctx, pdf_dict_get(ctx, pdf_lookup_resource(ctx, p->super.rstack, PDF_NAME(Shading), name), PDF_NAME(ColorSpace)), 0));
+}
+
+static void pa_op_BI(fz_context *ctx, pdf_processor *proc, fz_image *image, const char *csname)
+{
+	(void)image;
+	pa_colour(ctx, (pa_proc *)proc, pa_named(ctx, (pa_proc *)proc, csname));
+}
+
+static void pa_op_Do_image(fz_context *ctx, pdf_processor *proc, const char *name, fz_image *image)
+{
+	pa_proc *p = (pa_proc *)proc;
+	pdf_obj *img = pdf_lookup_resource(ctx, p->super.rstack, PDF_NAME(XObject), name);
+	(void)image;
+	if (!pdf_dict_get_bool(ctx, img, PDF_NAME(ImageMask)))
+		pa_colour(ctx, p, pa_family(ctx, pdf_dict_get(ctx, img, PDF_NAME(ColorSpace)), 0));
+}
+
+static void pa_op_Do_form(fz_context *ctx, pdf_processor *proc, const char *name, pdf_obj *form)
+{
+	(void)name;
+	pa_contents(ctx, (pa_proc *)proc, form, pdf_xobject_resources(ctx, form), form);
+}
+
+static void pa_op_Tf(fz_context *ctx, pdf_processor *proc, const char *name, pdf_font_desc *font, float size)
+{
+	pa_proc *p = (pa_proc *)proc;
+	pdf_obj *obj = pdf_lookup_resource(ctx, p->super.rstack, PDF_NAME(Font), name);
+	int n;
+	(void)font;
+	(void)size;
+	if (!obj || pa_font_embedded(ctx, obj))
+		return;
+	pa_add(ctx, &p->f->font_pages, p->page);
+	n = pdf_array_len(ctx, p->f->fonts);
+	for (int i = 0; i < n; i++)
+		if (pdf_resolve_indirect(ctx, pdf_array_get(ctx, p->f->fonts, i)) == pdf_resolve_indirect(ctx, obj))
+			return;
+	pdf_array_push(ctx, p->f->fonts, obj);
+}
+
+/* An annotation's normal appearance: one stream, or one per state. */
+static void pa_appearance(fz_context *ctx, pa_proc *p, pdf_obj *annot)
+{
+	pdf_obj *n = pdf_dict_getp(ctx, annot, "AP/N");
+	if (pdf_is_stream(ctx, n))
+		pa_contents(ctx, p, n, pdf_xobject_resources(ctx, n), n);
+	else if (pdf_is_dict(ctx, n))
+		for (int i = 0; i < pdf_dict_len(ctx, n); i++)
+		{
+			pdf_obj *s = pdf_dict_get_val(ctx, n, i);
+			if (pdf_is_stream(ctx, s))
+				pa_contents(ctx, p, s, pdf_xobject_resources(ctx, s), s);
+		}
+}
+
+/* Runs every page's content and annotation appearances through the processor. */
+static void pa_scan(fz_context *ctx, pdf_document *doc, pa_found *f)
+{
+	pa_proc *p = pdf_new_processor(ctx, sizeof *p);
+	p->super.usage = "Print";
+	p->super.op_G = p->super.op_g = pa_op_g;
+	p->super.op_RG = p->super.op_rg = pa_op_rgb;
+	p->super.op_K = p->super.op_k = pa_op_cmyk;
+	p->super.op_CS = p->super.op_cs = pa_op_cs;
+	p->super.op_SC_pattern = p->super.op_sc_pattern = pa_op_sc_pattern;
+	p->super.op_SC_shade = p->super.op_sc_shade = pa_op_sc_shade;
+	p->super.op_sh = pa_op_sh;
+	p->super.op_BI = pa_op_BI;
+	p->super.op_Do_image = pa_op_Do_image;
+	p->super.op_Do_form = pa_op_Do_form;
+	p->super.op_Tf = pa_op_Tf;
+	p->doc = doc;
+	p->f = f;
+	fz_try(ctx)
+	{
+		int n = pdf_count_pages(ctx, doc);
+		for (int i = 0; i < n; i++)
+		{
+			pdf_obj *po = pdf_lookup_page_obj(ctx, doc, i), *annots = pdf_dict_get(ctx, po, PDF_NAME(Annots));
+			p->page = i;
+			pa_contents(ctx, p, po, pdf_dict_get_inheritable(ctx, po, PDF_NAME(Resources)), pdf_dict_get(ctx, po, PDF_NAME(Contents)));
+			for (int k = 0; k < pdf_array_len(ctx, annots); k++)
+				pa_appearance(ctx, p, pdf_array_get(ctx, annots, k));
+		}
+		pdf_close_processor(ctx, &p->super);
+	}
+	fz_always(ctx)
+		pdf_drop_processor(ctx, &p->super);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* ---- objects reachable from the catalog */
+
+static const char *pa_bad_actions[] = { "Launch", "Sound", "Movie", "ResetForm", "ImportData", "Hide", "SetOCGState", "Rendition", "Trans", "GoTo3DView", NULL };
+
+/* 0 allowed, 1 JavaScript, 2 another action PDF/A forbids. */
+static int pa_action(fz_context *ctx, pdf_obj *a, const char **name)
+{
+	pdf_obj *s = pdf_dict_get(ctx, a, PDF_NAME(S));
+	const char *n;
+	if (!pdf_is_name(ctx, s))
+		return 0;
+	n = pdf_to_name(ctx, s);
+	*name = n;
+	if (!strcmp(n, "JavaScript"))
+		return 1;
+	if (!strcmp(n, "Named"))
+	{
+		const char *what = pdf_dict_get_name(ctx, a, PDF_NAME(N));
+		*name = "a menu command";
+		return strcmp(what, "NextPage") && strcmp(what, "PrevPage") && strcmp(what, "FirstPage") && strcmp(what, "LastPage") ? 2 : 0;
+	}
+	for (int i = 0; pa_bad_actions[i]; i++)
+		if (!strcmp(n, pa_bad_actions[i]))
+			return 2;
+	return 0;
+}
+
+typedef struct
+{
+	pdf_document *doc;
+	pa_found *f;
+	char *seen;
+	int len;
+	int *stack;
+	int top, cap;
+} pa_walk;
+
+static void pa_push(fz_context *ctx, pa_walk *w, pdf_obj *ref)
+{
+	int num = pdf_to_num(ctx, ref);
+	if (num <= 0 || num >= w->len || w->seen[num])
+		return;
+	w->seen[num] = 1;
+	if (w->top == w->cap)
+	{
+		int cap = w->cap ? w->cap * 2 : 256;
+		w->stack = fz_realloc_array(ctx, w->stack, cap, int);
+		w->cap = cap;
+	}
+	w->stack[w->top++] = num;
+}
+
+static int pa_has_filter(fz_context *ctx, pdf_obj *filter, const char *name)
+{
+	if (pdf_is_name(ctx, filter))
+		return !strcmp(pdf_to_name(ctx, filter), name);
+	for (int i = 0; i < pdf_array_len(ctx, filter); i++)
+		if (!strcmp(pdf_to_name(ctx, pdf_array_get(ctx, filter, i)), name))
+			return 1;
+	return 0;
+}
+
+/* Only filters that decode to the stream's plain data (no picture formats). */
+static int pa_plain_filters(fz_context *ctx, pdf_obj *filter)
+{
+	static const char *plain[] = { "LZWDecode", "LZW", "FlateDecode", "Fl", "ASCIIHexDecode", "AHx", "ASCII85Decode", "A85", "RunLengthDecode", "RL", NULL };
+	int n = pdf_is_array(ctx, filter) ? pdf_array_len(ctx, filter) : 1;
+	for (int i = 0; i < n; i++)
+	{
+		const char *f = pdf_to_name(ctx, pdf_is_array(ctx, filter) ? pdf_array_get(ctx, filter, i) : filter);
+		int ok = 0;
+		for (int k = 0; plain[k]; k++)
+			ok |= !strcmp(f, plain[k]);
+		if (!ok)
+			return 0;
+	}
+	return 1;
+}
+
+static void pa_stream(fz_context *ctx, pa_walk *w, int num, pdf_obj *dict)
+{
+	pa_found *f = w->f;
+	pdf_obj *filter = pdf_dict_get(ctx, dict, PDF_NAME(Filter));
+	if (pa_has_filter(ctx, filter, "LZWDecode") || pa_has_filter(ctx, filter, "LZW"))
+	{
+		f->lzw++;
+		if (w->f->fix && pa_plain_filters(ctx, filter))
+		{
+			/* Stored plain; saving compresses it again with Flate. */
+			fz_buffer *buf = pdf_load_stream_number(ctx, w->doc, num);
+			pdf_obj *ref = pdf_new_indirect(ctx, w->doc, num, 0);
+			fz_try(ctx)
+				pdf_update_stream(ctx, w->doc, ref, buf, 0);
+			fz_always(ctx)
+			{
+				pdf_drop_obj(ctx, ref);
+				fz_drop_buffer(ctx, buf);
+			}
+			fz_catch(ctx)
+				fz_rethrow(ctx);
+		}
+		else if (w->f->fix)
+			f->lzw_left++;
+	}
+	if (pdf_dict_get(ctx, dict, PDF_NAME(F)) || pdf_dict_gets(ctx, dict, "FFilter") || pdf_dict_gets(ctx, dict, "FDecodeParms"))
+	{
+		f->external++;
+		if (f->fix)
+		{
+			pdf_dict_del(ctx, dict, PDF_NAME(F));
+			pdf_dict_dels(ctx, dict, "FFilter");
+			pdf_dict_dels(ctx, dict, "FDecodeParms");
+		}
+	}
+	if (pdf_name_eq(ctx, pdf_dict_get(ctx, dict, PDF_NAME(Subtype)), PDF_NAME(PS)))
+	{
+		f->postscript++;
+		if (f->fix)
+		{
+			/* PostScript only printers ran: an empty form in its place. */
+			fz_buffer *empty = fz_new_buffer(ctx, 1);
+			pdf_obj *ref = pdf_new_indirect(ctx, w->doc, num, 0);
+			fz_try(ctx)
+			{
+				pdf_dict_put(ctx, dict, PDF_NAME(Subtype), PDF_NAME(Form));
+				pdf_dict_put_rect(ctx, dict, PDF_NAME(BBox), fz_make_rect(0, 0, 0, 0));
+				pdf_update_stream(ctx, w->doc, ref, empty, 0);
+			}
+			fz_always(ctx)
+			{
+				pdf_drop_obj(ctx, ref);
+				fz_drop_buffer(ctx, empty);
+			}
+			fz_catch(ctx)
+				fz_rethrow(ctx);
+		}
+	}
+}
+
+static void pa_dict(fz_context *ctx, pa_walk *w, pdf_obj *d)
+{
+	pa_found *f = w->f;
+	pdf_obj *sub = pdf_dict_get(ctx, d, PDF_NAME(Subtype)), *tr2;
+	static const char *keys[] = { "A", "OpenAction", "Next", NULL };
+	for (int k = 0; keys[k]; k++)
+	{
+		pdf_obj *a = pdf_dict_gets(ctx, d, keys[k]);
+		int n = pdf_is_array(ctx, a) ? pdf_array_len(ctx, a) : 1, bad = 0;
+		for (int i = 0; i < n; i++)
+		{
+			const char *name = NULL;
+			int kind = pa_action(ctx, pdf_is_array(ctx, a) ? pdf_array_get(ctx, a, i) : a, &name);
+			if (kind == 1)
+				f->scripts++;
+			else if (kind == 2)
+			{
+				f->actions++;
+				pa_note_action(f, name);
+			}
+			bad |= kind;
+		}
+		if (bad && f->fix)
+			pdf_dict_dels(ctx, d, keys[k]);
+	}
+	if (pdf_dict_get(ctx, d, PDF_NAME(AA)))
+	{
+		f->actions++;
+		pa_note_action(f, "automatic actions");
+		if (f->fix)
+			pdf_dict_del(ctx, d, PDF_NAME(AA));
+	}
+	if (pdf_name_eq(ctx, sub, PDF_NAME(Image)))
+	{
+		if (pdf_dict_gets(ctx, d, "Alternates") || pdf_dict_gets(ctx, d, "OPI") || pdf_dict_get_bool(ctx, d, PDF_NAME(Interpolate)))
+		{
+			f->images++;
+			if (f->fix)
+			{
+				pdf_dict_dels(ctx, d, "Alternates");
+				pdf_dict_dels(ctx, d, "OPI");
+				pdf_dict_del(ctx, d, PDF_NAME(Interpolate));
+			}
+		}
+	}
+	else if (pdf_name_eq(ctx, sub, PDF_NAME(Form)))
+	{
+		if (pdf_dict_gets(ctx, d, "Ref") || pdf_dict_gets(ctx, d, "OPI"))
+		{
+			f->reference++;
+			if (f->fix)
+			{
+				pdf_dict_dels(ctx, d, "Ref");
+				pdf_dict_dels(ctx, d, "OPI");
+			}
+		}
+		if (pdf_dict_gets(ctx, d, "Subtype2") || pdf_dict_get(ctx, d, PDF_NAME(PS)))
+		{
+			f->postscript++;
+			if (f->fix)
+			{
+				pdf_dict_dels(ctx, d, "Subtype2");
+				pdf_dict_del(ctx, d, PDF_NAME(PS));
+			}
+		}
+	}
+	if (pdf_dict_get(ctx, d, PDF_NAME(TR)))
+	{
+		f->transfer++;
+		if (f->fix)
+			pdf_dict_del(ctx, d, PDF_NAME(TR));
+	}
+	tr2 = pdf_dict_get(ctx, d, PDF_NAME(TR2));
+	if (tr2 && !pdf_name_eq(ctx, tr2, PDF_NAME(Default)))
+	{
+		f->transfer++;
+		if (f->fix)
+			pdf_dict_put(ctx, d, PDF_NAME(TR2), PDF_NAME(Default));
+	}
+}
+
+static void pa_visit(fz_context *ctx, pa_walk *w, pdf_obj *obj, int depth)
+{
+	if (depth > 64)
+		return;
+	if (pdf_is_indirect(ctx, obj))
+	{
+		pa_push(ctx, w, obj);
+		return;
+	}
+	if (pdf_is_array(ctx, obj))
+	{
+		for (int i = 0; i < pdf_array_len(ctx, obj); i++)
+			pa_visit(ctx, w, pdf_array_get(ctx, obj, i), depth + 1);
+	}
+	else if (pdf_is_dict(ctx, obj))
+	{
+		pa_dict(ctx, w, obj);
+		for (int i = 0; i < pdf_dict_len(ctx, obj); i++)
+			pa_visit(ctx, w, pdf_dict_get_val(ctx, obj, i), depth + 1);
+	}
+}
+
+/* Every object a reader can reach from the catalog (the trailer's Encrypt and Info aren't content). */
+static void pa_objects(fz_context *ctx, pdf_document *doc, pa_found *f)
+{
+	pa_walk w = { doc, f, NULL, pdf_xref_len(ctx, doc), NULL, 0, 0 };
+	fz_var(w.stack);
+	w.seen = fz_calloc(ctx, w.len > 0 ? w.len : 1, 1);
+	fz_try(ctx)
+	{
+		pa_visit(ctx, &w, pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root)), 0);
+		while (w.top)
+		{
+			int num = w.stack[--w.top];
+			pdf_obj *obj = NULL;
+			fz_var(obj);
+			fz_try(ctx)
+			{
+				obj = pdf_load_object(ctx, doc, num);
+				if (pdf_obj_num_is_stream(ctx, doc, num))
+					pa_stream(ctx, &w, num, obj);
+				pa_visit(ctx, &w, obj, 0);
+			}
+			fz_always(ctx)
+				pdf_drop_obj(ctx, obj);
+			fz_catch(ctx)
+			{
+				fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+				fz_ignore_error(ctx);
+			}
+		}
+	}
+	fz_always(ctx)
+	{
+		fz_free(ctx, w.seen);
+		fz_free(ctx, w.stack);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* ---- catalog, attachments, annotations */
+
+static int pa_output_intent(fz_context *ctx, pdf_document *doc, int *bad)
+{
+	pdf_obj *list = pdf_dict_getp(ctx, pdf_trailer(ctx, doc), "Root/OutputIntents"), *profile = NULL;
+	int n = 0;
+	*bad = 0;
+	for (int i = 0; i < pdf_array_len(ctx, list); i++)
+	{
+		pdf_obj *oi = pdf_array_get(ctx, list, i), *p = pdf_dict_get(ctx, oi, PDF_NAME(DestOutputProfile));
+		if (!pdf_is_name(ctx, pdf_dict_get(ctx, oi, PDF_NAME(S))) && !strcmp(pdf_dict_get_name(ctx, oi, PDF_NAME(S)), "GTS_PDFA1"))
+			continue;
+		if (!pdf_is_stream(ctx, p) || (profile && pdf_resolve_indirect(ctx, p) != pdf_resolve_indirect(ctx, profile)))
+		{
+			*bad = 1;
+			continue;
+		}
+		profile = p;
+		n = pdf_dict_get_int(ctx, p, PDF_NAME(N));
+	}
+	return n;
+}
+
+static int pa_file_is_pdf(fz_context *ctx, pdf_obj *fs)
+{
+	pdf_obj *ef = pdf_dict_getp(ctx, fs, "EF/F");
+	const char *name = pdf_dict_get_text_string(ctx, fs, PDF_NAME(UF));
+	size_t n;
+	if (!*name)
+		name = pdf_dict_get_text_string(ctx, fs, PDF_NAME(F));
+	n = strlen(name);
+	if (!ef)
+		ef = pdf_dict_getp(ctx, fs, "EF/UF");
+	if (!strcmp(pdf_dict_get_name(ctx, ef, PDF_NAME(Subtype)), "application/pdf"))
+		return 1;
+	return n > 4 && !fz_strcasecmp(name + n - 4, ".pdf");
+}
+
+static const char *pa_mime(const char *name)
+{
+	static const char *types[][2] = {
+		{ ".pdf", "application/pdf" }, { ".xml", "text/xml" }, { ".txt", "text/plain" }, { ".csv", "text/csv" },
+		{ ".json", "application/json" }, { ".htm", "text/html" }, { ".html", "text/html" }, { ".png", "image/png" },
+		{ ".jpg", "image/jpeg" }, { ".jpeg", "image/jpeg" }, { ".gif", "image/gif" }, { ".tif", "image/tiff" },
+		{ ".tiff", "image/tiff" }, { ".zip", "application/zip" },
+		{ ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+		{ ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+		{ ".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation" },
+	};
+	size_t n = strlen(name);
+	for (size_t i = 0; i < nelem(types); i++)
+	{
+		size_t k = strlen(types[i][0]);
+		if (n > k && !fz_strcasecmp(name + n - k, types[i][0]))
+			return types[i][1];
+	}
+	return "application/octet-stream";
+}
+
+/* Part 3: what an attached file needs (its relationship, Unicode name, type and date). 1 when something's missing
+ * (and, fixing, put in). */
+static int pa_file_complete(fz_context *ctx, pa_found *f, pdf_obj *fs, const char *now)
+{
+	pdf_obj *ef = pdf_dict_getp(ctx, fs, "EF/F");
+	int missing = 0;
+	if (!ef)
+		ef = pdf_dict_getp(ctx, fs, "EF/UF");
+	if (!pdf_dict_gets(ctx, fs, "AFRelationship"))
+	{
+		missing = 1;
+		if (f->fix)
+			pdf_dict_puts_drop(ctx, fs, "AFRelationship", pdf_new_name(ctx, "Unspecified"));
+	}
+	if (!pdf_dict_get(ctx, fs, PDF_NAME(UF)))
+	{
+		missing = 1;
+		if (f->fix)
+			pdf_dict_put_text_string(ctx, fs, PDF_NAME(UF), pdf_dict_get_text_string(ctx, fs, PDF_NAME(F)));
+	}
+	if (ef && !pdf_dict_get(ctx, ef, PDF_NAME(Subtype)))
+	{
+		missing = 1;
+		if (f->fix)
+			pdf_dict_put_name(ctx, ef, PDF_NAME(Subtype), pa_mime(pdf_dict_get_text_string(ctx, fs, PDF_NAME(UF))));
+	}
+	if (ef && !pdf_dict_getp(ctx, ef, "Params/ModDate"))
+	{
+		missing = 1;
+		if (f->fix && now)
+		{
+			pdf_obj *params = pdf_dict_get(ctx, ef, PDF_NAME(Params));
+			if (!pdf_is_dict(ctx, params))
+				params = pdf_dict_put_dict(ctx, ef, PDF_NAME(Params), 2);
+			pdf_dict_put_string(ctx, params, PDF_NAME(ModDate), now, strlen(now));
+		}
+	}
+	return missing;
+}
+
+static void pa_af_add(fz_context *ctx, pdf_document *doc, pdf_obj *owner, pdf_obj *fs)
+{
+	pdf_obj *af = pdf_dict_get(ctx, owner, PDF_NAME(AF));
+	if (!pdf_is_array(ctx, af))
+		af = pdf_dict_put_array(ctx, owner, PDF_NAME(AF), 1);
+	for (int i = 0; i < pdf_array_len(ctx, af); i++)
+		if (pdf_resolve_indirect(ctx, pdf_array_get(ctx, af, i)) == pdf_resolve_indirect(ctx, fs))
+			return;
+	(void)doc;
+	pdf_array_push(ctx, af, fs);
+}
+
+/* The document's attached files: part 2 allows PDF files only, part 3 any file described as part 3 asks. */
+static void pa_files(fz_context *ctx, pdf_document *doc, pa_found *f, const char *pdf_now)
+{
+	pdf_obj *root = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root));
+	pdf_obj *tree = pdf_load_name_tree(ctx, doc, PDF_NAME(EmbeddedFiles)), *keep = NULL;
+	fz_var(keep);
+	fz_try(ctx)
+	{
+		int n = pdf_dict_len(ctx, tree), removed = 0;
+		keep = pdf_new_dict(ctx, doc, n > 0 ? n : 1);
+		for (int i = 0; i < n; i++)
+		{
+			pdf_obj *fs = pdf_dict_get_val(ctx, tree, i);
+			if (f->part == 2 && !pa_file_is_pdf(ctx, fs))
+			{
+				f->attachments++;
+				removed++;
+				continue;
+			}
+			pdf_dict_put(ctx, keep, pdf_dict_get_key(ctx, tree, i), fs);
+			if (f->part == 3)
+			{
+				f->attachments += pa_file_complete(ctx, f, fs, pdf_now);
+				if (f->fix)
+					pa_af_add(ctx, doc, root, fs);
+				else if (!pdf_array_contains(ctx, pdf_dict_get(ctx, root, PDF_NAME(AF)), fs))
+					f->attachments++;
+			}
+		}
+		if (removed && f->fix)
+			write_embedded_files(ctx, doc, keep);
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_obj(ctx, keep);
+		pdf_drop_obj(ctx, tree);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+static int pa_bad_annot_type(fz_context *ctx, pdf_obj *st)
+{
+	static const char *bad[] = { "3D", "Sound", "Screen", "Movie", "RichMedia", NULL };
+	for (int i = 0; bad[i]; i++)
+		if (!strcmp(pdf_to_name(ctx, st), bad[i]))
+			return 1;
+	return 0;
+}
+
+#define PA_NOT_SHOWN (PDF_ANNOT_IS_INVISIBLE | PDF_ANNOT_IS_HIDDEN | PDF_ANNOT_IS_NO_VIEW | PDF_ANNOT_IS_TOGGLE_NO_VIEW)
+
+static int pa_zero_rect(fz_context *ctx, pdf_obj *annot)
+{
+	fz_rect r = pdf_dict_get_rect(ctx, annot, PDF_NAME(Rect));
+	return r.x1 - r.x0 == 0 || r.y1 - r.y0 == 0;
+}
+
+/* Annotations, checked from their objects (fixing works on the loaded page instead). */
+static void pa_annots(fz_context *ctx, pdf_document *doc, pa_found *f)
+{
+	int pages = pdf_count_pages(ctx, doc);
+	for (int i = 0; i < pages; i++)
+	{
+		pdf_obj *annots = pdf_dict_get(ctx, pdf_lookup_page_obj(ctx, doc, i), PDF_NAME(Annots));
+		for (int k = 0; k < pdf_array_len(ctx, annots); k++)
+		{
+			pdf_obj *a = pdf_array_get(ctx, annots, k), *st = pdf_dict_get(ctx, a, PDF_NAME(Subtype)), *ap;
+			int flags = pdf_dict_get_int(ctx, a, PDF_NAME(F));
+			if (!pdf_is_dict(ctx, a))
+				continue;
+			if (pa_bad_annot_type(ctx, st))
+			{
+				pa_add(ctx, &f->annot_types, i);
+				continue;
+			}
+			if (pdf_name_eq(ctx, st, PDF_NAME(Popup)))
+				continue;
+			if (pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)))
+			{
+				pdf_obj *fs = pdf_dict_get(ctx, a, PDF_NAME(FS));
+				if (f->part == 2 && !pa_file_is_pdf(ctx, fs))
+					f->attachments++;
+				else if (f->part == 3)
+					f->attachments += pa_file_complete(ctx, f, fs, NULL) || !pdf_array_contains(ctx, pdf_dict_get(ctx, a, PDF_NAME(AF)), fs);
+			}
+			if (!(flags & PDF_ANNOT_IS_PRINT) || (flags & PA_NOT_SHOWN))
+				pa_add(ctx, &f->annot_flags, i);
+			ap = pdf_dict_get(ctx, a, PDF_NAME(AP));
+			if (pdf_dict_get(ctx, ap, PDF_NAME(D)) || pdf_dict_get(ctx, ap, PDF_NAME(R)))
+				pa_add(ctx, &f->annot_ap, i);
+			else if (!pdf_name_eq(ctx, st, PDF_NAME(Link)) && !pa_zero_rect(ctx, a) && !pdf_dict_get(ctx, ap, PDF_NAME(N)))
+				pa_add(ctx, &f->annot_ap, i);
+		}
+	}
+}
+
+static void pa_catalog(fz_context *ctx, pdf_document *doc, pa_found *f)
+{
+	pdf_obj *trailer = pdf_trailer(ctx, doc), *root = pdf_dict_get(ctx, trailer, PDF_NAME(Root));
+	pdf_obj *names = pdf_dict_get(ctx, root, PDF_NAME(Names)), *form = pdf_dict_get(ctx, root, PDF_NAME(AcroForm));
+	pdf_obj *oc = pdf_dict_get(ctx, root, PDF_NAME(OCProperties)), *configs;
+	f->encrypted = pdf_dict_get(ctx, trailer, PDF_NAME(Encrypt)) != NULL;
+	f->version = doc->version > 17;
+	if (pdf_dict_get(ctx, names, PDF_NAME(JavaScript)))
+	{
+		f->scripts++;
+		if (f->fix)
+			pdf_dict_del(ctx, names, PDF_NAME(JavaScript));
+	}
+	f->xfa = pdf_dict_get(ctx, form, PDF_NAME(XFA)) != NULL;
+	f->need_ap = pdf_dict_get_bool(ctx, form, PDF_NAME(NeedAppearances));
+	if (f->fix)
+	{
+		pa_del(ctx, form, PDF_NAME(XFA));
+		if (f->version)
+			doc->version = 17;
+	}
+	/* Layers: every configuration named, none switching layers by itself. */
+	configs = pdf_dict_get(ctx, oc, PDF_NAME(Configs));
+	for (int i = -1; oc && i < pdf_array_len(ctx, configs); i++)
+	{
+		pdf_obj *c = i < 0 ? pdf_dict_get(ctx, oc, PDF_NAME(D)) : pdf_array_get(ctx, configs, i);
+		if (!pdf_is_dict(ctx, c))
+			continue;
+		if (!pdf_dict_get(ctx, c, PDF_NAME(Name)) || pdf_dict_get(ctx, c, PDF_NAME(AS)))
+		{
+			f->layers++;
+			if (f->fix)
+			{
+				if (!pdf_dict_get(ctx, c, PDF_NAME(Name)))
+					pdf_dict_put_text_string(ctx, c, PDF_NAME(Name), i < 0 ? "Default" : "Layers");
+				pdf_dict_del(ctx, c, PDF_NAME(AS));
+			}
+		}
+	}
+	f->oi = pa_output_intent(ctx, doc, &f->bad_oi);
+}
+
+/* ---- metadata */
+
+static char *pa_xmp(fz_context *ctx, pdf_document *doc)
+{
+	pdf_obj *md = pdf_dict_getp(ctx, pdf_trailer(ctx, doc), "Root/Metadata");
+	fz_buffer *buf;
+	char *s = NULL;
+	if (!pdf_is_stream(ctx, md))
+		return NULL;
+	buf = pdf_load_stream(ctx, md);
+	fz_try(ctx)
+		s = buffer_to_string(ctx, buf);
+	fz_always(ctx)
+		fz_drop_buffer(ctx, buf);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return s;
+}
+
+/* An XMP property's simple value (as an attribute or an element), or "". */
+static void pa_xmp_value(const char *xmp, const char *prop, char *out, size_t size)
+{
+	const char *p = xmp;
+	out[0] = 0;
+	while (p && (p = strstr(p, prop)) != NULL)
+	{
+		const char *q = p + strlen(prop);
+		size_t n = 0;
+		while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')
+			q++;
+		if (*q == '=')
+		{
+			char quote;
+			q++;
+			while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')
+				q++;
+			quote = *q++;
+			while (*q && *q != quote && n + 1 < size)
+				out[n++] = *q++;
+		}
+		else if (*q == '>')
+		{
+			q++;
+			while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')
+				q++;
+			while (*q && *q != '<' && n + 1 < size)
+				out[n++] = *q++;
+			while (n && (out[n - 1] == ' ' || out[n - 1] == '\n' || out[n - 1] == '\r' || out[n - 1] == '\t'))
+				n--;
+		}
+		else
+		{
+			p = q;
+			continue;
+		}
+		out[n] = 0;
+		return;
+	}
+}
+
+static void pa_xml_escape(fz_context *ctx, fz_buffer *b, const char *s)
+{
+	for (; s && *s; s++)
+	{
+		unsigned char ch = (unsigned char)*s;
+		if (ch == '&')
+			fz_append_string(ctx, b, "&amp;");
+		else if (ch == '<')
+			fz_append_string(ctx, b, "&lt;");
+		else if (ch == '>')
+			fz_append_string(ctx, b, "&gt;");
+		else if (ch == '"')
+			fz_append_string(ctx, b, "&quot;");
+		else if (ch >= 0x20 || ch == '\t' || ch == '\n')
+			fz_append_byte(ctx, b, ch);
+	}
+}
+
+/* A PDF date ("D:20240131120000+05'30'") as XMP writes it ("2024-01-31T12:00:00+05:30"), as far as it goes. */
+static void pa_iso_date(const char *pdf, char *out, size_t size)
+{
+	char d[15] = { 0 };
+	const char *tz;
+	size_t n = 0;
+	out[0] = 0;
+	if (!strncmp(pdf, "D:", 2))
+		pdf += 2;
+	while (n < 14 && pdf[n] >= '0' && pdf[n] <= '9')
+		n++;
+	if (n < 4)
+		return;
+	memcpy(d, pdf, n);
+	tz = pdf + n;
+	if (n >= 12)
+		fz_snprintf(out, size, "%.4s-%.2s-%.2sT%.2s:%.2s:%.2s", d, n >= 6 ? d + 4 : "01", n >= 8 ? d + 6 : "01", d + 8, d + 10, n >= 14 ? d + 12 : "00");
+	else if (n >= 8)
+		fz_snprintf(out, size, "%.4s-%.2s-%.2s", d, d + 4, d + 6);
+	else
+		fz_snprintf(out, size, "%.4s", d);
+	if (n >= 12 && (*tz == 'Z' || *tz == 'z'))
+		fz_strlcat(out, "Z", size);
+	else if (n >= 12 && (*tz == '+' || *tz == '-') && tz[1] >= '0' && tz[2] >= '0')
+	{
+		char zone[8];
+		const char *m = tz + 3;
+		if (*m == '\'')
+			m++;
+		fz_snprintf(zone, sizeof zone, "%c%.2s:%.2s", *tz, tz + 1, m[0] >= '0' && m[0] <= '9' ? m : "00");
+		fz_strlcat(out, zone, size);
+	}
+}
+
+static const char *pa_info_keys[][2] = {
+	{ "Title", "dc:title" }, { "Author", "dc:creator" }, { "Subject", "dc:description" }, { "Keywords", "pdf:Keywords" },
+	{ "Creator", "xmp:CreatorTool" }, { "Producer", "pdf:Producer" }, { "CreationDate", "xmp:CreateDate" }, { "ModDate", "xmp:ModifyDate" },
+};
+
+/* The document information entries the XMP doesn't repeat ("Title, Author"), into `out`. */
+static void pa_info_mismatch(fz_context *ctx, pdf_document *doc, const char *xmp, char *out, size_t size)
+{
+	pdf_obj *info = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Info));
+	out[0] = 0;
+	for (size_t i = 0; i < nelem(pa_info_keys); i++)
+	{
+		const char *v = pdf_to_text_string(ctx, pdf_dict_gets(ctx, info, pa_info_keys[i][0]));
+		int ok = 0;
+		if (!*v)
+			continue;
+		if (i >= 6)
+		{
+			char iso[40], have[64];
+			pa_iso_date(v, iso, sizeof iso);
+			pa_xmp_value(xmp, pa_info_keys[i][1], have, sizeof have);
+			/* Same moment to the second (zones written either way). */
+			ok = iso[0] && !strncmp(have, iso, strlen(iso) < 19 ? strlen(iso) : 19);
+		}
+		else
+		{
+			fz_buffer *b = fz_new_buffer(ctx, 64);
+			char *esc = NULL;
+			fz_try(ctx)
+			{
+				pa_xml_escape(ctx, b, v);
+				esc = buffer_to_string(ctx, b);
+				ok = strstr(xmp, pa_info_keys[i][1]) && strstr(xmp, esc);
+			}
+			fz_always(ctx)
+			{
+				fz_free(ctx, esc);
+				fz_drop_buffer(ctx, b);
+			}
+			fz_catch(ctx)
+				fz_rethrow(ctx);
+		}
+		if (!ok && strlen(out) + strlen(pa_info_keys[i][0]) + 3 < size)
+		{
+			if (out[0])
+				fz_strlcat(out, ", ", size);
+			fz_strlcat(out, pa_info_keys[i][0], size);
+		}
+	}
+}
+
+static void pa_json_pages(fz_context *ctx, fz_buffer *b, const char *key, pa_list *l)
+{
+	fz_append_printf(ctx, b, ",\"%s\":[", key);
+	for (int i = 0; i < l->n; i++)
+		fz_append_printf(ctx, b, "%s%d", i ? "," : "", l->v[i]);
+	fz_append_byte(ctx, b, ']');
+}
+
+static void pa_init(fz_context *ctx, pdf_document *doc, pa_found *f, int part, int fix)
+{
+	memset(f, 0, sizeof *f);
+	f->part = part;
+	f->fix = fix;
+	f->fonts = pdf_new_array(ctx, doc, 4);
+	f->owners = pdf_new_array(ctx, doc, 4);
+}
+
+static int pa_font_bold(fz_context *ctx, pdf_obj *desc, const char *name)
+{
+	return pdf_to_int(ctx, pdf_dict_gets(ctx, desc, "FontWeight")) >= 600 || (pdf_dict_get_int(ctx, desc, PDF_NAME(Flags)) & (1 << 18)) ||
+		strstr(name, "Bold") || strstr(name, "bold") || strstr(name, "Black") || strstr(name, "Heavy");
+}
+
+/* Checks the document against PDF/A-`part` (2 or 3) level b. JSON: what's claimed and what was found (see
+ * engine/pdfa.rs). */
+char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	fz_buffer *b = NULL;
+	char *s = NULL, *xmp = NULL;
+	pa_found f;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return NULL;
+	}
+	memset(&f, 0, sizeof f);
+	fz_var(b);
+	fz_var(xmp);
+	fz_try(CTX)
+	{
+		char pa_part[16], conformance[16], mismatch[128];
+		pa_init(CTX, pdf, &f, part, 0);
+		pa_catalog(CTX, pdf, &f);
+		pa_objects(CTX, pdf, &f);
+		pa_files(CTX, pdf, &f, NULL);
+		pa_annots(CTX, pdf, &f);
+		pa_scan(CTX, pdf, &f);
+		xmp = pa_xmp(CTX, pdf);
+		pa_xmp_value(xmp ? xmp : "", "pdfaid:part", pa_part, sizeof pa_part);
+		pa_xmp_value(xmp ? xmp : "", "pdfaid:conformance", conformance, sizeof conformance);
+		mismatch[0] = 0;
+		if (xmp)
+			pa_info_mismatch(CTX, pdf, xmp, mismatch, sizeof mismatch);
+
+		b = fz_new_buffer(CTX, 1024);
+		fz_append_string(CTX, b, "{\"claim\":");
+		if (pa_part[0])
+		{
+			fz_append_printf(CTX, b, "{\"part\":%d,\"conformance\":", atoi(pa_part));
+			json_str(CTX, b, conformance);
+			fz_append_byte(CTX, b, '}');
+		}
+		else
+			fz_append_string(CTX, b, "null");
+		fz_append_printf(CTX, b, ",\"part\":%d,\"encrypted\":%s,\"version\":%s,\"xmp\":%s,\"mismatch\":", part, f.encrypted ? "true" : "false",
+			f.version ? "true" : "false", xmp ? "true" : "false");
+		json_str(CTX, b, mismatch);
+		fz_append_printf(CTX, b, ",\"intent\":%d,\"badIntent\":%s,\"xfa\":%s,\"needAppearances\":%s", f.oi, f.bad_oi ? "true" : "false",
+			f.xfa ? "true" : "false", f.need_ap ? "true" : "false");
+		fz_append_printf(CTX, b, ",\"scripts\":%d,\"actions\":%d,\"actionNames\":", f.scripts, f.actions);
+		json_str(CTX, b, f.action_names);
+		fz_append_printf(CTX, b, ",\"lzw\":%d,\"external\":%d,\"postscript\":%d,\"reference\":%d,\"images\":%d,\"transfer\":%d,\"attachments\":%d,\"layers\":%d",
+			f.lzw, f.external, f.postscript, f.reference, f.images, f.transfer, f.attachments, f.layers);
+		pa_json_pages(CTX, b, "gray", &f.gray);
+		pa_json_pages(CTX, b, "rgb", &f.rgb);
+		pa_json_pages(CTX, b, "cmyk", &f.cmyk);
+		pa_json_pages(CTX, b, "fontPages", &f.font_pages);
+		pa_json_pages(CTX, b, "annotTypes", &f.annot_types);
+		pa_json_pages(CTX, b, "annotFlags", &f.annot_flags);
+		pa_json_pages(CTX, b, "annotAppearances", &f.annot_ap);
+		fz_append_string(CTX, b, ",\"fonts\":[");
+		for (int i = 0; i < pdf_array_len(CTX, f.fonts); i++)
+		{
+			pdf_obj *font = pdf_array_get(CTX, f.fonts, i), *desc = font;
+			pdf_obj *sub = pdf_dict_get(CTX, font, PDF_NAME(Subtype));
+			const char *name = pdf_dict_get_name(CTX, font, PDF_NAME(BaseFont)), *plus = strchr(name, '+');
+			const char *clean;
+			int simple = !pdf_name_eq(CTX, sub, PDF_NAME(Type0)), flags, len = 0;
+			if (plus && plus - name == 6)
+				name = plus + 1;
+			if (!simple)
+				desc = pdf_array_get(CTX, pdf_dict_get(CTX, font, PDF_NAME(DescendantFonts)), 0);
+			desc = pdf_dict_get(CTX, desc, PDF_NAME(FontDescriptor));
+			flags = pdf_dict_get_int(CTX, desc, PDF_NAME(Flags));
+			clean = pdf_clean_font_name(name);
+			fz_append_printf(CTX, b, "%s{\"num\":%d,\"name\":", i ? "," : "", pdf_to_num(CTX, font));
+			json_str(CTX, b, name);
+			fz_append_string(CTX, b, ",\"base14\":");
+			json_str(CTX, b, fz_lookup_base14_font(CTX, clean, &len) ? clean : "");
+			fz_append_string(CTX, b, ",\"type\":");
+			json_str(CTX, b, pdf_to_name(CTX, sub));
+			fz_append_printf(CTX, b, ",\"simple\":%s,\"bold\":%s,\"italic\":%s,\"serif\":%s,\"symbolic\":%s}", simple ? "true" : "false",
+				pa_font_bold(CTX, desc, name) ? "true" : "false",
+				(flags & 64) || pdf_dict_get_real(CTX, desc, PDF_NAME(ItalicAngle)) != 0 || strstr(name, "Italic") || strstr(name, "Oblique") ? "true" : "false",
+				(flags & 2) ? "true" : "false", (flags & 4) ? "true" : "false");
+		}
+		fz_append_string(CTX, b, "]}");
+		s = buffer_to_string(CTX, b);
+	}
+	fz_always(CTX)
+	{
+		pa_found_drop(CTX, &f);
+		fz_free(CTX, xmp);
+		fz_drop_buffer(CTX, b);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
+/* ---- fixing */
+
+static int pa_is_truetype(fz_buffer *buf)
+{
+	unsigned char *d = buf->data;
+	return buf->len > 4 && ((d[0] == 0 && d[1] == 1 && d[2] == 0 && d[3] == 0) || !memcmp(d, "true", 4));
+}
+
+/* Embeds a font program in the simple font object `num`: the file at `path`, or (none) MuPDF's own copy of
+ * the base 14 font `base14` (none: the one it names). Its widths are taken from the program, so they match it. */
+static void pa_embed_font(fz_context *ctx, pdf_document *doc, int num, const char *path, const char *base14)
+{
+	pdf_obj *font = pdf_load_object(ctx, doc, num), *desc, *file = NULL, *fdict = NULL, *widths = NULL, *copy = NULL;
+	fz_buffer *buf = NULL;
+	fz_font *prog = NULL;
+	pdf_font_desc *fd = NULL;
+	fz_var(file);
+	fz_var(fdict);
+	fz_var(widths);
+	fz_var(copy);
+	fz_var(buf);
+	fz_var(prog);
+	fz_var(fd);
+	fz_try(ctx)
+	{
+		const char *name = pdf_dict_get_name(ctx, font, PDF_NAME(BaseFont)), *plus = strchr(name, '+');
+		int ttf, first, last, flags;
+		fz_rect bbox;
+		if (plus && plus - name == 6)
+			name = plus + 1;
+		if (pdf_name_eq(ctx, pdf_dict_get(ctx, font, PDF_NAME(Subtype)), PDF_NAME(Type0)))
+			fz_throw(ctx, FZ_ERROR_ARGUMENT, "not a simple font");
+		if (path && *path)
+			buf = fz_read_file(ctx, path);
+		else
+		{
+			int len = 0;
+			const unsigned char *data = fz_lookup_base14_font(ctx, *base14 ? base14 : pdf_clean_font_name(name), &len);
+			if (!data)
+				fz_throw(ctx, FZ_ERROR_ARGUMENT, "no font for %s", name);
+			buf = fz_new_buffer_from_shared_data(ctx, data, len);
+		}
+		ttf = pa_is_truetype(buf);
+		prog = fz_new_font_from_buffer(ctx, name, buf, 0, 0);
+
+		desc = pdf_dict_get(ctx, font, PDF_NAME(FontDescriptor));
+		if (!pdf_is_dict(ctx, desc))
+		{
+			pdf_obj *nd = pdf_add_new_dict(ctx, doc, 10);
+			pdf_dict_put_drop(ctx, font, PDF_NAME(FontDescriptor), nd);
+			desc = pdf_dict_get(ctx, font, PDF_NAME(FontDescriptor));
+			pdf_dict_put(ctx, desc, PDF_NAME(Type), PDF_NAME(FontDescriptor));
+			pdf_dict_put_name(ctx, desc, PDF_NAME(FontName), name);
+		}
+		bbox = fz_font_bbox(ctx, prog);
+		flags = pdf_dict_get_int(ctx, desc, PDF_NAME(Flags));
+		if (!flags)
+		{
+			const char *b14 = *base14 ? base14 : pdf_clean_font_name(name);
+			int symbolic = !strcmp(b14, "Symbol") || !strcmp(b14, "ZapfDingbats");
+			flags = (symbolic ? 4 : 32) | (fz_font_is_serif(ctx, prog) ? 2 : 0) | (fz_font_is_italic(ctx, prog) ? 64 : 0);
+		}
+		pdf_dict_put_int(ctx, desc, PDF_NAME(Flags), flags);
+		if (!pdf_dict_get(ctx, desc, PDF_NAME(FontBBox)))
+			pdf_dict_put_rect(ctx, desc, PDF_NAME(FontBBox), fz_make_rect(bbox.x0 * 1000, bbox.y0 * 1000, bbox.x1 * 1000, bbox.y1 * 1000));
+		if (!pdf_dict_get(ctx, desc, PDF_NAME(ItalicAngle)))
+			pdf_dict_put_int(ctx, desc, PDF_NAME(ItalicAngle), fz_font_is_italic(ctx, prog) ? -12 : 0);
+		if (!pdf_dict_get(ctx, desc, PDF_NAME(Ascent)))
+			pdf_dict_put_int(ctx, desc, PDF_NAME(Ascent), (int)(fz_font_ascender(ctx, prog) * 1000));
+		if (!pdf_dict_get(ctx, desc, PDF_NAME(Descent)))
+			pdf_dict_put_int(ctx, desc, PDF_NAME(Descent), (int)(fz_font_descender(ctx, prog) * 1000));
+		if (!pdf_dict_get(ctx, desc, PDF_NAME(CapHeight)))
+			pdf_dict_put_int(ctx, desc, PDF_NAME(CapHeight), (int)(fz_font_ascender(ctx, prog) * 700));
+		if (!pdf_dict_get(ctx, desc, PDF_NAME(StemV)))
+			pdf_dict_put_int(ctx, desc, PDF_NAME(StemV), 80);
+		pdf_dict_del(ctx, desc, PDF_NAME(FontFile));
+		pdf_dict_del(ctx, desc, PDF_NAME(FontFile2));
+		pdf_dict_del(ctx, desc, PDF_NAME(FontFile3));
+		fdict = pdf_new_dict(ctx, doc, 2);
+		if (ttf)
+			pdf_dict_put_int(ctx, fdict, PDF_NAME(Length1), (int64_t)buf->len);
+		else
+			pdf_dict_put(ctx, fdict, PDF_NAME(Subtype), PDF_NAME(Type1C));
+		file = pdf_add_stream(ctx, doc, buf, fdict, 0);
+		pdf_dict_put(ctx, desc, ttf ? PDF_NAME(FontFile2) : PDF_NAME(FontFile3), file);
+		pdf_dict_put(ctx, font, PDF_NAME(Subtype), ttf ? PDF_NAME(TrueType) : PDF_NAME(Type1));
+
+		/* Widths from the program, for the codes as the font's encoding maps them. Loaded from a copy of the
+		 * dictionary: one loaded before (drawing a form field, say) is in MuPDF's store with its stand-in's glyphs. */
+		copy = pdf_copy_dict(ctx, font);
+		fd = pdf_load_font(ctx, doc, NULL, copy);
+		first = pdf_dict_get(ctx, font, PDF_NAME(FirstChar)) ? pdf_dict_get_int(ctx, font, PDF_NAME(FirstChar)) : 32;
+		last = pdf_dict_get(ctx, font, PDF_NAME(LastChar)) ? pdf_dict_get_int(ctx, font, PDF_NAME(LastChar)) : 255;
+		first = fz_clampi(first, 0, 255);
+		last = fz_clampi(last, first, 255);
+		widths = pdf_new_array(ctx, doc, last - first + 1);
+		for (int code = first; code <= last; code++)
+		{
+			int gid = pdf_font_cid_to_gid(ctx, fd, code);
+			pdf_array_push_int(ctx, widths, gid > 0 ? (int64_t)floorf(fz_advance_glyph(ctx, prog, gid, 0) * 1000 + 0.5f) : 0);
+		}
+		pdf_dict_put_int(ctx, font, PDF_NAME(FirstChar), first);
+		pdf_dict_put_int(ctx, font, PDF_NAME(LastChar), last);
+		pdf_dict_put(ctx, font, PDF_NAME(Widths), widths);
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_font(ctx, fd);
+		pdf_drop_obj(ctx, copy);
+		fz_drop_font(ctx, prog);
+		fz_drop_buffer(ctx, buf);
+		pdf_drop_obj(ctx, widths);
+		pdf_drop_obj(ctx, file);
+		pdf_drop_obj(ctx, fdict);
+		pdf_drop_obj(ctx, font);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* One annotation's dictionary as PDF/A wants it: it prints, has its normal appearance only, and (part 3) its attached
+ * file is described. 0 when it should go instead: a forbidden kind, one never shown, or (part 2) a file that isn't a PDF. */
+static int pa_fix_annot_dict(fz_context *ctx, pdf_document *doc, pa_found *f, pdf_obj *obj, int *printed, const char *now)
+{
+	pdf_obj *st = pdf_dict_get(ctx, obj, PDF_NAME(Subtype)), *fs = pdf_dict_get(ctx, obj, PDF_NAME(FS));
+	int flags = pdf_dict_get_int(ctx, obj, PDF_NAME(F));
+	if (!pdf_is_dict(ctx, obj) || pdf_name_eq(ctx, st, PDF_NAME(Popup)))
+		return 1;
+	if (pa_bad_annot_type(ctx, st) || (flags & (PDF_ANNOT_IS_INVISIBLE | PDF_ANNOT_IS_HIDDEN | PDF_ANNOT_IS_NO_VIEW)) ||
+		(pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)) && f->part == 2 && !pa_file_is_pdf(ctx, fs)))
+		return 0;
+	if (pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)) && f->part == 3 && fs)
+	{
+		pa_file_complete(ctx, f, fs, now);
+		pa_af_add(ctx, doc, obj, fs);
+	}
+	if (!(flags & PDF_ANNOT_IS_PRINT) || (flags & PDF_ANNOT_IS_TOGGLE_NO_VIEW))
+	{
+		pdf_dict_put_int(ctx, obj, PDF_NAME(F), (flags | PDF_ANNOT_IS_PRINT) & ~PDF_ANNOT_IS_TOGGLE_NO_VIEW);
+		(*printed)++;
+	}
+	pa_del(ctx, pdf_dict_get(ctx, obj, PDF_NAME(AP)), PDF_NAME(D));
+	pa_del(ctx, pdf_dict_get(ctx, obj, PDF_NAME(AP)), PDF_NAME(R));
+	return 1;
+}
+
+/* Draws an annotation's normal appearance where it has none (or always, `force`), as MuPDF draws that kind. */
+static void pa_draw(fz_context *ctx, pdf_annot *a, int force, int *made)
+{
+	pdf_obj *obj = pdf_annot_obj(ctx, a), *st = pdf_dict_get(ctx, obj, PDF_NAME(Subtype));
+	if (!force && (pdf_name_eq(ctx, st, PDF_NAME(Link)) || pdf_name_eq(ctx, st, PDF_NAME(Popup)) || pa_zero_rect(ctx, obj) || pdf_dict_getp(ctx, obj, "AP/N")))
+		return;
+	fz_try(ctx)
+	{
+		pdf_annot_request_resynthesis(ctx, a);
+		pdf_update_annot(ctx, a);
+		if (pdf_dict_getp(ctx, obj, "AP/N"))
+			(*made)++;
+		/* Made fresh: only its normal appearance stays. */
+		pa_del(ctx, pdf_dict_get(ctx, obj, PDF_NAME(AP)), PDF_NAME(D));
+		pa_del(ctx, pdf_dict_get(ctx, obj, PDF_NAME(AP)), PDF_NAME(R));
+	}
+	fz_catch(ctx)
+	{
+		fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+		fz_ignore_error(ctx); /* a kind MuPDF can't draw: listed as left */
+	}
+}
+
+/* Annotations as PDF/A wants them. The page's own list first (MuPDF keeps links and form fields apart from the other
+ * annotations), then appearances drawn where missing, and for form fields that asked the reader to draw them. */
+static void pa_fix_annots(fz_context *ctx, pdf_document *doc, pa_found *f, int *removed, int *printed, int *made, const char *now)
+{
+	int pages = pdf_count_pages(ctx, doc), redraw = f->need_ap;
+	pdf_page *page = NULL;
+	fz_var(page);
+	for (int i = 0; i < pages; i++)
+	{
+		pdf_obj *annots = pdf_dict_get(ctx, pdf_lookup_page_obj(ctx, doc, i), PDF_NAME(Annots));
+		for (int k = pdf_array_len(ctx, annots) - 1; k >= 0; k--)
+			if (!pa_fix_annot_dict(ctx, doc, f, pdf_array_get(ctx, annots, k), printed, now))
+			{
+				pdf_array_delete(ctx, annots, k);
+				(*removed)++;
+			}
+		if (!pdf_array_len(ctx, annots))
+			continue;
+		fz_try(ctx)
+		{
+			page = pdf_load_page(ctx, doc, i);
+			for (pdf_annot *a = pdf_first_annot(ctx, page); a; a = pdf_next_annot(ctx, a))
+				pa_draw(ctx, a, 0, made);
+			for (pdf_annot *w = pdf_first_widget(ctx, page); w; w = pdf_next_widget(ctx, w))
+				pa_draw(ctx, w, redraw, made);
+		}
+		fz_always(ctx)
+		{
+			fz_drop_page(ctx, (fz_page *)page);
+			page = NULL;
+		}
+		fz_catch(ctx)
+			fz_rethrow(ctx);
+	}
+	if (redraw)
+		pa_del(ctx, pdf_dict_getp(ctx, pdf_trailer(ctx, doc), "Root/AcroForm"), PDF_NAME(NeedAppearances));
+}
+
+static pdf_obj *pa_icc(fz_context *ctx, pdf_document *doc, fz_colorspace *cs)
+{
+	pdf_obj *dict = NULL, *ref = NULL;
+	fz_buffer *icc = NULL;
+#if FZ_ENABLE_ICC
+	icc = cs->u.icc.buffer;
+#endif
+	if (!icc)
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "no colour profile");
+	dict = pdf_new_dict(ctx, doc, 1);
+	fz_try(ctx)
+	{
+		pdf_dict_put_int(ctx, dict, PDF_NAME(N), cs->n);
+		ref = pdf_add_stream(ctx, doc, icc, dict, 0);
+	}
+	fz_always(ctx)
+		pdf_drop_obj(ctx, dict);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return ref;
+}
+
+static void pa_add_intent(fz_context *ctx, pdf_document *doc, pa_found *f)
+{
+	pdf_obj *root = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root)), *profile = pa_icc(ctx, doc, fz_device_rgb(ctx)), *list, *oi;
+	fz_try(ctx)
+	{
+		/* PDF/A intents (missing a profile, or several) give way to the one written here; others (PDF/X) stay. */
+		pdf_obj *old = pdf_keep_obj(ctx, pdf_dict_get(ctx, root, PDF_NAME(OutputIntents)));
+		list = pdf_dict_put_array(ctx, root, PDF_NAME(OutputIntents), 1);
+		for (int i = 0; i < pdf_array_len(ctx, old); i++)
+		{
+			pdf_obj *o = pdf_array_get(ctx, old, i);
+			if (strcmp(pdf_dict_get_name(ctx, o, PDF_NAME(S)), "GTS_PDFA1"))
+				pdf_array_push(ctx, list, o);
+		}
+		pdf_drop_obj(ctx, old);
+		oi = pdf_array_push_dict(ctx, list, 6);
+		pdf_dict_put(ctx, oi, PDF_NAME(Type), PDF_NAME(OutputIntent));
+		pdf_dict_put_name(ctx, oi, PDF_NAME(S), "GTS_PDFA1");
+		pdf_dict_put_text_string(ctx, oi, PDF_NAME(OutputConditionIdentifier), "sRGB IEC61966-2.1");
+		pdf_dict_put_text_string(ctx, oi, PDF_NAME(Info), "sRGB IEC61966-2.1");
+		pdf_dict_puts_drop(ctx, oi, "RegistryName", pdf_new_text_string(ctx, "http://www.color.org"));
+		pdf_dict_put(ctx, oi, PDF_NAME(DestOutputProfile), profile);
+	}
+	fz_always(ctx)
+		pdf_drop_obj(ctx, profile);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	f->oi = 3;
+	f->bad_oi = 0;
+}
+
+/* Default colour spaces where device colours are used that the output intent doesn't cover. */
+static int pa_add_defaults(fz_context *ctx, pdf_document *doc, pa_found *f)
+{
+	pdf_obj *spaces[3] = { NULL, NULL, NULL };
+	int added = 0, n = pdf_array_len(ctx, f->owners);
+	static const char *names[3] = { "DefaultGray", "DefaultRGB", "DefaultCMYK" };
+	fz_var(spaces);
+	fz_try(ctx)
+	{
+		for (int i = 0; i < n; i++)
+		{
+			pdf_obj *entry = pdf_array_get(ctx, f->owners, i), *res = pdf_array_get(ctx, entry, 0), *cs;
+			int mask = pdf_array_get_int(ctx, entry, 1);
+			if (!pdf_array_get_int(ctx, entry, 2))
+			{
+				/* No resources at all: the owner gets its own. */
+				pdf_obj *own = pdf_dict_get(ctx, res, PDF_NAME(Resources));
+				res = pdf_is_dict(ctx, own) ? own : pdf_dict_put_dict(ctx, res, PDF_NAME(Resources), 1);
+			}
+			cs = pdf_dict_get(ctx, res, PDF_NAME(ColorSpace));
+			if (!pdf_is_dict(ctx, cs))
+				cs = pdf_dict_put_dict(ctx, res, PDF_NAME(ColorSpace), 1);
+			for (int k = 0; k < 3; k++)
+			{
+				if (!(mask & (1 << k)) || pdf_dict_gets(ctx, cs, names[k]))
+					continue;
+				if (!spaces[k])
+				{
+					fz_colorspace *dev = k == 0 ? fz_device_gray(ctx) : k == 1 ? fz_device_rgb(ctx) : fz_device_cmyk(ctx);
+					pdf_obj *icc = pa_icc(ctx, doc, dev), *arr = pdf_new_array(ctx, doc, 2);
+					pdf_array_push(ctx, arr, PDF_NAME(ICCBased));
+					pdf_array_push_drop(ctx, arr, icc);
+					spaces[k] = pdf_add_object_drop(ctx, doc, arr);
+				}
+				pdf_dict_puts(ctx, cs, names[k], spaces[k]);
+				added++;
+			}
+		}
+	}
+	fz_always(ctx)
+		for (int k = 0; k < 3; k++)
+			pdf_drop_obj(ctx, spaces[k]);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return added;
+}
+
+/* XMP metadata written from the document information, saying PDF/A-`part` level b. */
+static void pa_write_xmp(fz_context *ctx, pdf_document *doc, int part, const char *now_iso)
+{
+	pdf_obj *trailer = pdf_trailer(ctx, doc), *root = pdf_dict_get(ctx, trailer, PDF_NAME(Root));
+	pdf_obj *info = pdf_dict_get(ctx, trailer, PDF_NAME(Info)), *dict = NULL, *ref = NULL;
+	fz_buffer *b = fz_new_buffer(ctx, 2048);
+	fz_var(dict);
+	fz_var(ref);
+	fz_try(ctx)
+	{
+		const char *v;
+		char iso[40];
+		fz_append_string(ctx, b, "<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
+			"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
+			"<rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\""
+			" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">\n");
+		fz_append_printf(ctx, b, "<pdfaid:part>%d</pdfaid:part>\n<pdfaid:conformance>B</pdfaid:conformance>\n<dc:format>application/pdf</dc:format>\n", part);
+		if (*(v = pdf_dict_get_text_string(ctx, info, PDF_NAME(Title))))
+		{
+			fz_append_string(ctx, b, "<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">");
+			pa_xml_escape(ctx, b, v);
+			fz_append_string(ctx, b, "</rdf:li></rdf:Alt></dc:title>\n");
+		}
+		if (*(v = pdf_dict_get_text_string(ctx, info, PDF_NAME(Author))))
+		{
+			fz_append_string(ctx, b, "<dc:creator><rdf:Seq><rdf:li>");
+			pa_xml_escape(ctx, b, v);
+			fz_append_string(ctx, b, "</rdf:li></rdf:Seq></dc:creator>\n");
+		}
+		if (*(v = pdf_dict_get_text_string(ctx, info, PDF_NAME(Subject))))
+		{
+			fz_append_string(ctx, b, "<dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">");
+			pa_xml_escape(ctx, b, v);
+			fz_append_string(ctx, b, "</rdf:li></rdf:Alt></dc:description>\n");
+		}
+		if (*(v = pdf_dict_get_text_string(ctx, info, PDF_NAME(Keywords))))
+		{
+			fz_append_string(ctx, b, "<pdf:Keywords>");
+			pa_xml_escape(ctx, b, v);
+			fz_append_string(ctx, b, "</pdf:Keywords>\n");
+		}
+		if (*(v = pdf_dict_get_text_string(ctx, info, PDF_NAME(Producer))))
+		{
+			fz_append_string(ctx, b, "<pdf:Producer>");
+			pa_xml_escape(ctx, b, v);
+			fz_append_string(ctx, b, "</pdf:Producer>\n");
+		}
+		if (*(v = pdf_dict_get_text_string(ctx, info, PDF_NAME(Creator))))
+		{
+			fz_append_string(ctx, b, "<xmp:CreatorTool>");
+			pa_xml_escape(ctx, b, v);
+			fz_append_string(ctx, b, "</xmp:CreatorTool>\n");
+		}
+		pa_iso_date(pdf_dict_get_text_string(ctx, info, PDF_NAME(CreationDate)), iso, sizeof iso);
+		if (iso[0])
+			fz_append_printf(ctx, b, "<xmp:CreateDate>%s</xmp:CreateDate>\n", iso);
+		pa_iso_date(pdf_dict_get_text_string(ctx, info, PDF_NAME(ModDate)), iso, sizeof iso);
+		if (iso[0])
+			fz_append_printf(ctx, b, "<xmp:ModifyDate>%s</xmp:ModifyDate>\n", iso);
+		if (now_iso && *now_iso)
+			fz_append_printf(ctx, b, "<xmp:MetadataDate>%s</xmp:MetadataDate>\n", now_iso);
+		fz_append_string(ctx, b, "</rdf:Description>\n</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>");
+		/* Trapped would need its own XMP property: the information entry goes instead. */
+		if (pdf_is_dict(ctx, info))
+			pdf_dict_dels(ctx, info, "Trapped");
+		dict = pdf_new_dict(ctx, doc, 2);
+		pdf_dict_put(ctx, dict, PDF_NAME(Type), PDF_NAME(Metadata));
+		pdf_dict_put(ctx, dict, PDF_NAME(Subtype), PDF_NAME(XML));
+		ref = pdf_add_stream(ctx, doc, b, dict, 0);
+		pdf_dict_put(ctx, root, PDF_NAME(Metadata), ref);
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_obj(ctx, ref);
+		pdf_drop_obj(ctx, dict);
+		fz_drop_buffer(ctx, b);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+static void pa_ensure_id(fz_context *ctx, pdf_document *doc)
+{
+	pdf_obj *trailer = pdf_trailer(ctx, doc), *id;
+	unsigned char digest[16];
+	fz_md5 md5;
+	int64_t t = (int64_t)time(NULL);
+	if (pdf_is_array(ctx, pdf_dict_get(ctx, trailer, PDF_NAME(ID))))
+		return;
+	fz_md5_init(&md5);
+	fz_md5_update(&md5, (unsigned char *)&t, sizeof t);
+	fz_md5_update(&md5, (unsigned char *)&doc, sizeof doc);
+	fz_md5_final(&md5, digest);
+	id = pdf_dict_put_array(ctx, trailer, PDF_NAME(ID), 2);
+	pdf_array_push_string(ctx, id, (char *)digest, 16);
+	pdf_array_push_string(ctx, id, (char *)digest, 16);
+}
+
+/* Makes the document conform to PDF/A-`part` (2 or 3) level b as far as it can. `fonts`: lines
+ * "num\tpath\tbase14" of fonts to embed (no path: MuPDF's own copy of that base 14 font). `now`: the time as a PDF date and as XMP writes it
+ * ("D:...\tYYYY-MM-DDThh:mm:ss+hh:mm"). Returns JSON: what was done. The caller saves without encryption. */
+char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char *now)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	fz_buffer *b = NULL;
+	char *s = NULL, pdf_now[40] = "", iso_now[40] = "";
+	pa_found f;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return NULL;
+	}
+	if (now)
+	{
+		const char *tab = strchr(now, '\t');
+		fz_strlcpy(pdf_now, now, tab && (size_t)(tab - now) < sizeof pdf_now ? (size_t)(tab - now) + 1 : sizeof pdf_now);
+		if (tab)
+			fz_strlcpy(iso_now, tab + 1, sizeof iso_now);
+	}
+	int embedded = 0, font_failed = 0, removed = 0, printed = 0, made = 0, defaults = 0, intent = 0;
+	memset(&f, 0, sizeof f);
+	fz_var(b);
+	fz_var(embedded);
+	fz_var(font_failed);
+	fz_try(CTX)
+	{
+		pa_init(CTX, pdf, &f, part, 1);
+		/* Fonts first, before anything loads them as they were. */
+		for (const char *line = fonts; line && *line;)
+		{
+			const char *end = strchr(line, '\n'), *tab = strchr(line, '\t'), *tab2 = NULL;
+			char path[1024] = "", base14[64] = "";
+			int num = atoi(line);
+			if (!end)
+				end = line + strlen(line);
+			if (tab && tab < end)
+			{
+				tab2 = memchr(tab + 1, '\t', end - tab - 1);
+				fz_strlcpy(path, tab + 1, fz_mini((int)((tab2 ? tab2 : end) - tab), (int)sizeof path));
+				if (tab2)
+					fz_strlcpy(base14, tab2 + 1, fz_mini((int)(end - tab2), (int)sizeof base14));
+			}
+			fz_try(CTX)
+			{
+				pa_embed_font(CTX, pdf, num, path, base14);
+				embedded++;
+			}
+			fz_catch(CTX)
+			{
+				fz_rethrow_if(CTX, FZ_ERROR_TRYLATER);
+				fz_ignore_error(CTX);
+				font_failed++;
+			}
+			line = *end ? end + 1 : end;
+		}
+		pa_catalog(CTX, pdf, &f);
+		pa_objects(CTX, pdf, &f);
+		pa_files(CTX, pdf, &f, pdf_now);
+		pa_fix_annots(CTX, pdf, &f, &removed, &printed, &made, pdf_now);
+		if (!f.oi || f.bad_oi)
+		{
+			pa_add_intent(CTX, pdf, &f);
+			intent = 1;
+		}
+		/* Colours: with the intent in place, what's still uncovered gets a default colour space. */
+		pdf_drop_obj(CTX, f.owners);
+		f.owners = pdf_new_array(CTX, pdf, 4);
+		pa_scan(CTX, pdf, &f);
+		defaults = pa_add_defaults(CTX, pdf, &f);
+		/* Appearances drawn above can use fonts not in the file (Helvetica for form fields): MuPDF's copies go in. */
+		for (int i = 0; i < pdf_array_len(CTX, f.fonts); i++)
+		{
+			pdf_obj *font = pdf_array_get(CTX, f.fonts, i);
+			const char *name = pdf_dict_get_name(CTX, font, PDF_NAME(BaseFont)), *plus = strchr(name, '+'), *clean;
+			int len = 0;
+			if (plus && plus - name == 6)
+				name = plus + 1;
+			clean = pdf_clean_font_name(name);
+			if (pdf_to_num(CTX, font) <= 0 || pdf_name_eq(CTX, pdf_dict_get(CTX, font, PDF_NAME(Subtype)), PDF_NAME(Type0)) || !fz_lookup_base14_font(CTX, clean, &len))
+				continue;
+			fz_try(CTX)
+			{
+				pa_embed_font(CTX, pdf, pdf_to_num(CTX, font), "", clean);
+				embedded++;
+			}
+			fz_catch(CTX)
+			{
+				fz_rethrow_if(CTX, FZ_ERROR_TRYLATER);
+				fz_ignore_error(CTX);
+				font_failed++;
+			}
+		}
+		pa_write_xmp(CTX, pdf, part, iso_now);
+		pa_ensure_id(CTX, pdf);
+
+		b = fz_new_buffer(CTX, 256);
+		fz_append_printf(CTX, b, "{\"fonts\":%d,\"fontsFailed\":%d,\"scripts\":%d,\"actions\":%d,\"annotsRemoved\":%d,\"annotsPrinted\":%d,\"appearances\":%d,"
+			"\"attachments\":%d,\"lzw\":%d,\"lzwLeft\":%d,\"external\":%d,\"postscript\":%d,\"reference\":%d,\"images\":%d,\"transfer\":%d,\"layers\":%d,"
+			"\"intent\":%s,\"defaults\":%d,\"xfa\":%s,\"encrypted\":%s}",
+			embedded, font_failed, f.scripts, f.actions, removed, printed, made, f.attachments, f.lzw - f.lzw_left, f.lzw_left, f.external,
+			f.postscript, f.reference, f.images, f.transfer, f.layers, intent ? "true" : "false", defaults, f.xfa ? "true" : "false",
+			f.encrypted ? "true" : "false");
+		s = buffer_to_string(CTX, b);
+	}
+	fz_always(CTX)
+	{
+		pa_found_drop(CTX, &f);
+		fz_drop_buffer(CTX, b);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
 }

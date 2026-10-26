@@ -143,6 +143,8 @@ extern "C" {
     pub fn fo_pdf_redaction_pages_json(c: *mut fo_ctx, d: *mut fo_doc) -> *mut c_char;
     pub fn fo_pdf_redact_apply(c: *mut fo_ctx, p: *mut fo_page, cover: c_int, rgb: *const c_float, label: *const c_char, left: *mut c_int) -> c_int;
     pub fn fo_pdf_sanitize(c: *mut fo_ctx, d: *mut fo_doc, what: c_int) -> *mut c_char;
+    pub fn fo_pdfa_check(c: *mut fo_ctx, d: *mut fo_doc, part: c_int) -> *mut c_char;
+    pub fn fo_pdfa_fix(c: *mut fo_ctx, d: *mut fo_doc, part: c_int, fonts: *const c_char, now: *const c_char) -> *mut c_char;
     pub fn fo_tables_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
     pub fn fo_table_in_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, area: *const c_float, cols: *const c_float, ncols: c_int, rows: *const c_float, nrows: c_int) -> *mut c_char;
     pub fn fo_pictures_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;

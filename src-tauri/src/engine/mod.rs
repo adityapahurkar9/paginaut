@@ -8,6 +8,8 @@ pub mod sandbox;
 pub use pdfhtml::Preview as BookPreview;
 pub mod pool;
 pub mod table;
+#[cfg(desktop)]
+pub mod pdfa;
 
 use mupdf::{Document, List, Page, RenderOutcome, Text};
 use parking_lot::{Mutex, RwLock};

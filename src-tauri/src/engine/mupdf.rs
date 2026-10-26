@@ -728,6 +728,17 @@ impl Document {
         with_kind(self.1, |c| take_string(c, unsafe { fo_pdf_sanitize(c, self.0, what) }).ok_or_else(|| last_error(c)))
     }
 
+    /// PDF/A: what the document claims and what breaks the rules, as JSON (see fo_pdfa_check, engine/pdfa.rs).
+    pub fn pdfa_check(&self, part: i32) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_pdfa_check(c, self.0, part) }).ok_or_else(|| last_error(c)))
+    }
+
+    /// PDF/A: makes the document conform as far as it can; JSON of what was done (see fo_pdfa_fix).
+    pub fn pdfa_fix(&self, part: i32, fonts: &str, now: &str) -> Result<String> {
+        let (f, n) = (CString::new(fonts).map_err(|e| e.to_string())?, CString::new(now).map_err(|e| e.to_string())?);
+        with_kind(self.1, |c| take_string(c, unsafe { fo_pdfa_fix(c, self.0, part, f.as_ptr(), n.as_ptr()) }).ok_or_else(|| last_error(c)))
+    }
+
     /// Embedded files as JSON (see fo_attachments_json).
     pub fn attachments_json(&self) -> Result<String> {
         with_kind(self.1, |c| take_string(c, unsafe { fo_attachments_json(c, self.0) }).ok_or_else(|| last_error(c)))
