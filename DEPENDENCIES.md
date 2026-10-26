@@ -4,7 +4,7 @@ What Paginaut is built from and ships with, where each comes from, and how to up
 these every few months, and straight away when one of them announces a security fix (most of them
 read files that can come from anyone: a bug in a parser is a way in).
 
-Versions as of 2026-10-05. Licences matter: Paginaut is AGPL-3.0, so everything here must be
+Versions as of 2026-10-05 (veraPDF, a test tool: 2026-10-26). Licences matter: Paginaut is AGPL-3.0, so everything here must be
 compatible with it (no RarLab unRAR code, for one: its licence forbids rebuilding a RAR compressor).
 
 ## Read files from anyone (update first)
