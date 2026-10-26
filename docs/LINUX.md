@@ -64,6 +64,7 @@ The release binary needs at most glibc 2.35 and libstdc++ 3.4.29 (GCC 11).
 | Office files | Microsoft Office (COM) or LibreOffice (downloaded by Paginaut if wanted) | LibreOffice from the distribution, its own .debs (/opt), a snap or a flatpak; Paginaut doesn't download it — it says how to install it | Downloading LibreOffice's AppImage (≈300 MB, outside the package manager's updates) |
 | Read aloud | Windows' voices and Piper's | Piper's natural voices only (Linux has no system voice service with word timings for the follow-along highlight) | espeak-ng (robotic) or speech-dispatcher (no word timings) |
 | Installed fonts (themes) | Registry | fontconfig (`fc-list`) | — |
+| Fonts put into PDF/A files (Save as PDF/A) | Registry (name → file) | fontconfig (`fc-match`; a different family it offers counts as a stand-in and is named) | Its licence (OS/2 fsType) checked the same way |
 | Memory figure | Process commit | Private memory from `/proc/<pid>/smaps_rollup` | RSS (counts shared libraries) |
 | Snap Layouts on the maximize button | snap.rs | Not needed: window managers have their own | — |
 | Window | Hidden until the first frame | Shown after the first frame or 300 ms, whichever first (WebKitGTK paints nothing for a hidden window) | — |

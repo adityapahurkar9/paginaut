@@ -148,9 +148,13 @@ function ThisDocument({ tab }: { tab: Tab }) {
       if (id === checkId.current) setChecking(false);
     }
   };
+  // Checked again after an edit (a moment later: edits come in runs).
+  const version = tab.historyVersion.value;
   useEffect(() => {
-    if (pdfa && tab.info.value?.isPdf) void check();
-  }, [pdfa, part]);
+    if (!pdfa || !tab.info.value?.isPdf) return;
+    const t = window.setTimeout(() => void check(), report ? 600 : 0);
+    return () => window.clearTimeout(t);
+  }, [pdfa, part, version]);
 
   const list = target === "docx" || target === "pptx" ? (opts?.[target] ?? []) : [];
   const chosen = target === "docx" || target === "pptx" ? (engine[target] ?? list[0]) : undefined;

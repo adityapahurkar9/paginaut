@@ -130,17 +130,30 @@ pub enum Missing {
 /// Whether a file is a TrueType font its licence lets be embedded in documents: OS/2 fsType not "restricted"
 /// (0x0002) and not "bitmaps only" (0x0200). Fonts without an OS/2 table are taken as installable.
 fn embeddable_truetype(p: &Path) -> Result<(), Missing> {
-    let Ok(data) = std::fs::read(p) else { return Err(Missing::NotInstalled) };
-    if data.len() < 12 || !(data[..4] == [0, 1, 0, 0] || &data[..4] == b"true") {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(p) else { return Err(Missing::NotInstalled) };
+    // Only the table directory and two bytes of the OS/2 table are read (CJK fonts run to tens of megabytes).
+    let mut head = [0u8; 12];
+    if file.read_exact(&mut head).is_err() {
         return Err(Missing::NotInstalled);
     }
-    let u16_at = |at: usize| data.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
-    let u32_at = |at: usize| data.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
-    let tables = u16_at(4).unwrap_or(0) as usize;
-    for i in 0..tables {
-        let entry = 12 + i * 16;
-        if data.get(entry..entry + 4) == Some(b"OS/2") {
-            let fs_type = u32_at(entry + 8).and_then(|offset| u16_at(offset + 8)).unwrap_or(0);
+    let mut dir = vec![0u8; u16::from_be_bytes([head[4], head[5]]) as usize * 16];
+    if !(head[..4] == [0, 1, 0, 0] || &head[..4] == b"true") || file.read_exact(&mut dir).is_err() {
+        return Err(Missing::NotInstalled);
+    }
+    fs_type_allows(&dir, |offset| {
+        let mut b = [0u8; 2];
+        file.seek(SeekFrom::Start(offset + 8)).and_then(|_| file.read_exact(&mut b)).ok().map(|_| u16::from_be_bytes(b))
+    })
+}
+
+/// The licence in a TrueType table directory (`dir`, 16 bytes a table): the OS/2 table's fsType, read through
+/// `fs_type_at` (its offset in the file). No OS/2 table: installable.
+fn fs_type_allows(dir: &[u8], mut fs_type_at: impl FnMut(u64) -> Option<u16>) -> Result<(), Missing> {
+    for entry in dir.chunks_exact(16) {
+        if &entry[..4] == b"OS/2" {
+            let offset = u32::from_be_bytes([entry[8], entry[9], entry[10], entry[11]]) as u64;
+            let fs_type = fs_type_at(offset).unwrap_or(0);
             return if fs_type & 0x000f != 0x0002 && fs_type & 0x0200 == 0 { Ok(()) } else { Err(Missing::Licence) };
         }
     }
@@ -288,6 +301,31 @@ pub fn file(dir: &Path, name: &str) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pdf_font_names() {
+        assert_eq!(super::pdf_font_key("TimesNewRomanPS-BoldItalicMT", false, false), ("timesnewroman".into(), "bolditalic".into()));
+        assert_eq!(super::pdf_font_key("ABCDEF+Arial,Bold", false, false), ("arial".into(), "bold".into()));
+        assert_eq!(super::pdf_font_key("ArialMT", true, false), ("arial".into(), "bold".into()));
+        assert_eq!(super::pdf_font_key("Calibri", false, false), ("calibri".into(), "".into()));
+        assert_eq!(super::pdf_font_key("Helvetica-Oblique", false, false), ("helvetica".into(), "italic".into()));
+    }
+
+    #[test]
+    fn embedding_licences() {
+        use super::{fs_type_allows, Missing};
+        // A table directory with one entry: OS/2 at offset 100.
+        let mut dir = vec![0u8; 16];
+        dir[..4].copy_from_slice(b"OS/2");
+        dir[8..12].copy_from_slice(&100u32.to_be_bytes());
+        let with = |fs_type: u16| fs_type_allows(&dir, |offset| (offset == 100).then_some(fs_type));
+        assert_eq!(with(0x0000), Ok(()), "installable");
+        assert_eq!(with(0x0004), Ok(()), "preview & print");
+        assert_eq!(with(0x0008), Ok(()), "editable");
+        assert_eq!(with(0x0002), Err(Missing::Licence), "restricted");
+        assert_eq!(with(0x0208), Err(Missing::Licence), "bitmaps only");
+        assert_eq!(fs_type_allows(&[], |_| None), Ok(()), "no OS/2 table");
+    }
+
     #[test]
     fn families_from_registry_names() {
         assert_eq!(super::families("Georgia Bold Italic (TrueType)"), vec!["Georgia"]);

@@ -92,6 +92,17 @@ fn main() {
                 let lost = s.done.iter().any(|t| t.contains("left out"));
                 check(&format!("{name} keeps its pages"), after.page_count == n || lost, format!("{n} → {}", after.page_count));
                 let bytes = std::fs::read(&out).unwrap();
+                // XMP from standard schemas survives the rewrite; a labelling tool's own doesn't (tools/make-pdfa-samples.py).
+                let has = |s: &str| bytes.windows(s.len()).any(|w| w == s.as_bytes());
+                if name == "rights.pdf" {
+                    check("rights.pdf keeps its rights and IDs", has("Copyright 2026 Paginaut tests") && has("<xmpMM:DocumentID>uuid:1234-abcd"), String::new());
+                }
+                if name == "untyped-font.pdf" {
+                    check("untyped-font.pdf gets its font", s.done.iter().any(|d| d.contains("1 font put in")), s.done.join("; "));
+                }
+                if name == "labelled.pdf" {
+                    check("labelled.pdf drops the labelling properties", !has("pdfx") && !has("MSIP"), String::new());
+                }
                 check(&format!("{name} has a file ID"), bytes.windows(4).any(|w| w == b"/ID[" || w == b"/ID "), String::new());
             }
             Err(e) => check(&format!("{name} saved as PDF/A"), false, e),

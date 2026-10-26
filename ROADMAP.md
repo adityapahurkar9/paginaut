@@ -689,15 +689,16 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       first); source made public first (AGPL); 1.0 for the store release
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
-## PDF/A: archival PDFs (-2b and -3b done; -1b and the rest planned)
+## PDF/A: archival PDFs (-2b and -3b done in 0.9.9; -1b and the rest planned)
 PDF/A (ISO 19005) is the PDF that still opens and looks the same decades later: what courts, government portals and
 archives ask for. First PDF/A-2b (looks preserved; allows transparency, JPEG 2000 and layers), then -1b (older
 portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags, so they wait for tagging (below);
 "u" (every letter maps to Unicode) comes with -2b's checks. MuPDF has no PDF/A support: checks and fixes are ours
 (paginaut.c fo_pdfa_*, engine/pdfa.rs).
 - [x] Check (-2b, -3b): what a file claims (XMP pdfaid) and which rules it breaks, in plain words and grouped, with
-      pages: fonts not in the file, XMP on pages or pictures, device colours no output intent or default colour space covers, JavaScript and
-      forbidden actions, encryption, annotations and fields that don't print or have no (or extra) appearances, XFA,
+      pages: fonts not in the file (and font entries without their type), XMP with properties PDF/A doesn't know (the
+      document's, or on pages and pictures), device colours no output intent or default colour space covers,
+      JavaScript and forbidden actions, encryption, annotations and fields that don't print or have no (or extra) appearances, XFA,
       NeedAppearances, attachments (-2: PDF/A files only; -3: described), layers, LZW, external and PostScript content,
       picture alternates, transfer functions, PDF 2.0, missing XMP or details that disagree with it. Objects are walked
       from the catalog; fonts and colours come from a content processor over every page and appearance (what's used).
@@ -707,7 +708,8 @@ portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags,
 - [x] Save as PDF/A-2b or -3b (new file, "… (PDF-A).pdf"): fonts embedded from the system's (Windows registry,
       fontconfig; licences that forbid embedding respected; each stand-in named with why), MuPDF's copies for the base 14, widths
       taken from the program; sRGB output intent (MuPDF's built-in profile) and default colour spaces where device CMYK
-      is used; XMP written from the document info; JavaScript, encryption (needs the permissions password) and forbidden
+      is used; XMP written from the document info, keeping the old packet's standard properties (rights, subjects,
+      document IDs) when PDF/A could take it; symbol fonts' codes spelled out by glyph name; JavaScript, encryption (needs the permissions password) and forbidden
       actions removed; appearances drawn; hidden annotations and fields removed; LZW recompressed; damaged page trees
       rebuilt as Repair does. Checked again after saving; what still fails is listed
 - [ ] Save as PDF/A-1b: transparency flattened (a page rendered to a picture as the last resort, said so)
@@ -719,11 +721,12 @@ portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags,
       already there in both)
 - [ ] Signing a PDF/A file keeps it PDF/A (the signature's appearance and the incremental save follow the rules)
 - [x] Tests: examples/pdfa_test.rs (every testfiles PDF conforms after saving, looks the same, keeps its pages;
-      attachments for -2 and -3; protection; unsaved changes)
-- [x] veraPDF (the reference validator, Java; not shipped) passes every saved file: the 13 from testfiles and the 20
+      attachments for -2 and -3; protection; unsaved changes; XMP kept and dropped; untyped fonts: samples from
+      tools/make-pdfa-samples.py); unit tests for font names, licences and the stand-in messages
+- [x] veraPDF (the reference validator, Java; not shipped) passes every saved file: the 16 from testfiles and the 20
       Office-made PDFs in testfiles/office (tools/pdfa-validate.ps1). It found what our check missed, now fixed:
       symbolic fonts read through the encoding they name (ZapfDingbats check marks), wrong CIDSet glyph lists in
-      font subsets, XMP with custom properties on pictures
+      font subsets, XMP with custom properties on pictures, font entries without their type
 - [ ] Tests: veraPDF's own test corpus against our checker; the user's portal files
 
 ## PDF/UA: checking accessible PDFs (planned, after PDF/A)
@@ -769,6 +772,17 @@ app's feature names).
       instead of guessing
 - [ ] Tests: untagged documents of rising difficulty (letter, report, two columns, tables, forms, a scanned book):
       add tags, then the checker; compared with Acrobat's results on the same files (installed on the user's PC)
+
+## 0.9.9 (Windows, Linux) and Android 0.6.5: PDF/A, and fixes
+- [x] PDF/A-2b and -3b: check a document, save a copy as PDF/A (Convert pane), its claim in Properties (see the PDF/A
+      section above). Checked with veraPDF
+- [x] Attach file works on PDFs with no attachments yet; Sanitize works on files without a Names dictionary
+- [x] A plain copy (Extract pages, Compare, PDF/A with unsaved changes) no longer marks the open document as saved
+- [x] The toolbar's » button goes once the buttons fit again (it stayed with room to spare)
+- [x] Passwords (both apps): a wrong password tried on an unlocked file leaves its pages drawing; errors that aren't a
+      wrong password say what happened (desktop password dialog, Android); Android: after an engine restart, a
+      password that no longer opens the file closes it with a message
+- [x] Android 0.6.4 (2026-10-26): password-protected PDFs show their pages (same fix as 0.9.8)
 
 ## 0.9.8 (Windows, Linux): password-protected PDFs show their pages
 - [x] A PDF opened with its password no longer shows blank pages. MuPDF's needs-password check tries the empty
