@@ -423,27 +423,40 @@ pub async fn redact_apply(state: State<'_, AppState>, doc: DocId, cover: bool, r
     blocking(move || engine.doc(doc)?.redact_apply(cover, rgb, &label)).await
 }
 
-/// Checks the document against PDF/A-`part` (2 or 3) level b.
+/// Checks the document against PDF/A-`part` (1, 2 or 3) level b.
 #[tauri::command]
 pub async fn pdfa_check(state: State<'_, AppState>, doc: DocId, part: i32) -> Res<crate::engine::pdfa::Report> {
     let engine = state.engine.clone();
     blocking(move || engine.pdfa_check(doc, part)).await
 }
 
+/// For a file that says it's PDF/A: what its unsaved changes would break of that (null: nothing, or it doesn't).
+#[tauri::command]
+pub async fn pdfa_changes(state: State<'_, AppState>, doc: DocId) -> Res<Option<crate::engine::pdfa::Changes>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.pdfa_changes(doc)).await
+}
+
+/// Makes the document's changes keep it PDF/A-`part` before it's saved (one undo step).
+#[tauri::command]
+pub async fn pdfa_keep(state: State<'_, AppState>, doc: DocId, part: i32) -> Res<crate::engine::pdfa::Kept> {
+    let engine = state.engine.clone();
+    blocking(move || engine.pdfa_keep(doc, part, &pdfa_find)).await
+}
+
+/// Installed fonts for PDF/A, as the engine asks for them.
+fn pdfa_find(name: &str, bold: bool, italic: bool) -> Result<(std::path::PathBuf, String, bool), crate::engine::pdfa::FontMissing> {
+    crate::fonts::find(name, bold, italic).map(|f| (f.path, f.family, f.exact)).map_err(|m| match m {
+        crate::fonts::Missing::Licence => crate::engine::pdfa::FontMissing::Licence,
+        crate::fonts::Missing::NotInstalled => crate::engine::pdfa::FontMissing::NotInstalled,
+    })
+}
+
 /// Saves the pages in `order` (turned by `rot`) as a new PDF/A-`part` file at `out`, then checks it.
 #[tauri::command]
 pub async fn pdfa_save(state: State<'_, AppState>, doc: DocId, order: Vec<usize>, rot: Vec<i32>, out: String, part: i32) -> Res<crate::engine::pdfa::Saved> {
     let engine = state.engine.clone();
-    blocking(move || {
-        let find = |name: &str, bold: bool, italic: bool| {
-            crate::fonts::find(name, bold, italic).map(|f| (f.path, f.family, f.exact)).map_err(|m| match m {
-                crate::fonts::Missing::Licence => crate::engine::pdfa::FontMissing::Licence,
-                crate::fonts::Missing::NotInstalled => crate::engine::pdfa::FontMissing::NotInstalled,
-            })
-        };
-        engine.save_pdfa(doc, order, rot, &out, part, &find)
-    })
-    .await
+    blocking(move || engine.save_pdfa(doc, order, rot, &out, part, &pdfa_find)).await
 }
 
 /// Takes metadata (1), scripts (2), attached files (4), comments (8) or hidden text (16) out (one undo step).
@@ -1023,18 +1036,51 @@ pub async fn office_remove(office: State<'_, Arc<Office>>) -> Res<Engines> {
     .await
 }
 
+/// A file made into a PDF: who made it, and for PDF/A what couldn't be put right and which fonts stood in.
+#[derive(Serialize)]
+pub struct FileConverted {
+    by: String,
+    left: Vec<String>,
+    substitutes: Vec<String>,
+}
+
 /// Converts a file into the PDF `out`: an Office file with `engine` (or the preferred converter), anything else
-/// Paginaut opens (web pages, e-books, pictures, XPS) by itself. Returns who made it.
+/// Paginaut opens (web pages, e-books, pictures, XPS) by itself. With `pdfa` (a part), saved as PDF/A.
 #[tauri::command]
-pub async fn office_convert(state: State<'_, AppState>, office: State<'_, Arc<Office>>, path: String, out: String, engine: Option<String>) -> Res<String> {
+pub async fn office_convert(
+    state: State<'_, AppState>,
+    office: State<'_, Arc<Office>>,
+    path: String,
+    out: String,
+    engine: Option<String>,
+    pdfa: Option<i32>,
+) -> Res<FileConverted> {
     let office = office.inner().clone();
     let engine_ = state.engine.clone();
     blocking(move || {
-        if crate::office::kind(&path).is_some() {
-            office.convert_to(&path, &out, engine.as_deref())
+        let Some(part) = pdfa else {
+            let by = if crate::office::kind(&path).is_some() {
+                office.convert_to(&path, &out, engine.as_deref())?
+            } else {
+                engine_.convert_file(&path, &out)?;
+                "Paginaut".into()
+            };
+            return Ok(FileConverted { by, left: vec![], substitutes: vec![] });
+        };
+        // PDF/A: the PDF the file becomes (an Office file's cached conversion, else one made beside it), saved as PDF/A.
+        let name = std::path::Path::new(&path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
+        let made = format!("{out}.paginaut-pdf");
+        let (src, by) = if crate::office::kind(&path).is_some() {
+            let c = office.convert(&path, engine.as_deref())?.ok_or_else(|| format!("{name} needs Microsoft Office or LibreOffice to become a PDF."))?;
+            (c.pdf, c.engine_name)
         } else {
-            engine_.convert_file(&path, &out).map(|()| "Paginaut".into())
-        }
+            engine_.convert_file(&path, &made)?;
+            (made.clone(), "Paginaut".into())
+        };
+        let saved = engine_.pdfa_from_file(&src, &out, part, &pdfa_find);
+        let _ = std::fs::remove_file(&made);
+        let saved = saved?;
+        Ok(FileConverted { by, left: saved.left.issues.iter().map(|i| i.text.clone()).collect(), substitutes: saved.substitutes })
     })
     .await
 }

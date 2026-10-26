@@ -7731,9 +7731,11 @@ static int signer_digest(fz_context *ctx, pdf_pkcs7_signer *s_, fz_stream *in, u
 	return (int)n;
 }
 
+static void pa_keep_look(fz_context *ctx, pdf_document *doc, pdf_obj *a, int part);
+
 int fo_sign_page(fo_ctx *c, fo_page *p, int num, const float r[4], fo_sign_cb cb, void *user, size_t max,
 	const char *const dn[5], const char *reason, const char *location,
-	const unsigned char *img, size_t img_len, int flags, int lock)
+	const unsigned char *img, size_t img_len, int flags, int lock, int pdfa)
 {
 	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
 	fo_signer *s = NULL;
@@ -7814,6 +7816,9 @@ int fo_sign_page(fo_ctx *c, fo_page *p, int num, const float r[4], fo_sign_cb cb
 					pdf_dict_put_text_string(CTX, v, PDF_NAME(Location), location);
 				if (dn[0] && *dn[0])
 					pdf_dict_put_text_string(CTX, v, PDF_NAME(Name), dn[0]);
+				/* A file that says it's PDF/A stays so: the signature's look as PDF/A wants it. */
+				if (pdfa)
+					pa_keep_look(CTX, page->doc, pdf_annot_obj(CTX, w), pdfa);
 			}
 			fz_always(CTX)
 				page->doc->disallow_new_increments = was;
@@ -9139,55 +9144,1033 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 
 /* ---------------------------------------------------------------- PDF/A
  *
- * PDF/A (ISO 19005) parts 2 and 3, level b: the file looks the same wherever and whenever it's opened. MuPDF has
+ * PDF/A (ISO 19005) parts 1, 2 and 3, level b: the file looks the same wherever and whenever it's opened. MuPDF has
  * no PDF/A support, so these are our own. fo_pdfa_check looks at what a reader reaches from the catalog (actions,
  * LZW data, pictures, transfer functions...), runs every page's and appearance's content through a processor that
  * notes the fonts and device colours really used, and looks at the pages, annotations and attachments.
  * fo_pdfa_fix makes a document (a copy opened for it) conform as far as it can; the caller saves it unencrypted
  * and checks the result again. */
 
+#include <ft2build.h>
+#include FT_FREETYPE_H
+
 #define PA_GRAY 1
 #define PA_RGB 2
 #define PA_CMYK 4
 #define PA_DIGIT(ch) ((ch) >= '0' && (ch) <= '9')
 
-/* Whether an XMP packet keeps to schemas PDF/A knows (the XMP specification's, PDF/A's own), or describes others
- * with an extension schema. Properties from anywhere else (labelling tools, say) break PDF/A. */
-static int pa_xmp_known(const char *xmp)
+/* ---- XMP as PDF/A takes it (ISO 19005-1 6.7, -2 6.6): properties from the XMP schemas it lists, with values of
+ * their types, or from extension schemas the packet (or the document's) describes. The lists are veraPDF's. */
+
+/* A small XML parser for XMP packets. MuPDF's drops namespace prefixes from tag names, and XMP is all about them:
+ * this keeps names as written. Elements, attributes, text (entities decoded), CDATA; comments, processing
+ * instructions and DOCTYPEs are skipped. Throws on what isn't well formed. */
+typedef struct pa_xnode
 {
-	static const char *known[] = {
-		"adobe:ns:meta/", "http://www.w3.org/1999/02/22-rdf-syntax-ns#", "http://www.w3.org/XML/1998/namespace",
-		"http://purl.org/dc/elements/1.1/", "http://ns.adobe.com/xap/1.0/", "http://ns.adobe.com/pdf/1.3/",
-		"http://ns.adobe.com/photoshop/1.0/", "http://ns.adobe.com/tiff/1.0/", "http://ns.adobe.com/exif/1.0/",
-		"http://ns.adobe.com/camera-raw-settings/1.0/", "http://ns.adobe.com/xmp/1.0/DynamicMedia/",
-		"http://ns.adobe.com/xmp/Identifier/qual/1.0/", "http://www.aiim.org/pdfa/ns/", "http://www.aiim.org/pdfua/ns/id/", NULL
-	};
-	if (strstr(xmp, "http://www.aiim.org/pdfa/ns/schema#"))
-		return 1;
-	for (const char *p = strstr(xmp, "xmlns"); p; p = strstr(p + 5, "xmlns"))
+	char *name; /* NULL for text */
+	char *text;
+	char **atts; /* name, value, name, value... */
+	int natts;
+	struct pa_xnode *up, *down, *last, *next;
+} pa_xnode;
+
+typedef struct
+{
+	fz_pool *pool;
+	pa_xnode doc;
+} pa_xdoc;
+
+static int pa_xspace(int c)
+{
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static char *pa_xdup(fz_context *ctx, pa_xdoc *d, const char *s, size_t n)
+{
+	char *out = fz_pool_alloc(ctx, d->pool, n + 1);
+	memcpy(out, s, n);
+	out[n] = 0;
+	return out;
+}
+
+/* Text with its entities decoded. */
+static char *pa_xdecode(fz_context *ctx, pa_xdoc *d, const char *s, size_t n)
+{
+	char *out = fz_pool_alloc(ctx, d->pool, n * 2 + 1), *o = out;
+	const char *e = s + n;
+	while (s < e)
 	{
-		const char *q = p + 5, *end;
-		char quote;
-		int ok = 0;
-		if (*q == ':')
-			while (*q && *q != '=' && *q != ' ' && *q != '>')
-				q++;
-		while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')
-			q++;
-		if (*q != '=')
+		if (*s != '&')
+		{
+			*o++ = *s++;
 			continue;
-		q++;
-		while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')
-			q++;
-		quote = *q++;
-		if ((quote != '"' && quote != '\'') || !(end = strchr(q, quote)))
+		}
+		if (!strncmp(s, "&lt;", 4))
+			*o++ = '<', s += 4;
+		else if (!strncmp(s, "&gt;", 4))
+			*o++ = '>', s += 4;
+		else if (!strncmp(s, "&amp;", 5))
+			*o++ = '&', s += 5;
+		else if (!strncmp(s, "&quot;", 6))
+			*o++ = '"', s += 6;
+		else if (!strncmp(s, "&apos;", 6))
+			*o++ = '\'', s += 6;
+		else if (s[1] == '#')
+		{
+			char *end;
+			long c = s[2] == 'x' ? strtol(s + 3, &end, 16) : strtol(s + 2, &end, 10);
+			if (*end != ';' || c <= 0 || c > 0x10ffff)
+				fz_throw(ctx, FZ_ERROR_SYNTAX, "bad character reference");
+			o += fz_runetochar(o, (int)c);
+			s = end + 1;
+		}
+		else
+			fz_throw(ctx, FZ_ERROR_SYNTAX, "unknown entity");
+	}
+	*o = 0;
+	return out;
+}
+
+static pa_xnode *pa_xadd(fz_context *ctx, pa_xdoc *d, pa_xnode *parent)
+{
+	pa_xnode *n = fz_pool_alloc(ctx, d->pool, sizeof *n);
+	memset(n, 0, sizeof *n);
+	n->up = parent;
+	if (parent->last)
+		parent->last->next = n;
+	else
+		parent->down = n;
+	parent->last = n;
+	return n;
+}
+
+static void pa_xparse(fz_context *ctx, pa_xdoc *d, const char *s)
+{
+	pa_xnode *cur = &d->doc;
+	while (*s)
+	{
+		const char *start = s;
+		if (*s != '<')
+		{
+			int blank = 1;
+			while (*s && *s != '<')
+				blank &= pa_xspace(*s++);
+			if (!blank)
+			{
+				pa_xnode *t = pa_xadd(ctx, d, cur);
+				t->text = pa_xdecode(ctx, d, start, s - start);
+			}
+			continue;
+		}
+		if (!strncmp(s, "<?", 2) || !strncmp(s, "<!--", 4))
+		{
+			const char *end = strstr(s, s[1] == '?' ? "?>" : "-->");
+			if (!end)
+				fz_throw(ctx, FZ_ERROR_SYNTAX, "unterminated");
+			s = end + (s[1] == '?' ? 2 : 3);
+		}
+		else if (!strncmp(s, "<![CDATA[", 9))
+		{
+			const char *end = strstr(s, "]]>");
+			pa_xnode *t;
+			if (!end)
+				fz_throw(ctx, FZ_ERROR_SYNTAX, "unterminated");
+			t = pa_xadd(ctx, d, cur);
+			t->text = pa_xdup(ctx, d, s + 9, end - s - 9);
+			s = end + 3;
+		}
+		else if (s[1] == '!')
+		{
+			const char *end = strchr(s, '>');
+			if (!end)
+				fz_throw(ctx, FZ_ERROR_SYNTAX, "unterminated");
+			s = end + 1;
+		}
+		else if (s[1] == '/')
+		{
+			const char *name = s + 2, *end = name;
+			while (*end && *end != '>' && !pa_xspace(*end))
+				end++;
+			if (cur == &d->doc || strlen(cur->name) != (size_t)(end - name) || strncmp(cur->name, name, end - name))
+				fz_throw(ctx, FZ_ERROR_SYNTAX, "mismatched end tag");
+			while (pa_xspace(*end))
+				end++;
+			if (*end != '>')
+				fz_throw(ctx, FZ_ERROR_SYNTAX, "bad end tag");
+			s = end + 1;
+			cur = cur->up;
+		}
+		else
+		{
+			pa_xnode *el = pa_xadd(ctx, d, cur);
+			const char *name = s + 1, *end = name;
+			char *atts[64];
+			int n = 0;
+			while (*end && *end != '>' && *end != '/' && !pa_xspace(*end))
+				end++;
+			if (end == name)
+				fz_throw(ctx, FZ_ERROR_SYNTAX, "bad tag");
+			el->name = pa_xdup(ctx, d, name, end - name);
+			s = end;
+			for (;;)
+			{
+				const char *an, *ae, *v;
+				char q;
+				while (pa_xspace(*s))
+					s++;
+				if (*s == '>' || (s[0] == '/' && s[1] == '>'))
+					break;
+				an = s;
+				while (*s && *s != '=' && !pa_xspace(*s) && *s != '>' && *s != '/')
+					s++;
+				ae = s;
+				while (pa_xspace(*s))
+					s++;
+				if (*s != '=' || ae == an)
+					fz_throw(ctx, FZ_ERROR_SYNTAX, "bad attribute");
+				s++;
+				while (pa_xspace(*s))
+					s++;
+				q = *s;
+				if (q != '"' && q != '\'')
+					fz_throw(ctx, FZ_ERROR_SYNTAX, "unquoted attribute");
+				v = ++s;
+				while (*s && *s != q)
+					s++;
+				if (!*s || n + 2 > (int)nelem(atts))
+					fz_throw(ctx, FZ_ERROR_SYNTAX, "bad attribute");
+				atts[n++] = pa_xdup(ctx, d, an, ae - an);
+				atts[n++] = pa_xdecode(ctx, d, v, s - v);
+				s++;
+			}
+			el->natts = n / 2;
+			el->atts = fz_pool_alloc(ctx, d->pool, (n ? n : 1) * sizeof(char *));
+			memcpy(el->atts, atts, n * sizeof(char *));
+			if (*s == '/')
+				s += 2;
+			else
+			{
+				s++;
+				cur = el;
+			}
+		}
+	}
+	if (cur != &d->doc)
+		fz_throw(ctx, FZ_ERROR_SYNTAX, "unclosed element");
+}
+
+static pa_xdoc *pa_parse_xmp(fz_context *ctx, const char *xmp)
+{
+	fz_pool *pool = fz_new_pool(ctx);
+	pa_xdoc *d = NULL;
+	fz_try(ctx)
+	{
+		d = fz_pool_alloc(ctx, pool, sizeof *d);
+		memset(d, 0, sizeof *d);
+		d->pool = pool;
+		pa_xparse(ctx, d, xmp);
+	}
+	fz_catch(ctx)
+	{
+		fz_drop_pool(ctx, pool);
+		fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+		fz_ignore_error(ctx);
+		d = NULL;
+	}
+	return d;
+}
+
+static void pa_xdrop(fz_context *ctx, pa_xdoc *d)
+{
+	if (d)
+		fz_drop_pool(ctx, d->pool);
+}
+
+static pa_xnode *pa_xroot(pa_xdoc *d)
+{
+	pa_xnode *n = d ? d->doc.down : NULL;
+	while (n && !n->name)
+		n = n->next;
+	return n;
+}
+
+static const char *pa_xatt(pa_xnode *n, const char *name)
+{
+	for (int i = 0; n && i < n->natts; i++)
+		if (!strcmp(n->atts[2 * i], name))
+			return n->atts[2 * i + 1];
+	return NULL;
+}
+
+/* The i'th attribute's value (and its name in *name), or NULL. */
+static const char *pa_xatt_i(pa_xnode *n, int i, const char **name)
+{
+	if (!n || i >= n->natts)
+		return NULL;
+	*name = n->atts[2 * i];
+	return n->atts[2 * i + 1];
+}
+
+static pa_xnode *pa_xup(pa_xnode *n)
+{
+	return n && n->up && n->up->name ? n->up : NULL;
+}
+
+static char *pa_xtag(pa_xnode *n) { return n ? n->name : NULL; }
+static pa_xnode *pa_xdown(pa_xnode *n) { return n ? n->down : NULL; }
+static pa_xnode *pa_xnext(pa_xnode *n) { return n ? n->next : NULL; }
+static char *pa_xtext(pa_xnode *n) { return n && !n->name ? n->text : NULL; }
+
+#define PA_RDF_NS "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+#define PA_EXT_NS "http://www.aiim.org/pdfa/ns/extension/"
+#define PA_SCHEMA_NS "http://www.aiim.org/pdfa/ns/schema#"
+#define PA_PROP_NS "http://www.aiim.org/pdfa/ns/property#"
+#define PA_TYPE_NS "http://www.aiim.org/pdfa/ns/type#"
+#define PA_FIELD_NS "http://www.aiim.org/pdfa/ns/field#"
+#define PA_PDFAID_NS "http://www.aiim.org/pdfa/ns/id/"
+
+/* A schema's properties, "Name=type|...": a type left out is any; "+" before a name: from PDF/A-2 on. `part`: the
+ * first part that lists the schema. */
+static const struct
+{
+	const char *uri;
+	int part;
+	const char *props;
+} pa_xmp_schemas[] = {
+	{ "http://purl.org/dc/elements/1.1/", 1, "contributor=bag text|coverage=text|creator=seq text|date=seq date|description=lang alt|format=text|"
+		"identifier=text|language=bag text|publisher=bag text|relation=bag text|rights=lang alt|source=text|subject=bag text|title=lang alt|type=bag text" },
+	{ "http://ns.adobe.com/xap/1.0/", 1, "Advisory=bag text|BaseURL=text|CreateDate=date|CreatorTool=text|Identifier=bag text|MetadataDate=date|"
+		"ModifyDate=date|Nickname=text|Thumbnails=alt struct|+Label=text|+Rating=real" },
+	{ "http://ns.adobe.com/xap/1.0/rights/", 1, "Certificate=text|Marked=boolean|Owner=bag text|UsageTerms=lang alt|WebStatement=text" },
+	{ "http://ns.adobe.com/xap/1.0/mm/", 1, "DerivedFrom=struct|DocumentID=text|History=seq struct|InstanceID=text|ManagedFrom=struct|Manager=text|"
+		"ManageTo=text|ManageUI=text|ManagerVariant=text|RenditionClass=text|RenditionParams=text|VersionID=text|Versions=seq struct|LastURL=text|"
+		"RenditionOf=struct|SaveID=integer" },
+	{ "http://ns.adobe.com/xap/1.0/bj/", 1, "JobRef=bag struct" },
+	{ "http://ns.adobe.com/xap/1.0/t/pg/", 1, "MaxPageSize=struct|NPages=integer|+Fonts=bag struct|+Colorants=seq struct|+PlateNames=seq text" },
+	{ "http://ns.adobe.com/pdf/1.3/", 1, "Keywords=text|PDFVersion=text|Producer=text" },
+	{ "http://ns.adobe.com/photoshop/1.0/", 1, "AuthorsPosition=text|CaptionWriter=text|Category=text|City=text|Country=text|Credit=text|DateCreated=date|"
+		"Headline=text|Instructions=text|Source=text|State=text|SupplementalCategories|TransmissionReference=text|Urgency=integer" },
+	{ "http://ns.adobe.com/tiff/1.0/", 1, "ImageWidth=integer|ImageLength=integer|BitsPerSample=seq integer|Compression=integer|PhotometricInterpretation=integer|"
+		"Orientation=integer|SamplesPerPixel=integer|PlanarConfiguration=integer|YCbCrSubSampling=seq integer|YCbCrPositioning=integer|"
+		"XResolution=text|YResolution=text|ResolutionUnit=integer|TransferFunction=seq integer|WhitePoint=seq text|PrimaryChromaticities=seq text|"
+		"YCbCrCoefficients=seq text|ReferenceBlackWhite=seq text|DateTime=date|ImageDescription=lang alt|Make=text|Model=text|Software=text|"
+		"Artist=text|Copyright=lang alt" },
+	{ "http://ns.adobe.com/exif/1.0/", 1, "ExifVersion=text|FlashpixVersion=text|ColorSpace=integer|ComponentsConfiguration=seq integer|"
+		"CompressedBitsPerPixel=text|PixelXDimension=integer|PixelYDimension=integer|MakerNote=text|UserComment=lang alt|RelatedSoundFile=text|"
+		"DateTimeOriginal=date|DateTimeDigitized=date|ExposureTime=text|FNumber=text|ExposureProgram=integer|SpectralSensitivity=text|"
+		"ISOSpeedRatings=seq integer|OECF=struct|ShutterSpeedValue=text|ApertureValue=text|BrightnessValue=text|ExposureBiasValue=text|"
+		"MaxApertureValue=text|SubjectDistance=text|MeteringMode=integer|LightSource=integer|Flash=struct|FocalLength=text|SubjectArea=seq integer|"
+		"FlashEnergy=text|SpatialFrequencyResponse=struct|FocalPlaneXResolution=text|FocalPlaneYResolution=text|FocalPlaneResolutionUnit=integer|"
+		"SubjectLocation=seq integer|ExposureIndex=text|SensingMethod=integer|FileSource=integer|SceneType=integer|CFAPattern=struct|"
+		"CustomRendered=integer|ExposureMode=integer|WhiteBalance=integer|DigitalZoomRatio=text|FocalLengthIn35mmFilm=integer|"
+		"SceneCaptureType=integer|GainControl=integer|Contrast=integer|Saturation=integer|Sharpness=integer|DeviceSettingDescription=struct|"
+		"SubjectDistanceRange=integer|ImageUniqueID=text|GPSVersionID=text|GPSLatitude=text|GPSLongitude=text|GPSAltitudeRef=integer|"
+		"GPSAltitude=text|GPSTimeStamp=date|GPSSatellites=text|GPSStatus=text|GPSMeasureMode=text|GPSDOP=text|GPSSpeedRef=text|GPSSpeed=text|"
+		"GPSTrackRef=text|GPSTrack=text|GPSImgDirectionRef=text|GPSImgDirection=text|GPSMapDatum=text|GPSDestLatitude=text|GPSDestLongitude=text|"
+		"GPSDestBearingRef=text|GPSDestBearing=text|GPSDestDistanceRef=text|GPSDestDistance=text|GPSProcessingMethod=text|GPSAreaInformation=text|"
+		"GPSDifferential=integer" },
+	{ "http://ns.adobe.com/exif/1.0/aux/", 2, "Lens=text|SerialNumber=text" },
+	{ "http://ns.adobe.com/camera-raw-settings/1.0/", 2, "AutoBrightness=boolean|AutoContrast=boolean|AutoExposure=boolean|AutoShadows=boolean|"
+		"BlueHue=integer|BlueSaturation=integer|Brightness=integer|CameraProfile=text|ChromaticAberrationB=integer|ChromaticAberrationR=integer|"
+		"ColorNoiseReduction=integer|Contrast=integer|CropTop=real|CropLeft=real|CropBottom=real|CropRight=real|CropAngle=real|CropWidth=real|"
+		"CropHeight=real|CropUnits=integer|Exposure=real|GreenHue=integer|GreenSaturation=integer|HasCrop=boolean|HasSettings=boolean|"
+		"LuminanceSmoothing=integer|RawFileName=text|RedHue=integer|RedSaturation=integer|Saturation=integer|Shadows=integer|ShadowTint=integer|"
+		"Sharpness=integer|Temperature=integer|Tint=integer|ToneCurve=seq text|ToneCurveName=text|Version=text|VignetteAmount=integer|"
+		"VignetteMidpoint=integer|WhiteBalance=text" },
+	{ "http://ns.adobe.com/xmp/1.0/DynamicMedia/", 2, "projectRef=struct|videoFrameRate=text|videoFrameSize=struct|videoPixelAspectRatio=text|"
+		"videoPixelDepth=text|videoColorSpace=text|videoAlphaMode=text|videoAlphaPremultipleColor=struct|videoAlphaUnityIsTransparent=boolean|"
+		"videoCompressor=text|videoFieldOrder=text|pullDown=text|audioSampleRate=integer|audioSampleType=text|audioChannelType=text|"
+		"audioCompressor=text|speakerPlacement=text|fileDataRate=text|startTimecode=struct|altTimecode=struct|duration=struct|scene=text|"
+		"shotName=text|shotDate=date|shotLocation=text|logComment=text|markers=seq struct|contributedMedia=bag struct|absPeakAudioFilePath=text|"
+		"relativePeakAudioFilePath=text|videoModDate=date|audioModDate=date|metadataModDate=date|artist=text|album=text|trackNumber=integer|"
+		"genre=text|copyright=text|releaseDate=date|composer=text|engineer=text|tempo=real|instrument=text|introTime=struct|outCue=struct|"
+		"relativeTimestamp=struct|loop=boolean|numberOfBeats=real|key=text|stretchMode=text|timeScaleParams=struct|resampleParams=struct|"
+		"beatSpliceParams=struct|timeSignature=text|scaleType=text|tapeName=text|altTapeName=text" },
+};
+
+/* Value types XMP defines (extension schemas may use them), lower case as compared. */
+static const char *pa_xmp_simple[] = { "text", "integer", "real", "boolean", "date", "uri", "url", "xpath", "locale", "mimetype", "propername",
+	"agentname", "rational", "renditionclass", "gpscoordinate", "lang alt", "any", NULL };
+static const char *pa_xmp_structs[] = { "struct", "dimensions", "thumbnail", "font", "colorant", "resourceevent", "resourceref", "version", "job",
+	"flash", "oecf/sfr", "cfapattern", "devicesettings", "marker", "media", "projectlink", "resamplestretch", "time", "timecode",
+	"timescalestretch", "beatsplicestretch", NULL };
+
+typedef struct
+{
+	const char *ns, *name, *type;
+} pa_xprop;
+
+typedef struct
+{
+	fz_context *ctx;
+	int part;
+	char *why;
+	size_t size;
+	pa_xprop *props; /* described by extension schemas */
+	int nprops, cap;
+	const char **types; /* value types extension schemas define */
+	int ntypes, tcap;
+	int strict;         /* a property of no known type counts against the packet */
+} pa_xmpck;
+
+/* Notes the first problem found; 0, so callers can return it. */
+static int pa_xbad(pa_xmpck *x, const char *fmt, const char *a, const char *b)
+{
+	if (!x->why[0])
+		fz_snprintf(x->why, x->size, fmt, a ? a : "", b ? b : "");
+	return 0;
+}
+
+static const char *pa_local(const char *qname)
+{
+	const char *c = strchr(qname, ':');
+	return c ? c + 1 : qname;
+}
+
+static int pa_prefix_is(const char *qname, const char *prefix)
+{
+	size_t n = strlen(prefix);
+	return !strncmp(qname, prefix, n) && qname[n] == ':';
+}
+
+/* The namespace a qualified name is in, as declared on `el` or above it (NULL: none). */
+static const char *pa_ns(pa_xnode *el, const char *qname)
+{
+	const char *c = strchr(qname, ':');
+	char att[80];
+	if (!c)
+		return NULL;
+	if (c - qname == 3 && !strncmp(qname, "xml", 3))
+		return "http://www.w3.org/XML/1998/namespace";
+	if ((size_t)(c - qname) + 7 > sizeof att)
+		return NULL;
+	fz_snprintf(att, sizeof att, "xmlns:%.*s", (int)(c - qname), qname);
+	for (; el; el = pa_xup(el))
+	{
+		const char *v = pa_xatt(el, att);
+		if (v)
+			return v;
+	}
+	return NULL;
+}
+
+static int pa_is(pa_xnode *el, const char *ns, const char *local)
+{
+	const char *tag = pa_xtag(el), *uri;
+	return tag && !strcmp(pa_local(tag), local) && (uri = pa_ns(el, tag)) && !strcmp(uri, ns);
+}
+
+static pa_xnode *pa_first_el(pa_xnode *el)
+{
+	for (pa_xnode *k = pa_xdown(el); k; k = pa_xnext(k))
+		if (pa_xtag(k))
+			return k;
+	return NULL;
+}
+
+/* An element's simple value: its text (or rdf:resource); NULL when it holds elements or is a structure. */
+static const char *pa_simple(pa_xnode *el)
+{
+	const char *text = "", *pt = pa_xatt(el, "rdf:parseType");
+	pa_xnode *first = pa_first_el(el), *holder = pt && !strcmp(pt, "Resource") ? el : first && pa_is(first, PA_RDF_NS, "Description") ? first : NULL;
+	/* A qualified value: rdf:value, with qualifiers beside it. */
+	if (holder)
+	{
+		if (pa_xatt(holder, "rdf:value"))
+			return pa_xatt(holder, "rdf:value");
+		for (pa_xnode *k = pa_xdown(holder); k; k = pa_xnext(k))
+			if (pa_xtag(k) && pa_is(k, PA_RDF_NS, "value"))
+				return pa_simple(k);
+		return NULL;
+	}
+	if (pt)
+		return NULL;
+	for (pa_xnode *k = pa_xdown(el); k; k = pa_xnext(k))
+	{
+		if (pa_xtag(k))
+			return NULL;
+		text = pa_xtext(k);
+	}
+	if (!*text && pa_xatt(el, "rdf:resource"))
+		text = pa_xatt(el, "rdf:resource");
+	return text;
+}
+
+/* An ISO 8601 date as XMP writes them: YYYY[-MM[-DD[Thh:mm[:ss[.s]][Z|+hh:mm]]]]. */
+static int pa_xmp_date(const char *s)
+{
+	int n;
+	while (*s == ' ' || *s == '\n' || *s == '\r' || *s == '\t')
+		s++;
+	if (*s == '-')
+		s++;
+	for (n = 0; PA_DIGIT(*s); n++)
+		s++;
+	if (n < 1 || n > 4)
+		return 0;
+	for (int part = 0; part < 2 && *s == '-'; part++)
+	{
+		if (!PA_DIGIT(s[1]) || !PA_DIGIT(s[2]))
 			return 0;
-		for (int i = 0; known[i]; i++)
-			ok |= (size_t)(end - q) >= strlen(known[i]) && !strncmp(q, known[i], strlen(known[i]));
-		if (!ok)
+		s += 3;
+	}
+	if (*s == 'T')
+	{
+		if (!PA_DIGIT(s[1]) || !PA_DIGIT(s[2]) || s[3] != ':' || !PA_DIGIT(s[4]) || !PA_DIGIT(s[5]))
+			return 0;
+		s += 6;
+		if (*s == ':')
+		{
+			if (!PA_DIGIT(s[1]) || !PA_DIGIT(s[2]))
+				return 0;
+			s += 3;
+			if (*s == '.')
+			{
+				if (!PA_DIGIT(s[1]))
+					return 0;
+				for (s++; PA_DIGIT(*s); s++)
+					;
+			}
+		}
+		if (*s == 'Z')
+			s++;
+		else if (*s == '+' || *s == '-')
+		{
+			if (!PA_DIGIT(s[1]) || !PA_DIGIT(s[2]) || s[3] != ':' || !PA_DIGIT(s[4]) || !PA_DIGIT(s[5]))
+				return 0;
+			s += 6;
+		}
+	}
+	while (*s == ' ' || *s == '\n' || *s == '\r' || *s == '\t')
+		s++;
+	return *s == 0;
+}
+
+static int pa_number(const char *s, int real)
+{
+	int digits = 0, dot = 0;
+	if (*s == '+' || *s == '-')
+		s++;
+	for (; *s; s++)
+	{
+		if (PA_DIGIT(*s))
+			digits++;
+		else if (*s == '.' && real && !dot)
+			dot = 1;
+		else
 			return 0;
 	}
+	return digits > 0;
+}
+
+/* `type` lower case with single spaces, "Closed Choice of" and the like taken off. */
+static void pa_norm_type(const char *type, char *out, size_t size)
+{
+	size_t n = 0;
+	int space = 0;
+	for (; *type && n + 1 < size; type++)
+	{
+		if (*type == ' ' || *type == '\t' || *type == '\n' || *type == '\r')
+			space = n > 0;
+		else
+		{
+			if (space && n + 2 < size)
+				out[n++] = ' ';
+			space = 0;
+			out[n++] = (char)fz_tolower((unsigned char)*type);
+		}
+	}
+	out[n] = 0;
+	for (const char *pre = "closed choice of "; !strncmp(out, pre, strlen(pre)) || !strncmp(out, (pre = "open choice of "), strlen(pre)); pre = "closed choice of ")
+		memmove(out, out + strlen(pre), strlen(out + strlen(pre)) + 1);
+}
+
+static int pa_in(const char *s, const char **list)
+{
+	for (int i = 0; list[i]; i++)
+		if (!strcmp(s, list[i]))
+			return 1;
+	return 0;
+}
+
+static int pa_type_known(pa_xmpck *x, const char *type)
+{
+	char t[64];
+	const char *base = t;
+	pa_norm_type(type, t, sizeof t);
+	if (!strncmp(t, "bag ", 4) || !strncmp(t, "seq ", 4) || (!strncmp(t, "alt ", 4) && strcmp(t, "alt")))
+		base = t + 4;
+	if (pa_in(base, pa_xmp_simple) || pa_in(base, pa_xmp_structs))
+		return 1;
+	for (int i = 0; i < x->ntypes; i++)
+	{
+		char d[64];
+		pa_norm_type(x->types[i], d, sizeof d);
+		if (!strcmp(base, d))
+			return 1;
+	}
+	return 0;
+}
+
+/* Whether a value (an element, or an attribute's `text`) is of `type`. */
+static int pa_value_ok(pa_xmpck *x, pa_xnode *el, const char *text, const char *type, int depth)
+{
+	char t[64];
+	pa_norm_type(type, t, sizeof t);
+	if (depth > 8 || !strcmp(t, "any"))
+		return 1;
+	if (!strcmp(t, "lang alt"))
+	{
+		pa_xnode *alt = el ? pa_first_el(el) : NULL;
+		if (!alt || !pa_is(alt, PA_RDF_NS, "Alt"))
+			return 0;
+		for (pa_xnode *li = pa_xdown(alt); li; li = pa_xnext(li))
+			if (pa_xtag(li) && (!pa_is(li, PA_RDF_NS, "li") || !pa_xatt(li, "xml:lang") || !pa_simple(li)))
+				return 0;
+		return 1;
+	}
+	if (!strncmp(t, "bag ", 4) || !strncmp(t, "seq ", 4) || !strncmp(t, "alt ", 4))
+	{
+		const char *kind = t[0] == 'b' ? "Bag" : t[0] == 's' ? "Seq" : "Alt";
+		pa_xnode *arr = el ? pa_first_el(el) : NULL;
+		if (!arr || !pa_is(arr, PA_RDF_NS, kind))
+			return 0;
+		for (pa_xnode *li = pa_xdown(arr); li; li = pa_xnext(li))
+			if (pa_xtag(li) && (!pa_is(li, PA_RDF_NS, "li") || !pa_value_ok(x, li, NULL, t + 4, depth + 1)))
+				return 0;
+		return 1;
+	}
+	if (pa_in(t, pa_xmp_structs) || !pa_in(t, pa_xmp_simple))
+	{
+		/* A structure (its fields aren't checked): written out, not as plain text. */
+		const char *s;
+		if (!el)
+			return 0;
+		s = pa_simple(el);
+		if (!s)
+			return 1;
+		for (int i = 0;; i++)
+		{
+			const char *name, *v = pa_xatt_i(el, i, &name);
+			if (!v)
+				break;
+			if (strncmp(name, "xmlns", 5) && strncmp(name, "rdf:", 4) && strncmp(name, "xml:", 4))
+				return 1;
+		}
+		while (*s == ' ' || *s == '\n' || *s == '\r' || *s == '\t')
+			s++;
+		return *s == 0 && !pa_xatt(el, "rdf:resource");
+	}
+	if (el && !(text = pa_simple(el)))
+		return 0;
+	if (!strcmp(t, "boolean"))
+		return !strcmp(text, "True") || !strcmp(text, "False");
+	if (!strcmp(t, "integer"))
+		return pa_number(text, 0);
+	if (!strcmp(t, "real"))
+		return pa_number(text, 1);
+	if (!strcmp(t, "date"))
+		return pa_xmp_date(text);
 	return 1;
+}
+
+/* A structure's fields (an rdf:li or property holding one): elements, and attributes as simple values. */
+typedef struct
+{
+	const char *qname, *text;
+	pa_xnode *el;
+} pa_xfield;
+
+static int pa_fields(pa_xmpck *x, pa_xnode *holder, pa_xfield *out, int max)
+{
+	pa_xnode *body = holder;
+	int n = 0;
+	if (!pa_xatt(holder, "rdf:parseType"))
+	{
+		body = pa_first_el(holder);
+		if (!body || !pa_is(body, PA_RDF_NS, "Description"))
+			return -1;
+	}
+	for (int i = 0;; i++)
+	{
+		const char *name, *v = pa_xatt_i(body, i, &name);
+		if (!v)
+			break;
+		if (!strncmp(name, "xmlns", 5) || !strncmp(name, "rdf:", 4) || !strncmp(name, "xml:", 4))
+			continue;
+		if (n == max)
+			return -1;
+		out[n].qname = name, out[n].text = v, out[n].el = NULL;
+		n++;
+	}
+	for (pa_xnode *k = pa_xdown(body); k; k = pa_xnext(k))
+	{
+		if (!pa_xtag(k))
+			continue;
+		if (n == max)
+			return -1;
+		out[n].qname = pa_xtag(k), out[n].text = NULL, out[n].el = k;
+		n++;
+	}
+	return n;
+}
+
+/* The fields of one extension structure (pdfaSchema, pdfaProperty...): each must be one of `names` in namespace
+ * `ns` with prefix `prefix`, those in `required` present, and all text but `seqs`. Fills `vals` (NULL when absent). */
+static int pa_ext_struct(pa_xmpck *x, pa_xnode *holder, const char *ns, const char *prefix, const char **names, const char *required,
+	const char *seqs, const char **vals, pa_xnode **els)
+{
+	pa_xfield fields[16];
+	int n = pa_fields(x, holder, fields, nelem(fields));
+	if (n < 0)
+		return pa_xbad(x, "an extension schema written in a way PDF/A doesn't take (%s)", prefix, NULL);
+	for (int i = 0; names[i]; i++)
+		vals[i] = NULL, els[i] = NULL;
+	for (int f = 0; f < n; f++)
+	{
+		const char *local = pa_local(fields[f].qname), *uri = pa_ns(fields[f].el ? fields[f].el : holder, fields[f].qname);
+		int i;
+		for (i = 0; names[i]; i++)
+			if (!strcmp(local, names[i]))
+				break;
+		if (!names[i] || !uri || strcmp(uri, ns))
+			return pa_xbad(x, "an extension schema with a field PDF/A doesn't define (%s)", fields[f].qname, NULL);
+		if (!pa_prefix_is(fields[f].qname, prefix))
+			return pa_xbad(x, "an extension schema field without its required prefix (%s, not %s)", fields[f].qname, prefix);
+		if (strstr(seqs, names[i]))
+		{
+			pa_xnode *seq = fields[f].el ? pa_first_el(fields[f].el) : NULL;
+			if (!seq || !pa_is(seq, PA_RDF_NS, "Seq"))
+				return pa_xbad(x, "an extension schema's %s that isn't a list (Seq)", fields[f].qname, NULL);
+			els[i] = seq;
+			vals[i] = "";
+		}
+		else
+		{
+			const char *v = fields[f].el ? pa_simple(fields[f].el) : fields[f].text;
+			if (!v)
+				return pa_xbad(x, "an extension schema's %s that isn't text", fields[f].qname, NULL);
+			vals[i] = v;
+		}
+	}
+	for (int i = 0; names[i]; i++)
+		if (!vals[i] && strchr(required, '0' + i))
+			return pa_xbad(x, "an extension schema without its %s:%s", prefix, names[i]);
+	return 1;
+}
+
+static void pa_xadd_prop(pa_xmpck *x, const char *ns, const char *name, const char *type)
+{
+	if (x->nprops == x->cap)
+	{
+		x->cap = x->cap ? x->cap * 2 : 16;
+		x->props = fz_realloc_array(x->ctx, x->props, x->cap, pa_xprop);
+	}
+	x->props[x->nprops].ns = ns, x->props[x->nprops].name = name, x->props[x->nprops].type = type;
+	x->nprops++;
+}
+
+static void pa_xadd_type(pa_xmpck *x, const char *name)
+{
+	if (x->ntypes == x->tcap)
+	{
+		x->tcap = x->tcap ? x->tcap * 2 : 8;
+		x->types = fz_realloc_array(x->ctx, x->types, x->tcap, const char *);
+	}
+	x->types[x->ntypes++] = name;
+}
+
+/* pdfaExtension:schemas: checked, and what it describes noted. */
+static int pa_ext_schemas(pa_xmpck *x, pa_xnode *el)
+{
+	static const char *schema_f[] = { "schema", "namespaceURI", "prefix", "property", "valueType", NULL };
+	static const char *prop_f[] = { "name", "valueType", "category", "description", NULL };
+	static const char *type_f[] = { "type", "namespaceURI", "prefix", "description", "field", NULL };
+	static const char *field_f[] = { "name", "valueType", "description", NULL };
+	const char *sv[5], *pv[4], *tv[5], *fv[3];
+	pa_xnode *se[5], *pe[4], *te[5], *fe[3], *bag;
+	int first = x->nprops;
+	if (!pa_prefix_is(pa_xtag(el), "pdfaExtension"))
+		return pa_xbad(x, "extension schemas without their required prefix (pdfaExtension)", NULL, NULL);
+	bag = pa_first_el(el);
+	if (!bag || !pa_is(bag, PA_RDF_NS, "Bag"))
+		return pa_xbad(x, "extension schemas that aren't a list (Bag)", NULL, NULL);
+	for (pa_xnode *li = pa_xdown(bag); li; li = pa_xnext(li))
+	{
+		if (!pa_xtag(li))
+			continue;
+		if (!pa_is(li, PA_RDF_NS, "li") || !pa_ext_struct(x, li, PA_SCHEMA_NS, "pdfaSchema", schema_f, "012", "property valueType", sv, se))
+			return pa_xbad(x, "an extension schema written in a way PDF/A doesn't take", NULL, NULL);
+		for (pa_xnode *p = se[3] ? pa_xdown(se[3]) : NULL; p; p = pa_xnext(p))
+		{
+			if (!pa_xtag(p))
+				continue;
+			if (!pa_is(p, PA_RDF_NS, "li") || !pa_ext_struct(x, p, PA_PROP_NS, "pdfaProperty", prop_f, "0123", "", pv, pe))
+				return 0;
+			if (strcmp(pv[2], "internal") && strcmp(pv[2], "external"))
+				return pa_xbad(x, "an extension schema property whose category isn't internal or external (%s)", pv[0], NULL);
+			pa_xadd_prop(x, sv[1], pv[0], pv[1]);
+		}
+		for (pa_xnode *t = se[4] ? pa_xdown(se[4]) : NULL; t; t = pa_xnext(t))
+		{
+			if (!pa_xtag(t))
+				continue;
+			if (!pa_is(t, PA_RDF_NS, "li") || !pa_ext_struct(x, t, PA_TYPE_NS, "pdfaType", type_f, "0123", "field", tv, te))
+				return 0;
+			pa_xadd_type(x, tv[0]);
+			for (pa_xnode *f = te[4] ? pa_xdown(te[4]) : NULL; f; f = pa_xnext(f))
+			{
+				if (!pa_xtag(f))
+					continue;
+				if (!pa_is(f, PA_RDF_NS, "li") || !pa_ext_struct(x, f, PA_FIELD_NS, "pdfaField", field_f, "012", "", fv, fe))
+					return 0;
+				pa_xadd_prop(x, "", fv[0], fv[1]); /* a field: only its type is checked */
+			}
+		}
+	}
+	/* Every type named must be defined (types may come from any schema in the container). */
+	for (int i = first; i < x->nprops; i++)
+		if (!pa_type_known(x, x->props[i].type))
+			return pa_xbad(x, "an extension schema property of a type nothing defines (%s: %s)", x->props[i].name, x->props[i].type);
+	return 1;
+}
+
+/* One property (an element, or an attribute `qname`=`text` on `scope`). */
+static int pa_xprop_ok(pa_xmpck *x, pa_xnode *scope, const char *qname, pa_xnode *el, const char *text)
+{
+	const char *uri = pa_ns(el ? el : scope, qname), *local = pa_local(qname);
+	if (!uri)
+		return pa_xbad(x, "a property in no namespace (%s)", qname, NULL);
+	if (!strcmp(uri, PA_EXT_NS))
+		return !strcmp(local, "schemas") ? 1 : pa_xbad(x, "%s isn't part of the extension schema container", qname, NULL);
+	if (!strcmp(uri, PA_PDFAID_NS))
+	{
+		const char *v = el ? pa_simple(el) : text;
+		if (!pa_prefix_is(qname, "pdfaid"))
+			return pa_xbad(x, "PDF/A identification without its required prefix (%s, not pdfaid:)", qname, NULL);
+		if (!v)
+			return pa_xbad(x, "%s that isn't text", qname, NULL);
+		if (!strcmp(local, "part"))
+			return pa_number(v, 0) ? 1 : pa_xbad(x, "pdfaid:part that isn't a number (%s)", v, NULL);
+		if (!strcmp(local, "conformance"))
+			return !strcmp(v, "A") || !strcmp(v, "B") || (x->part >= 2 && !strcmp(v, "U")) ? 1 : pa_xbad(x, "pdfaid:conformance that isn't a level PDF/A has (%s)", v, NULL);
+		if (!strcmp(local, "amd") || (!strcmp(local, "corr") && x->part >= 2))
+			return 1;
+		return pa_xbad(x, "%s isn't a PDF/A identification property", qname, NULL);
+	}
+	for (size_t s = 0; s < nelem(pa_xmp_schemas); s++)
+	{
+		const char *p;
+		size_t n = strlen(local);
+		if (strcmp(uri, pa_xmp_schemas[s].uri) || pa_xmp_schemas[s].part > x->part)
+			continue;
+		for (p = pa_xmp_schemas[s].props; p && *p; p = strchr(p, '|') ? strchr(p, '|') + 1 : NULL)
+		{
+			const char *name = p, *eq, *end = strchr(p, '|');
+			char type[32] = "any";
+			if (*name == '+')
+			{
+				if (x->part < 2)
+					continue;
+				name++;
+			}
+			if (!end)
+				end = p + strlen(p);
+			eq = memchr(name, '=', end - name);
+			if ((size_t)((eq ? eq : end) - name) != n || strncmp(name, local, n))
+				continue;
+			if (eq)
+				fz_strlcpy(type, eq + 1, fz_mini((int)(end - eq), (int)sizeof type));
+			else if (x->strict)
+				return pa_xbad(x, "%s, of a kind Paginaut doesn't check", qname, NULL);
+			return pa_value_ok(x, el, text, type, 0) ? 1 : pa_xbad(x, "%s with a value of the wrong kind (it should be %s)", qname, type);
+		}
+		break; /* a schema PDF/A lists, not a property it has: an extension schema may still describe it */
+	}
+	for (int i = 0; i < x->nprops; i++)
+		if (!strcmp(x->props[i].ns, uri) && !strcmp(x->props[i].name, local))
+			return pa_value_ok(x, el, text, x->props[i].type, 0) ? 1 : pa_xbad(x, "%s with a value of the wrong kind (it should be %s)", qname, x->props[i].type);
+	return pa_xbad(x, "%s, a property PDF/A doesn't know and no extension schema describes", qname, NULL);
+}
+
+static pa_xnode *pa_rdf(pa_xnode *root)
+{
+	if (root && pa_is(root, PA_RDF_NS, "RDF"))
+		return root;
+	if (root && pa_is(root, "adobe:ns:meta/", "xmpmeta"))
+		for (pa_xnode *k = pa_xdown(root); k; k = pa_xnext(k))
+			if (pa_xtag(k) && pa_is(k, PA_RDF_NS, "RDF"))
+				return k;
+	return NULL;
+}
+
+/* The extension schemas in a parsed packet, noted. */
+static int pa_xmp_extensions(pa_xmpck *x, pa_xnode *rdf)
+{
+	for (pa_xnode *d = pa_xdown(rdf); d; d = pa_xnext(d))
+		for (pa_xnode *p = pa_xtag(d) ? pa_xdown(d) : NULL; p; p = pa_xnext(p))
+		{
+			const char *tag = pa_xtag(p), *uri;
+			if (tag && (uri = pa_ns(p, tag)) && !strcmp(uri, PA_EXT_NS) && !strcmp(pa_local(tag), "schemas") && !pa_ext_schemas(x, p))
+				return 0;
+		}
+	return 1;
+}
+
+/* What an XMP packet breaks for PDF/A-`part` ("" nothing), into `why`. Extension schemas in `main` (the document's
+ * packet, when checking a page's or picture's) count too. 1 when it's fine. */
+static int pa_xmp_check(fz_context *ctx, const char *xmp, int part, const char *main, int strict, char *why, size_t size)
+{
+	pa_xmpck x = { ctx, part, why, size, NULL, 0, 0, NULL, 0, 0, strict };
+	pa_xdoc *dom = NULL, *maindom = NULL;
+	pa_xnode *rdf;
+	const char *head = strstr(xmp, "<?xpacket");
+	int ok = 1;
+	why[0] = 0;
+	if (head)
+	{
+		const char *end = strstr(head, "?>");
+		size_t n = end ? (size_t)(end - head) : strlen(head);
+		for (const char *a = head; a < head + n; a++)
+			if ((!strncmp(a, " bytes=", 7) || !strncmp(a, " encoding=", 10)) && a < head + n)
+				return pa_xbad(&x, "an XMP packet header with a bytes or encoding attribute", NULL, NULL);
+	}
+	fz_var(dom);
+	fz_var(maindom);
+	fz_try(ctx)
+	{
+		dom = pa_parse_xmp(ctx, xmp);
+		rdf = pa_rdf(pa_xroot(dom));
+		if (!rdf)
+			ok = pa_xbad(&x, "XMP metadata that can't be read", NULL, NULL);
+		if (ok && main && main != xmp)
+		{
+			pa_xnode *mrdf;
+			maindom = pa_parse_xmp(ctx, main);
+			mrdf = pa_rdf(pa_xroot(maindom));
+			if (mrdf)
+			{
+				pa_xmpck m = x;
+				char ignored[8];
+				m.why = ignored, m.size = sizeof ignored, ignored[0] = 0;
+				pa_xmp_extensions(&m, mrdf);
+				x.props = m.props, x.nprops = m.nprops, x.cap = m.cap, x.types = m.types, x.ntypes = m.ntypes, x.tcap = m.tcap;
+			}
+		}
+		if (ok)
+			ok = pa_xmp_extensions(&x, rdf);
+		for (pa_xnode *d = ok ? pa_xdown(rdf) : NULL; d && ok; d = pa_xnext(d))
+		{
+			if (!pa_xtag(d))
+				continue;
+			if (!pa_is(d, PA_RDF_NS, "Description"))
+			{
+				ok = pa_xbad(&x, "XMP metadata written in a way PDF/A doesn't take (%s)", pa_xtag(d), NULL);
+				break;
+			}
+			for (int i = 0; ok; i++)
+			{
+				const char *name, *v = pa_xatt_i(d, i, &name);
+				if (!v)
+					break;
+				if (!strncmp(name, "xmlns", 5) || !strncmp(name, "rdf:", 4) || !strncmp(name, "xml:", 4))
+					continue;
+				ok = pa_xprop_ok(&x, d, name, NULL, v);
+			}
+			for (pa_xnode *p = pa_xdown(d); p && ok; p = pa_xnext(p))
+				if (pa_xtag(p))
+					ok = pa_xprop_ok(&x, d, pa_xtag(p), p, NULL);
+		}
+	}
+	fz_always(ctx)
+	{
+		fz_free(ctx, x.props);
+		fz_free(ctx, x.types);
+		pa_xdrop(ctx, maindom);
+		pa_xdrop(ctx, dom);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return ok;
+}
+
+/* Whether the packet has property `local` of schema `uri` (prefix `qname`'s, as written) with a value of its type:
+ * what may be kept when the XMP is written again. */
+static int pa_xmp_has_good(fz_context *ctx, pa_xnode *rdf, int part, const char *qname)
+{
+	pa_xmpck x = { ctx, part, NULL, 0, NULL, 0, 0, NULL, 0, 0, 1 };
+	char why[8] = "";
+	x.why = why, x.size = sizeof why;
+	for (pa_xnode *d = pa_xdown(rdf); d; d = pa_xnext(d))
+	{
+		const char *v;
+		if (!pa_xtag(d) || !pa_is(d, PA_RDF_NS, "Description"))
+			continue;
+		if ((v = pa_xatt(d, qname)) != NULL)
+			return pa_xprop_ok(&x, d, qname, NULL, v);
+		for (pa_xnode *p = pa_xdown(d); p; p = pa_xnext(p))
+			if (pa_xtag(p) && !strcmp(pa_xtag(p), qname))
+				return pa_xprop_ok(&x, d, qname, p, NULL);
+	}
+	return 0;
+}
+
+/* A packet's width in bytes a character: 4 (UTF-32), 2 (UTF-16) or 1 (UTF-8), by its byte order mark or its "<". */
+static int pa_xmp_width(fz_buffer *buf)
+{
+	const unsigned char *d = buf->data;
+	if (buf->len >= 4 && ((d[0] == '<' && !d[1] && !d[2] && !d[3]) || (!d[0] && !d[1] && !d[2] && d[3] == '<') ||
+			(d[0] == 0xff && d[1] == 0xfe && !d[2] && !d[3]) || (!d[0] && !d[1] && d[2] == 0xfe && d[3] == 0xff)))
+		return 4;
+	if (buf->len >= 2 && ((d[0] == 0xff && d[1] == 0xfe) || (d[0] == 0xfe && d[1] == 0xff) || (d[0] == '<' && !d[1]) || (!d[0] && d[1] == '<')))
+		return 2;
+	return 1;
+}
+
+static int pa_xmp_wide(fz_buffer *buf)
+{
+	return pa_xmp_width(buf) > 1;
+}
+
+/* A packet as UTF-8 text, whatever its encoding (UTF-8, -16 or -32). */
+static char *pa_xmp_decode(fz_context *ctx, fz_buffer *buf)
+{
+	const unsigned char *d = buf->data;
+	size_t n = buf->len, i = 0;
+	int be, w = pa_xmp_width(buf);
+	fz_buffer *out;
+	char *s = NULL;
+	if (w == 1)
+		return buffer_to_string(ctx, buf);
+	be = !d[0] || (d[0] == 0xfe && d[1] == 0xff); /* a zero first, or a big-endian byte order mark */
+	if (d[0] == 0xff || d[0] == 0xfe || (w == 4 && d[2] == 0xfe))
+		i = w;
+	out = fz_new_buffer(ctx, n);
+	fz_try(ctx)
+	{
+		for (; w == 4 && i + 3 < n; i += 4)
+			fz_append_rune(ctx, out, be ? (d[i] << 24) | (d[i + 1] << 16) | (d[i + 2] << 8) | d[i + 3] : d[i] | (d[i + 1] << 8) | (d[i + 2] << 16) | (d[i + 3] << 24));
+		for (; w == 2 && i + 1 < n; i += 2)
+		{
+			int c = be ? (d[i] << 8) | d[i + 1] : d[i] | (d[i + 1] << 8);
+			if (c >= 0xd800 && c < 0xdc00 && i + 3 < n)
+			{
+				int lo = be ? (d[i + 2] << 8) | d[i + 3] : d[i + 2] | (d[i + 3] << 8);
+				if (lo >= 0xdc00 && lo < 0xe000)
+				{
+					c = 0x10000 + ((c - 0xd800) << 10) + (lo - 0xdc00);
+					i += 2;
+				}
+			}
+			fz_append_rune(ctx, out, c);
+		}
+		s = buffer_to_string(ctx, out);
+	}
+	fz_always(ctx)
+		fz_drop_buffer(ctx, out);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return s;
 }
 
 static char *pa_xmp_text(fz_context *ctx, pdf_obj *md)
@@ -9195,7 +10178,7 @@ static char *pa_xmp_text(fz_context *ctx, pdf_obj *md)
 	fz_buffer *buf = pdf_load_stream(ctx, md);
 	char *s = NULL;
 	fz_try(ctx)
-		s = buffer_to_string(ctx, buf);
+		s = pa_xmp_decode(ctx, buf);
 	fz_always(ctx)
 		fz_drop_buffer(ctx, buf);
 	fz_catch(ctx)
@@ -9203,10 +10186,11 @@ static char *pa_xmp_text(fz_context *ctx, pdf_obj *md)
 	return s;
 }
 
-/* XMP on a page, picture or form whose properties PDF/A doesn't know (or that can't be read). */
-static int pa_xmp_foreign(fz_context *ctx, pdf_obj *md)
+/* XMP on a page, picture or form that PDF/A-`part` can't take (or that can't be read). `strict` (fixing): or that has
+ * properties Paginaut can't check. */
+static int pa_xmp_foreign(fz_context *ctx, pdf_obj *md, int part, const char *main, int strict)
 {
-	char *s = NULL;
+	char *s = NULL, why[8];
 	int bad = 0;
 	if (!pdf_is_stream(ctx, md))
 		return 0;
@@ -9214,7 +10198,7 @@ static int pa_xmp_foreign(fz_context *ctx, pdf_obj *md)
 	fz_try(ctx)
 	{
 		s = pa_xmp_text(ctx, md);
-		bad = !pa_xmp_known(s);
+		bad = !pa_xmp_check(ctx, s, part, main, strict, why, sizeof why);
 	}
 	fz_always(ctx)
 		fz_free(ctx, s);
@@ -9258,19 +10242,59 @@ static void pa_add(fz_context *ctx, pa_list *l, int x)
 	l->v[l->n++] = x;
 }
 
+/* A font content uses: the codes (simple fonts) or CIDs it shows, for its widths and glyphs. */
+typedef struct
+{
+	pdf_obj *font;       /* the font dictionary */
+	pdf_font_desc *fd;   /* as loaded to draw */
+	unsigned char *seen; /* drawn (rendering mode other than 3), a bit each */
+	unsigned char *any;  /* shown in any mode */
+	int cid;             /* Type 0: CIDs, 65536 of them; otherwise codes, 256 */
+	float *t3w;          /* Type 3: each code's width from its glyph procedure (-1 none) */
+	int page;
+} pa_use;
+
 typedef struct
 {
 	int part;
 	int fix;
 	int oi;          /* components of the PDF/A output intent's profile; 0 none */
-	int bad_oi;      /* PDF/A output intents that differ, or one without a profile */
+	int bad_oi;      /* PDF/A output intents that differ, or one with a profile PDF/A can't take */
 	int encrypted, version, xfa, need_ap;
 	int scripts, actions, lzw, lzw_left, external, postscript, reference, images, transfer, transparency;
 	int attachments, layers, object_meta, glyph_lists, untyped_fonts;
+	int gstate;      /* graphics settings PDF/A doesn't allow (rendering intents, blend modes, halftones, overprint) */
+	int content;     /* the same in page content, which isn't rewritten */
+	int limits;      /* numbers, names, strings or nesting beyond PDF/A's limits */
+	int boxes, big_boxes; /* page boundaries under 3 units (fixed) or over 14 400 */
+	int inherited;   /* content using resources it doesn't have itself */
+	int signatures;  /* signature values taken out (fixing) */
+	int widths;      /* fonts whose widths don't match their programs */
+	int glyphs;      /* fonts asked for glyphs they haven't got */
+	int tt_encoding, tt_encoding_left; /* TrueType fonts with an encoding PDF/A doesn't allow: put right, or not */
+	int cmaps;       /* CID fonts whose character collection differs from their CMap's */
+	int jpx;         /* JPEG 2000 pictures PDF/A can't take as they are */
+	int opm;         /* overprint mode 1 with overprinting on (fixing: mode 0; wrong where ICC-based CMYK is drawn) */
+	int groups;      /* PDF/A-1: transparency groups (taken off when nothing is see-through) */
+	int ocg;         /* PDF/A-1: layers (it has none) */
+	int icc;         /* ICC profiles PDF/A can't take (too new, or not for colours) */
+	int deep;        /* PDF/A-1: 16-bit pictures */
+	int annot_kinds; /* PDF/A-1: comments of kinds it hasn't got, that have a look (kept as stamps) */
+	int annot_colours; /* PDF/A-1: comment colours without an RGB output intent */
+	int glyph_sets;  /* PDF/A-1: font subsets without an exact list of their glyphs */
 	char action_names[160];
-	pa_list gray, rgb, cmyk, font_pages, annot_types, annot_flags, annot_ap;
+	pa_list gray, rgb, cmyk, font_pages, annot_types, annot_flags, annot_ap, glyph_pages, limit_pages;
 	pdf_obj *fonts;  /* fonts used and not embedded */
-	pdf_obj *owners; /* [where mask kind]: where device colour is used uncovered (kind 1 resources, 0 their owner) */
+	pdf_obj *owners; /* [where mask kind]: where device colour is used uncovered (kind 1 resources, 0 their owner,
+	                  * 2 a transparency group's blending space) */
+	pdf_obj *inherits; /* [owner resources]: what content without resources of its own uses */
+	pdf_obj *afs;    /* file specifications some object's AF array associates */
+	pdf_obj *ps_streams, *ps_alts; /* PostScript streams; those only forms' PS entries name (counted where used) */
+	pdf_obj *icc_good, *icc_bad; /* ICC profiles checked (each once) */
+	pdf_obj *icc_std[5];  /* the standard profile put in for each number of components (fixing: one each) */
+	char *xmp;       /* the document's XMP, or NULL */
+	pa_use *uses;
+	int nuses, ucap;
 } pa_found;
 
 static void pa_found_drop(fz_context *ctx, pa_found *f)
@@ -9282,8 +10306,28 @@ static void pa_found_drop(fz_context *ctx, pa_found *f)
 	fz_free(ctx, f->annot_types.v);
 	fz_free(ctx, f->annot_flags.v);
 	fz_free(ctx, f->annot_ap.v);
+	fz_free(ctx, f->glyph_pages.v);
+	fz_free(ctx, f->limit_pages.v);
 	pdf_drop_obj(ctx, f->fonts);
 	pdf_drop_obj(ctx, f->owners);
+	pdf_drop_obj(ctx, f->inherits);
+	pdf_drop_obj(ctx, f->afs);
+	pdf_drop_obj(ctx, f->ps_streams);
+	pdf_drop_obj(ctx, f->ps_alts);
+	pdf_drop_obj(ctx, f->icc_good);
+	pdf_drop_obj(ctx, f->icc_bad);
+	for (int i = 0; i < 5; i++)
+		pdf_drop_obj(ctx, f->icc_std[i]);
+	fz_free(ctx, f->xmp);
+	for (int i = 0; i < f->nuses; i++)
+	{
+		pdf_drop_obj(ctx, f->uses[i].font);
+		pdf_drop_font(ctx, f->uses[i].fd);
+		fz_free(ctx, f->uses[i].seen);
+		fz_free(ctx, f->uses[i].any);
+		fz_free(ctx, f->uses[i].t3w);
+	}
+	fz_free(ctx, f->uses);
 }
 
 static void pa_note_action(pa_found *f, const char *name)
@@ -9332,7 +10376,9 @@ static int pa_font_embedded(fz_context *ctx, pdf_obj *font)
 	if (pdf_name_eq(ctx, pdf_dict_get(ctx, font, PDF_NAME(Subtype)), PDF_NAME(Type0)))
 		font = pdf_array_get(ctx, pdf_dict_get(ctx, font, PDF_NAME(DescendantFonts)), 0);
 	desc = pdf_dict_get(ctx, font, PDF_NAME(FontDescriptor));
-	return pdf_dict_get(ctx, desc, PDF_NAME(FontFile)) || pdf_dict_get(ctx, desc, PDF_NAME(FontFile2)) || pdf_dict_get(ctx, desc, PDF_NAME(FontFile3));
+	/* A font file that isn't a stream (a broken reference) embeds nothing. */
+	return pdf_is_stream(ctx, pdf_dict_get(ctx, desc, PDF_NAME(FontFile))) || pdf_is_stream(ctx, pdf_dict_get(ctx, desc, PDF_NAME(FontFile2))) ||
+		pdf_is_stream(ctx, pdf_dict_get(ctx, desc, PDF_NAME(FontFile3)));
 }
 
 /* The content processor: fonts and device colours as content uses them. */
@@ -9342,7 +10388,14 @@ typedef struct
 	pdf_document *doc;
 	pa_found *f;
 	int page;
-	pdf_obj *owner; /* the page, form, pattern or appearance whose content is being read */
+	pdf_obj *owner;   /* the page, form, pattern, appearance or Type 3 font whose content is being read */
+	pdf_obj *inherit; /* that owner, when it has no resources of its own (it uses its caller's) */
+	int cur;          /* the font in use (f->uses), or -1 */
+	int render;       /* text rendering mode */
+	int depth;        /* q nesting */
+	int saved[32][2]; /* rendering modes and fonts saved by q */
+	int uncoloured;   /* in a Type 3 glyph that takes its colour from the text (d1): colours don't count */
+	float t3wx;       /* a Type 3 glyph's width, from d0 or d1 */
 } pa_proc;
 
 static void pa_colour(fz_context *ctx, pa_proc *p, int fam)
@@ -9352,7 +10405,7 @@ static void pa_colour(fz_context *ctx, pa_proc *p, int fam)
 	/* Default colour spaces count from the resources of the content using them (not a page's, inside a form). */
 	pdf_obj *spaces = pdf_dict_get(ctx, rs ? rs->resources : NULL, PDF_NAME(ColorSpace)), *where, *entry;
 	int missing = 0, kind, n;
-	if (!fam)
+	if (!fam || p->uncoloured)
 		return;
 	if ((fam & PA_GRAY) && !f->oi && !pdf_dict_gets(ctx, spaces, "DefaultGray"))
 		missing |= PA_GRAY;
@@ -9389,34 +10442,82 @@ static void pa_colour(fz_context *ctx, pa_proc *p, int fam)
 	pdf_array_push_int(ctx, entry, kind);
 }
 
+static void pa_uses_resources(fz_context *ctx, pa_proc *p)
+{
+	pdf_obj *res = p->super.rstack ? p->super.rstack->resources : NULL, *list = p->f->inherits;
+	if (!p->inherit || !res)
+		return;
+	for (int i = 0; i < pdf_array_len(ctx, list); i++)
+		if (pdf_resolve_indirect(ctx, pdf_array_get(ctx, pdf_array_get(ctx, list, i), 0)) == pdf_resolve_indirect(ctx, p->inherit))
+			return;
+	list = pdf_array_push_array(ctx, list, 2);
+	pdf_array_push(ctx, list, p->inherit);
+	pdf_array_push(ctx, list, res);
+	p->f->inherited++;
+}
+
+/* A transparency group's blending colour space: device colours there need the output intent to cover them. */
+static void pa_group(fz_context *ctx, pa_proc *p, pdf_obj *owner)
+{
+	pa_found *f = p->f;
+	pdf_obj *g = pdf_dict_get(ctx, owner, PDF_NAME(Group)), *entry;
+	int fam, missing;
+	if (!pdf_name_eq(ctx, pdf_dict_get(ctx, g, PDF_NAME(S)), PDF_NAME(Transparency)))
+		return;
+	fam = pa_family(ctx, pdf_dict_get(ctx, g, PDF_NAME(CS)), 0);
+	missing = fam & ((f->oi ? 0 : PA_GRAY) | (f->oi != 3 ? PA_RGB : 0) | (f->oi != 4 ? PA_CMYK : 0));
+	if (!missing)
+		return;
+	pa_add(ctx, missing & PA_GRAY ? &f->gray : missing & PA_RGB ? &f->rgb : &f->cmyk, p->page);
+	for (int i = 0; i < pdf_array_len(ctx, f->owners); i++)
+		if (pdf_resolve_indirect(ctx, pdf_array_get(ctx, pdf_array_get(ctx, f->owners, i), 0)) == pdf_resolve_indirect(ctx, owner) &&
+			pdf_array_get_int(ctx, pdf_array_get(ctx, f->owners, i), 2) == 2)
+			return;
+	entry = pdf_array_push_array(ctx, f->owners, 3);
+	pdf_array_push(ctx, entry, owner);
+	pdf_array_push_int(ctx, entry, missing);
+	pdf_array_push_int(ctx, entry, 2);
+}
+
 static int pa_named(fz_context *ctx, pa_proc *p, const char *name)
 {
 	if (!name)
 		return 0;
-	if (!strcmp(name, "DeviceGray"))
+	if (!strcmp(name, "DeviceGray") || !strcmp(name, "G"))
 		return PA_GRAY;
-	if (!strcmp(name, "DeviceRGB"))
+	if (!strcmp(name, "DeviceRGB") || !strcmp(name, "RGB"))
 		return PA_RGB;
-	if (!strcmp(name, "DeviceCMYK"))
+	if (!strcmp(name, "DeviceCMYK") || !strcmp(name, "CMYK"))
 		return PA_CMYK;
+	if (!strcmp(name, "Pattern"))
+		return 0;
+	pa_uses_resources(ctx, p);
 	return pa_family(ctx, pdf_lookup_resource(ctx, p->super.rstack, PDF_NAME(ColorSpace), name), 0);
 }
 
 static void pa_contents(fz_context *ctx, pa_proc *p, pdf_obj *owner, pdf_obj *res, pdf_obj *stm)
 {
-	pdf_obj *saved = p->owner;
+	pdf_obj *saved = p->owner, *saved_inherit = p->inherit;
+	int cur = p->cur, render = p->render, depth = p->depth;
 	if (pdf_mark_obj(ctx, owner))
 		return;
 	fz_try(ctx)
 	{
 		p->owner = owner;
+		p->depth = 0; /* nesting is counted in each content stream */
+		/* A page's resources may come from the page tree (noted by the caller); anything else without its own uses
+		 * its caller's. */
+		p->inherit = !res && !pdf_name_eq(ctx, pdf_dict_get(ctx, owner, PDF_NAME(Type)), PDF_NAME(Page)) ? owner : NULL;
 		if (!res && p->super.rstack)
 			res = p->super.rstack->resources;
+		pa_group(ctx, p, owner);
 		pdf_process_contents(ctx, &p->super, p->doc, res, stm, NULL, NULL);
 	}
 	fz_always(ctx)
 	{
 		p->owner = saved;
+		p->inherit = saved_inherit;
+		p->cur = cur, p->render = render, p->depth = depth;
 		pdf_unmark_obj(ctx, owner);
 	}
 	fz_catch(ctx)
@@ -9429,6 +10530,7 @@ static void pa_contents(fz_context *ctx, pa_proc *p, pdf_obj *owner, pdf_obj *re
 static void pa_pattern(fz_context *ctx, pa_proc *p, const char *name)
 {
 	pdf_obj *pat = pdf_lookup_resource(ctx, p->super.rstack, PDF_NAME(Pattern), name);
+	pa_uses_resources(ctx, p);
 	if (pdf_dict_get_int(ctx, pat, PDF_NAME(PatternType)) == 2)
 		pa_colour(ctx, p, pa_family(ctx, pdf_dict_getp(ctx, pat, "Shading/ColorSpace"), 0));
 	else if (pdf_is_stream(ctx, pat))
@@ -9446,13 +10548,18 @@ static void pa_op_sh(fz_context *ctx, pdf_processor *proc, const char *name, fz_
 {
 	pa_proc *p = (pa_proc *)proc;
 	(void)shade;
+	pa_uses_resources(ctx, p);
 	pa_colour(ctx, p, pa_family(ctx, pdf_dict_get(ctx, pdf_lookup_resource(ctx, p->super.rstack, PDF_NAME(Shading), name), PDF_NAME(ColorSpace)), 0));
 }
 
 static void pa_op_BI(fz_context *ctx, pdf_processor *proc, fz_image *image, const char *csname)
 {
-	(void)image;
-	pa_colour(ctx, (pa_proc *)proc, pa_named(ctx, (pa_proc *)proc, csname));
+	pa_proc *p = (pa_proc *)proc;
+	fz_compressed_buffer *cb = fz_compressed_image_buffer(ctx, image);
+	pa_colour(ctx, p, pa_named(ctx, p, csname));
+	/* An inline picture is part of the content (not rewritten): what PDF/A forbids in one stays. */
+	if (image->interpolate || (cb && cb->params.type == FZ_IMAGE_LZW))
+		p->f->content++;
 }
 
 static void pa_op_Do_image(fz_context *ctx, pdf_processor *proc, const char *name, fz_image *image)
@@ -9460,24 +10567,213 @@ static void pa_op_Do_image(fz_context *ctx, pdf_processor *proc, const char *nam
 	pa_proc *p = (pa_proc *)proc;
 	pdf_obj *img = pdf_lookup_resource(ctx, p->super.rstack, PDF_NAME(XObject), name);
 	(void)image;
+	pa_uses_resources(ctx, p);
 	if (!pdf_dict_get_bool(ctx, img, PDF_NAME(ImageMask)))
 		pa_colour(ctx, p, pa_family(ctx, pdf_dict_get(ctx, img, PDF_NAME(ColorSpace)), 0));
+	pa_group(ctx, p, img);
 }
 
 static void pa_op_Do_form(fz_context *ctx, pdf_processor *proc, const char *name, pdf_obj *form)
 {
+	pa_found *f = ((pa_proc *)proc)->f;
 	(void)name;
+	if (!f->fix && (pdf_dict_gets(ctx, form, "Subtype2") || pdf_dict_get(ctx, form, PDF_NAME(PS))))
+		f->postscript++;
+	pa_uses_resources(ctx, (pa_proc *)proc);
 	pa_contents(ctx, (pa_proc *)proc, form, pdf_xobject_resources(ctx, form), form);
+}
+
+static void pa_op_gs_begin(fz_context *ctx, pdf_processor *proc, const char *name, pdf_obj *gs)
+{
+	(void)name;
+	(void)gs;
+	pa_uses_resources(ctx, (pa_proc *)proc);
+}
+
+static void pa_op_ri(fz_context *ctx, pdf_processor *proc, const char *intent)
+{
+	if (strcmp(intent, "RelativeColorimetric") && strcmp(intent, "AbsoluteColorimetric") && strcmp(intent, "Perceptual") && strcmp(intent, "Saturation"))
+		((pa_proc *)proc)->f->content++;
+}
+
+static void pa_op_q(fz_context *ctx, pdf_processor *proc)
+{
+	pa_proc *p = (pa_proc *)proc;
+	(void)ctx;
+	if (p->depth < (int)nelem(p->saved))
+		p->saved[p->depth][0] = p->render, p->saved[p->depth][1] = p->cur;
+	/* PDF/A-1 and -2 allow 28 levels of q. */
+	if (++p->depth == 29)
+	{
+		p->f->limits++;
+		pa_add(ctx, &p->f->limit_pages, p->page);
+	}
+}
+
+static void pa_op_Q(fz_context *ctx, pdf_processor *proc)
+{
+	pa_proc *p = (pa_proc *)proc;
+	(void)ctx;
+	if (p->depth > 0 && --p->depth < (int)nelem(p->saved))
+		p->render = p->saved[p->depth][0], p->cur = p->saved[p->depth][1];
+}
+
+static void pa_op_Tr(fz_context *ctx, pdf_processor *proc, int render)
+{
+	(void)ctx;
+	((pa_proc *)proc)->render = render;
+}
+
+static void pa_op_d0(fz_context *ctx, pdf_processor *proc, float wx, float wy)
+{
+	(void)ctx;
+	(void)wy;
+	((pa_proc *)proc)->t3wx = wx;
+}
+
+static void pa_op_d1(fz_context *ctx, pdf_processor *proc, float wx, float wy, float llx, float lly, float urx, float ury)
+{
+	pa_proc *p = (pa_proc *)proc;
+	(void)ctx;
+	(void)wy, (void)llx, (void)lly, (void)urx, (void)ury;
+	p->t3wx = wx;
+	p->uncoloured = 1;
+}
+
+/* Text shown with the current font: its codes (or CIDs) noted. */
+static void pa_show(fz_context *ctx, pa_proc *p, unsigned char *s, size_t len)
+{
+	pa_use *u;
+	unsigned char *e = s + len;
+	if (p->cur < 0)
+		return;
+	u = &p->f->uses[p->cur];
+	if (len > 32767)
+	{
+		p->f->limits++;
+		pa_add(ctx, &p->f->limit_pages, p->page);
+	}
+	while (s < e)
+	{
+		unsigned int cpt = *s;
+		int n = 1, code = *s;
+		if (u->cid)
+		{
+			n = pdf_decode_cmap(u->fd->encoding, s, e, &cpt);
+			code = pdf_lookup_cmap(u->fd->encoding, cpt);
+			if (n <= 0)
+				n = 1;
+		}
+		if (code >= 0 && code < (u->cid ? 65536 : 256))
+		{
+			u->any[code >> 3] |= 1 << (code & 7);
+			if (p->render != 3)
+				u->seen[code >> 3] |= 1 << (code & 7);
+		}
+		s += n;
+	}
+}
+
+static void pa_op_Tj(fz_context *ctx, pdf_processor *proc, char *str, size_t len) { pa_show(ctx, (pa_proc *)proc, (unsigned char *)str, len); }
+static void pa_op_squote(fz_context *ctx, pdf_processor *proc, char *str, size_t len) { pa_show(ctx, (pa_proc *)proc, (unsigned char *)str, len); }
+
+static void pa_op_dquote(fz_context *ctx, pdf_processor *proc, float aw, float ac, char *str, size_t len)
+{
+	(void)aw;
+	(void)ac;
+	pa_show(ctx, (pa_proc *)proc, (unsigned char *)str, len);
+}
+
+static void pa_op_TJ(fz_context *ctx, pdf_processor *proc, pdf_obj *array)
+{
+	for (int i = 0; i < pdf_array_len(ctx, array); i++)
+	{
+		pdf_obj *item = pdf_array_get(ctx, array, i);
+		if (pdf_is_string(ctx, item))
+			pa_show(ctx, (pa_proc *)proc, (unsigned char *)pdf_to_str_buf(ctx, item), pdf_to_str_len(ctx, item));
+	}
+}
+
+/* A Type 3 font's glyph procedures for the codes its encoding names: their colours, and their widths noted. */
+static void pa_type3(fz_context *ctx, pa_proc *p, pdf_obj *font, int use)
+{
+	pdf_obj *procs = pdf_dict_get(ctx, font, PDF_NAME(CharProcs)), *diff = pdf_dict_getp(ctx, font, "Encoding/Differences");
+	pdf_obj *res = pdf_dict_get(ctx, font, PDF_NAME(Resources));
+	const char *names[256] = { 0 };
+	int code = 0, uncoloured = p->uncoloured;
+	for (int i = 0; i < pdf_array_len(ctx, diff); i++)
+	{
+		pdf_obj *item = pdf_array_get(ctx, diff, i);
+		if (pdf_is_int(ctx, item))
+			code = pdf_to_int(ctx, item);
+		else if (pdf_is_name(ctx, item) && code >= 0 && code < 256)
+			names[code++] = pdf_to_name(ctx, item);
+	}
+	for (int c = 0; c < 256; c++)
+	{
+		pdf_obj *proc = names[c] ? pdf_dict_gets(ctx, procs, names[c]) : NULL;
+		/* Glyphs can use fonts too: f->uses may move. */
+		p->f->uses[use].t3w[c] = -1;
+		if (!pdf_is_stream(ctx, proc))
+			continue;
+		p->uncoloured = 0;
+		p->t3wx = 0;
+		pa_contents(ctx, p, font, res, proc);
+		p->f->uses[use].t3w[c] = p->t3wx;
+	}
+	p->uncoloured = uncoloured;
 }
 
 static void pa_op_Tf(fz_context *ctx, pdf_processor *proc, const char *name, pdf_font_desc *font, float size)
 {
 	pa_proc *p = (pa_proc *)proc;
+	pa_found *f = p->f;
 	pdf_obj *obj = pdf_lookup_resource(ctx, p->super.rstack, PDF_NAME(Font), name);
-	int n;
-	(void)font;
+	int n, i;
 	(void)size;
-	if (!obj || pa_font_embedded(ctx, obj))
+	p->cur = -1;
+	if (!obj || !font)
+		return;
+	pa_uses_resources(ctx, p);
+	/* The font's use, noted for its widths and glyphs. */
+	for (i = 0; i < f->nuses; i++)
+		if (pdf_resolve_indirect(ctx, f->uses[i].font) == pdf_resolve_indirect(ctx, obj))
+			break;
+	if (i == f->nuses)
+	{
+		pa_use *u;
+		int t3 = pdf_name_eq(ctx, pdf_dict_get(ctx, obj, PDF_NAME(Subtype)), PDF_NAME(Type3));
+		if (f->nuses == f->ucap)
+		{
+			int cap = f->ucap ? f->ucap * 2 : 16;
+			f->uses = fz_realloc_array(ctx, f->uses, cap, pa_use);
+			f->ucap = cap;
+		}
+		u = &f->uses[f->nuses];
+		memset(u, 0, sizeof *u);
+		u->cid = pdf_name_eq(ctx, pdf_dict_get(ctx, obj, PDF_NAME(Subtype)), PDF_NAME(Type0));
+		u->page = p->page;
+		u->seen = fz_calloc(ctx, u->cid ? 8192 : 32, 1);
+		fz_try(ctx)
+		{
+			u->any = fz_calloc(ctx, u->cid ? 8192 : 32, 1);
+			if (t3)
+				u->t3w = fz_malloc_array(ctx, 256, float);
+		}
+		fz_catch(ctx)
+		{
+			fz_free(ctx, u->any);
+			fz_free(ctx, u->seen);
+			fz_rethrow(ctx);
+		}
+		u->font = pdf_keep_obj(ctx, obj);
+		u->fd = pdf_keep_font(ctx, font);
+		f->nuses++;
+		if (t3)
+			pa_type3(ctx, p, obj, i);
+	}
+	p->cur = i;
+	if (pa_font_embedded(ctx, obj))
 		return;
 	pa_add(ctx, &p->f->font_pages, p->page);
 	n = pdf_array_len(ctx, p->f->fonts);
@@ -9502,8 +10798,38 @@ static void pa_appearance(fz_context *ctx, pa_proc *p, pdf_obj *annot)
 		}
 }
 
+/* Page boundaries: PDF/A wants each between 3 and 14 400 units across. Tiny ones are widened (fixing); big ones
+ * can't be made smaller without scaling the page. */
+static void pa_boxes(fz_context *ctx, pa_found *f, pdf_obj *page, int i)
+{
+	pdf_obj *keys[] = { PDF_NAME(MediaBox), PDF_NAME(CropBox), PDF_NAME(BleedBox), PDF_NAME(TrimBox), PDF_NAME(ArtBox) };
+	for (size_t k = 0; k < nelem(keys); k++)
+	{
+		pdf_obj *key = keys[k], *box = pdf_dict_get_inheritable(ctx, page, key);
+		fz_rect r = pdf_to_rect(ctx, box);
+		float w = r.x1 - r.x0, h = r.y1 - r.y0;
+		if (box && (w < 3 || h < 3))
+		{
+			f->boxes++;
+			if (f->fix)
+			{
+				if (w < 3)
+					r.x0 -= (3 - w) / 2, r.x1 = r.x0 + 3;
+				if (h < 3)
+					r.y0 -= (3 - h) / 2, r.y1 = r.y0 + 3;
+				pdf_dict_put_rect(ctx, page, key, r);
+			}
+		}
+		else if (box && (w > 14400 || h > 14400))
+		{
+			f->big_boxes++;
+			pa_add(ctx, &f->limit_pages, i);
+		}
+	}
+}
+
 /* Runs every page's content and annotation appearances through the processor. */
-static void pa_scan(fz_context *ctx, pdf_document *doc, pa_found *f)
+static pa_proc *pa_new_proc(fz_context *ctx, pdf_document *doc, pa_found *f)
 {
 	pa_proc *p = pdf_new_processor(ctx, sizeof *p);
 	p->super.usage = "Print";
@@ -9518,16 +10844,47 @@ static void pa_scan(fz_context *ctx, pdf_document *doc, pa_found *f)
 	p->super.op_Do_image = pa_op_Do_image;
 	p->super.op_Do_form = pa_op_Do_form;
 	p->super.op_Tf = pa_op_Tf;
+	p->super.op_gs_begin = pa_op_gs_begin;
+	p->super.op_ri = pa_op_ri;
+	p->super.op_q = pa_op_q;
+	p->super.op_Q = pa_op_Q;
+	p->super.op_Tr = pa_op_Tr;
+	p->super.op_d0 = pa_op_d0;
+	p->super.op_d1 = pa_op_d1;
+	p->super.op_Tj = pa_op_Tj;
+	p->super.op_TJ = pa_op_TJ;
+	p->super.op_squote = pa_op_squote;
+	p->super.op_dquote = pa_op_dquote;
 	p->doc = doc;
 	p->f = f;
+	p->cur = -1;
+	return p;
+}
+
+static void pa_scan(fz_context *ctx, pdf_document *doc, pa_found *f)
+{
+	pa_proc *p = pa_new_proc(ctx, doc, f);
 	fz_try(ctx)
 	{
 		int n = pdf_count_pages(ctx, doc);
 		for (int i = 0; i < n; i++)
 		{
 			pdf_obj *po = pdf_lookup_page_obj(ctx, doc, i), *annots = pdf_dict_get(ctx, po, PDF_NAME(Annots));
+			pdf_obj *res = pdf_dict_get_inheritable(ctx, po, PDF_NAME(Resources));
 			p->page = i;
-			pa_contents(ctx, p, po, pdf_dict_get_inheritable(ctx, po, PDF_NAME(Resources)), pdf_dict_get(ctx, po, PDF_NAME(Contents)));
+			p->cur = -1;
+			p->render = 0;
+			p->depth = 0;
+			/* Resources from the page tree: PDF/A wants them on the page. */
+			if (!pdf_dict_get(ctx, po, PDF_NAME(Resources)) && pdf_dict_len(ctx, res) > 0)
+			{
+				pdf_obj *entry = pdf_array_push_array(ctx, f->inherits, 2);
+				pdf_array_push(ctx, entry, po);
+				pdf_array_push(ctx, entry, res);
+				f->inherited++;
+			}
+			pa_boxes(ctx, f, po, i);
+			pa_contents(ctx, p, po, res, pdf_dict_get(ctx, po, PDF_NAME(Contents)));
 			for (int k = 0; k < pdf_array_len(ctx, annots); k++)
 				pa_appearance(ctx, p, pdf_array_get(ctx, annots, k));
 		}
@@ -9539,12 +10896,541 @@ static void pa_scan(fz_context *ctx, pdf_document *doc, pa_found *f)
 		fz_rethrow(ctx);
 }
 
+/* ---- PDF/A-1's glyph lists: CharSet for Type 1 subsets, CIDSet for CIDFont subsets, exact */
+
+static int pa_is_subset(fz_context *ctx, pdf_obj *font)
+{
+	const char *name = pdf_dict_get_name(ctx, font, PDF_NAME(BaseFont));
+	pdf_obj *sub = pdf_dict_get(ctx, font, PDF_NAME(Subtype));
+	if (!(pdf_name_eq(ctx, sub, PDF_NAME(Type1)) || pdf_name_eq(ctx, sub, PDF_NAME(MMType1)) || pdf_name_eq(ctx, sub, PDF_NAME(CIDFontType0)) ||
+			pdf_name_eq(ctx, sub, PDF_NAME(CIDFontType2))))
+		return 0;
+	for (int i = 0; i < 6; i++)
+		if (name[i] < 'A' || name[i] > 'Z')
+			return 0;
+	return name[6] == '+';
+}
+
+static fz_font *pa_program(fz_context *ctx, pdf_obj *font);
+
+/* The glyph list a subset's descriptor should have, written (fixing) or compared. */
+static void pa_glyph_set(fz_context *ctx, pdf_document *doc, pa_found *f, pdf_obj *font)
+{
+	pdf_obj *desc = pdf_dict_get(ctx, font, PDF_NAME(FontDescriptor)), *map = pdf_dict_get(ctx, font, PDF_NAME(CIDToGIDMap));
+	int cid = !pdf_name_eq(ctx, pdf_dict_get(ctx, font, PDF_NAME(Subtype)), PDF_NAME(Type1)) && !pdf_name_eq(ctx, pdf_dict_get(ctx, font, PDF_NAME(Subtype)), PDF_NAME(MMType1));
+	fz_font *prog = NULL;
+	fz_buffer *want = NULL, *have = NULL, *gmap = NULL;
+	fz_var(prog);
+	fz_var(want);
+	fz_var(have);
+	fz_var(gmap);
+	if (!pdf_is_dict(ctx, desc))
+		return;
+	fz_try(ctx)
+	{
+		FT_Face face;
+		int same;
+		prog = pa_program(ctx, font);
+		if (!prog || !(face = fz_font_ft_face(ctx, prog)))
+			break;
+		want = fz_new_buffer(ctx, 256);
+		if (!cid)
+		{
+			/* "/name/name...", every glyph but .notdef */
+			for (int g = 0; g < face->num_glyphs; g++)
+			{
+				char name[64];
+				int err;
+				fz_ft_lock(ctx); /* also points FreeType's allocator at this context */
+				err = FT_Get_Glyph_Name(face, g, name, sizeof name);
+				fz_ft_unlock(ctx);
+				if (err || !name[0] || !strcmp(name, ".notdef"))
+					continue;
+				fz_append_printf(ctx, want, "/%s", name);
+			}
+			if (pdf_is_string(ctx, pdf_dict_gets(ctx, desc, "CharSet")))
+			{
+				pdf_obj *cs = pdf_dict_gets(ctx, desc, "CharSet");
+				have = fz_new_buffer_from_copied_data(ctx, (const unsigned char *)pdf_to_str_buf(ctx, cs), pdf_to_str_len(ctx, cs));
+			}
+		}
+		else
+		{
+			/* Written where there's none: a bit for each CID with an outline in the program (high bit first), CID 0
+			 * included; the CIDs text draws are added after the content scan. FreeType takes a CID-keyed CFF font's
+			 * CIDs as its glyph indices, and refuses the ones it hasn't got. */
+			unsigned char *bits;
+			int maxcid, n, keyed = FT_IS_CID_KEYED(face) != 0;
+			if (pdf_is_stream(ctx, map))
+				gmap = pdf_load_stream(ctx, map);
+			maxcid = gmap && !keyed ? (int)(gmap->len / 2) - 1 : face->num_glyphs - 1;
+			maxcid = fz_clampi(maxcid, 0, 65535);
+			n = maxcid / 8 + 1;
+			bits = fz_calloc(ctx, n, 1);
+			fz_try(ctx)
+			{
+				for (int c = 0; c <= maxcid; c++)
+				{
+					int g = c, present = c == 0;
+					/* A map shorter than it should be (even empty) maps what it leaves out to nothing. */
+					if (gmap && !keyed)
+						g = 2 * (size_t)c + 1 < gmap->len ? (gmap->data[2 * c] << 8) | gmap->data[2 * c + 1] : 0;
+					if (!present && g > 0 && g < face->num_glyphs)
+					{
+						fz_ft_lock(ctx); /* also points FreeType's allocator at this context */
+						present = !FT_Load_Glyph(face, g, FT_LOAD_NO_SCALE | FT_LOAD_NO_HINTING) && face->glyph->outline.n_contours > 0;
+						fz_ft_unlock(ctx);
+					}
+					if (present)
+						bits[c >> 3] |= 0x80 >> (c & 7);
+				}
+				fz_append_data(ctx, want, bits, n);
+			}
+			fz_always(ctx)
+				fz_free(ctx, bits);
+			fz_catch(ctx)
+				fz_rethrow(ctx);
+			if (pdf_is_stream(ctx, pdf_dict_gets(ctx, desc, "CIDSet")))
+				have = pdf_load_stream(ctx, pdf_dict_gets(ctx, desc, "CIDSet"));
+		}
+		if (have && !cid)
+			same = have->len > 0; /* naming the glyphs drawn: checked after the content scan */
+		else if (have)
+			same = have->len > 0; /* listing the glyphs drawn: checked after the content scan */
+		else
+			same = 0;
+		if (!same)
+		{
+			f->glyph_sets++;
+			if (f->fix && !cid)
+				pdf_dict_puts_drop(ctx, desc, "CharSet", pdf_new_string(ctx, (const char *)want->data, want->len));
+			else if (f->fix)
+			{
+				pdf_obj *sd = pdf_new_dict(ctx, doc, 1), *ref = NULL;
+				fz_try(ctx)
+				{
+					ref = pdf_add_stream(ctx, doc, want, sd, 0);
+					pdf_dict_puts(ctx, desc, "CIDSet", ref);
+				}
+				fz_always(ctx)
+				{
+					pdf_drop_obj(ctx, ref);
+					pdf_drop_obj(ctx, sd);
+				}
+				fz_catch(ctx)
+					fz_rethrow(ctx);
+			}
+		}
+	}
+	fz_always(ctx)
+	{
+		fz_drop_buffer(ctx, gmap);
+		fz_drop_buffer(ctx, have);
+		fz_drop_buffer(ctx, want);
+		fz_drop_font(ctx, prog);
+	}
+	fz_catch(ctx)
+	{
+		fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+		fz_ignore_error(ctx); /* a program FreeType can't read: checked as it is */
+	}
+}
+
+/* ---- fonts as content uses them */
+
+/* A font's program as a fresh font (one MuPDF loaded to draw goes by the PDF's widths), or NULL. */
+static fz_font *pa_program(fz_context *ctx, pdf_obj *font)
+{
+	pdf_obj *desc, *file;
+	fz_buffer *buf;
+	fz_font *prog = NULL;
+	if (pdf_name_eq(ctx, pdf_dict_get(ctx, font, PDF_NAME(Subtype)), PDF_NAME(Type0)))
+		font = pdf_array_get(ctx, pdf_dict_get(ctx, font, PDF_NAME(DescendantFonts)), 0);
+	desc = pdf_dict_get(ctx, font, PDF_NAME(FontDescriptor));
+	file = pdf_dict_get(ctx, desc, PDF_NAME(FontFile));
+	if (!file)
+		file = pdf_dict_get(ctx, desc, PDF_NAME(FontFile2));
+	if (!file)
+		file = pdf_dict_get(ctx, desc, PDF_NAME(FontFile3));
+	if (!pdf_is_stream(ctx, file))
+		return NULL;
+	buf = pdf_load_stream(ctx, file);
+	fz_try(ctx)
+		prog = fz_new_font_from_buffer(ctx, NULL, buf, 0, 0);
+	fz_always(ctx)
+		fz_drop_buffer(ctx, buf);
+	fz_catch(ctx)
+	{
+		fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+		fz_ignore_error(ctx);
+		prog = NULL;
+	}
+	return prog;
+}
+
+#define PA_BIT(map, i) ((map)[(i) >> 3] & (1 << ((i) & 7)))
+
+/* A simple font's Widths again over `first`..`last`: `want` where set (>= 0), the old width otherwise. */
+static void pa_put_widths(fz_context *ctx, pdf_document *doc, pdf_obj *font, int first, int last, const int *want)
+{
+	pdf_obj *old = pdf_dict_get(ctx, font, PDF_NAME(Widths)), *w = pdf_new_array(ctx, doc, last - first + 1);
+	int ofirst = pdf_dict_get_int(ctx, font, PDF_NAME(FirstChar));
+	fz_try(ctx)
+	{
+		for (int c = first; c <= last; c++)
+			pdf_array_push_int(ctx, w, want[c] >= 0 ? want[c] : c >= ofirst && c - ofirst < pdf_array_len(ctx, old) ? pdf_array_get_int(ctx, old, c - ofirst) : 0);
+		pdf_dict_put_int(ctx, font, PDF_NAME(FirstChar), first);
+		pdf_dict_put_int(ctx, font, PDF_NAME(LastChar), last);
+		pdf_dict_put(ctx, font, PDF_NAME(Widths), w);
+	}
+	fz_always(ctx)
+		pdf_drop_obj(ctx, w);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* A CIDFont's W again: its widths as loaded, with `want` (>= 0) for the CIDs it's set for. */
+static void pa_put_cid_widths(fz_context *ctx, pdf_document *doc, pdf_obj *cidfont, pdf_font_desc *fd, const int *want)
+{
+	pdf_obj *w = pdf_new_array(ctx, doc, 16);
+	fz_try(ctx)
+	{
+		for (int i = 0; i < fd->hmtx_len; i++)
+		{
+			int lo = fd->hmtx[i].lo, hi = fd->hmtx[i].hi;
+			for (int c = lo; c <= hi; c++)
+			{
+				int end = c;
+				if (want[c] >= 0)
+					continue;
+				while (end < hi && want[end + 1] < 0)
+					end++;
+				pdf_array_push_int(ctx, w, c);
+				pdf_array_push_int(ctx, w, end);
+				pdf_array_push_int(ctx, w, fd->hmtx[i].w);
+				c = end;
+			}
+		}
+		for (int c = 0; c < 65536; c++)
+			if (want[c] >= 0)
+			{
+				pdf_obj *one;
+				pdf_array_push_int(ctx, w, c);
+				one = pdf_array_push_array(ctx, w, 1);
+				pdf_array_push_int(ctx, one, want[c]);
+			}
+		pdf_dict_put(ctx, cidfont, PDF_NAME(W), w);
+	}
+	fz_always(ctx)
+		pdf_drop_obj(ctx, w);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* A non-symbolic TrueType font's encoding PDF/A wants: WinAnsi or MacRoman (as a name, or the base of a dictionary
+ * whose differences name glyphs in the Adobe Glyph List). 0 fine, 1 put right where it can be without changing a
+ * character shown (fixing), 2 not. Symbolic ones mustn't have one. */
+static int pa_tt_encoding(fz_context *ctx, pa_found *f, pa_use *u)
+{
+	pdf_obj *font = u->font, *enc = pdf_dict_get(ctx, font, PDF_NAME(Encoding)), *base;
+	int flags = pdf_to_int(ctx, pdf_dict_getp(ctx, font, "FontDescriptor/Flags")), safe = 1;
+	if (flags & 4)
+		return enc ? 2 : 0;
+	base = pdf_is_dict(ctx, enc) ? pdf_dict_get(ctx, enc, PDF_NAME(BaseEncoding)) : enc;
+	if (pdf_is_dict(ctx, enc))
+	{
+		pdf_obj *diff = pdf_dict_get(ctx, enc, PDF_NAME(Differences));
+		for (int i = 0; i < pdf_array_len(ctx, diff); i++)
+		{
+			pdf_obj *item = pdf_array_get(ctx, diff, i);
+			if (pdf_is_name(ctx, item) && !fz_unicode_from_glyph_name(pdf_to_name(ctx, item)))
+				return 2;
+		}
+	}
+	if (pdf_name_eq(ctx, base, PDF_NAME(WinAnsiEncoding)) || (pdf_is_name(ctx, base) && !strcmp(pdf_to_name(ctx, base), "MacRomanEncoding")))
+		return 0;
+	if (base)
+		return 2;
+	/* No base: codes go straight through the font's Unicode table, as WinAnsi takes them for every code but 0-31 and
+	 * 127-159. */
+	for (int c = 0; c < 256; c++)
+		if (PA_BIT(u->any, c) && (c < 32 || (c >= 127 && c < 160)))
+			safe = 0;
+	if (!safe)
+		return 2;
+	if (f->fix)
+	{
+		if (pdf_is_dict(ctx, enc))
+			pdf_dict_put(ctx, enc, PDF_NAME(BaseEncoding), PDF_NAME(WinAnsiEncoding));
+		else
+			pdf_dict_put(ctx, font, PDF_NAME(Encoding), PDF_NAME(WinAnsiEncoding));
+	}
+	return 1;
+}
+
+/* PDF/A-1: a Type 1 subset's CharSet must name each glyph text draws with it (it may name more). Fixing writes every
+ * name the program has. */
+static void pa_charset_drawn(fz_context *ctx, pa_found *f, pa_use *u, fz_font *prog)
+{
+	FT_Face face = fz_font_ft_face(ctx, prog);
+	pdf_obj *desc = pdf_dict_get(ctx, u->font, PDF_NAME(FontDescriptor)), *cs = pdf_dict_gets(ctx, desc, "CharSet");
+	const char *have = pdf_is_string(ctx, cs) ? pdf_to_str_buf(ctx, cs) : "";
+	int ok = 1;
+	if (!face || !pdf_is_dict(ctx, desc))
+		return;
+	for (int c = 0; c < 256 && ok; c++)
+	{
+		char name[64], key[70];
+		int gid, err;
+		size_t k;
+		const char *at;
+		if (!PA_BIT(u->seen, c) || (gid = pdf_font_cid_to_gid(ctx, u->fd, c)) <= 0)
+			continue;
+		fz_ft_lock(ctx);
+		err = FT_Get_Glyph_Name(face, gid, name, sizeof name);
+		fz_ft_unlock(ctx);
+		if (err || !name[0])
+			continue;
+		fz_snprintf(key, sizeof key, "/%s", name);
+		k = strlen(key);
+		for (at = strstr(have, key); at && at[k] && at[k] != '/' && at[k] != ' '; at = strstr(at + 1, key))
+			;
+		ok = at != NULL;
+	}
+	if (ok)
+		return;
+	f->glyph_sets++;
+	if (f->fix)
+	{
+		fz_buffer *all = fz_new_buffer(ctx, 256);
+		fz_try(ctx)
+		{
+			for (int g = 0; g < face->num_glyphs; g++)
+			{
+				char name[64];
+				int err;
+				fz_ft_lock(ctx);
+				err = FT_Get_Glyph_Name(face, g, name, sizeof name);
+				fz_ft_unlock(ctx);
+				if (!err && name[0] && strcmp(name, ".notdef"))
+					fz_append_printf(ctx, all, "/%s", name);
+			}
+			pdf_dict_puts_drop(ctx, desc, "CharSet", pdf_new_string(ctx, (const char *)all->data, all->len));
+		}
+		fz_always(ctx)
+			fz_drop_buffer(ctx, all);
+		fz_catch(ctx)
+			fz_rethrow(ctx);
+	}
+}
+
+/* PDF/A-1: a CIDFont subset's CIDSet must list each CID text draws with it that the program has (veraPDF: "all
+ * glyphs present in the embedded font subset and used for rendering"). Fixing adds the missing ones. */
+static void pa_cidset_drawn(fz_context *ctx, pdf_document *doc, pa_found *f, pa_use *u)
+{
+	pdf_obj *cidfont = pdf_array_get(ctx, pdf_dict_get(ctx, u->font, PDF_NAME(DescendantFonts)), 0);
+	pdf_obj *desc = pdf_dict_get(ctx, cidfont, PDF_NAME(FontDescriptor)), *set = pdf_dict_gets(ctx, desc, "CIDSet");
+	fz_buffer *have = NULL, *bits = NULL;
+	pdf_obj *sd = NULL, *ref = NULL;
+	int top = -1, ok = 1;
+	if (!pa_is_subset(ctx, cidfont) || !pdf_is_dict(ctx, desc))
+		return;
+	fz_var(have);
+	fz_var(bits);
+	fz_var(sd);
+	fz_var(ref);
+	fz_try(ctx)
+	{
+		if (pdf_is_stream(ctx, set))
+			have = pdf_load_stream(ctx, set);
+		for (int c = 0; c < 65536; c++)
+		{
+			if (!PA_BIT(u->any, c) || pdf_font_cid_to_gid(ctx, u->fd, c) <= 0)
+				continue;
+			top = c;
+			if (!have || (size_t)(c >> 3) >= have->len || !(have->data[c >> 3] & (0x80 >> (c & 7))))
+				ok = 0;
+		}
+		if (!ok)
+		{
+			f->glyph_sets++;
+			if (f->fix)
+			{
+				size_t n = fz_maxz(have ? have->len : 0, (size_t)(top >> 3) + 1);
+				bits = fz_new_buffer(ctx, n);
+				if (have)
+					fz_append_data(ctx, bits, have->data, have->len);
+				while (bits->len < n)
+					fz_append_byte(ctx, bits, 0);
+				bits->data[0] |= 0x80; /* CID 0 */
+				for (int c = 0; c <= top; c++)
+					if (PA_BIT(u->any, c) && pdf_font_cid_to_gid(ctx, u->fd, c) > 0)
+						bits->data[c >> 3] |= 0x80 >> (c & 7);
+				sd = pdf_new_dict(ctx, doc, 1);
+				ref = pdf_add_stream(ctx, doc, bits, sd, 0);
+				pdf_dict_puts(ctx, desc, "CIDSet", ref);
+			}
+		}
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_obj(ctx, ref);
+		pdf_drop_obj(ctx, sd);
+		fz_drop_buffer(ctx, bits);
+		fz_drop_buffer(ctx, have);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* The fonts content used: widths that don't match the program (fixing: the program's put in), glyphs the program
+ * hasn't got (left: PDF/A has no fix for them), TrueType encodings. */
+static void pa_font_use(fz_context *ctx, pdf_document *doc, pa_found *f)
+{
+	int *want = NULL;
+	fz_font *prog = NULL;
+	fz_var(want);
+	fz_var(prog);
+	fz_try(ctx)
+	{
+		for (int i = 0; i < f->nuses; i++)
+		{
+			pa_use *u = &f->uses[i];
+			pdf_obj *font = u->font, *widths = pdf_dict_get(ctx, font, PDF_NAME(Widths));
+			int n = u->cid ? 65536 : 256, first = pdf_dict_get_int(ctx, font, PDF_NAME(FirstChar)), last = pdf_dict_get_int(ctx, font, PDF_NAME(LastChar));
+			int bad = 0, missing = 0, lo = 255, hi = 0;
+			fz_free(ctx, want);
+			want = NULL;
+			want = fz_malloc_array(ctx, n, int);
+			for (int c = 0; c < n; c++)
+				want[c] = -1;
+			if (u->t3w)
+			{
+				/* Type 3: widths from the glyph procedures (in glyph space, as Widths are). */
+				float scale = pdf_array_get_real(ctx, pdf_dict_get(ctx, font, PDF_NAME(FontMatrix)), 0) * 1000;
+				for (int c = 0; c < 256; c++)
+				{
+					if (!PA_BIT(u->any, c))
+						continue;
+					if (u->t3w[c] < 0)
+					{
+						missing = 1;
+						continue;
+					}
+					if (PA_BIT(u->seen, c) && c >= first && c <= last && fabsf((pdf_array_get_real(ctx, widths, c - first) - u->t3w[c]) * scale) > 1)
+					{
+						bad = 1;
+						want[c] = (int)u->t3w[c];
+					}
+				}
+				if (bad && f->fix)
+				{
+					/* Type 3 widths can be fractions: written as reals. */
+					for (int c = first; c <= last; c++)
+						if (want[c] >= 0)
+							pdf_array_put_real(ctx, widths, c - first, u->t3w[c]);
+				}
+			}
+			else if (pa_font_embedded(ctx, font) && (prog = pa_program(ctx, font)) != NULL)
+			{
+				for (int c = 0; c < n; c++)
+				{
+					int gid, pw, dw;
+					if (!PA_BIT(u->any, c))
+						continue;
+					gid = pdf_font_cid_to_gid(ctx, u->fd, c);
+					if (gid <= 0)
+					{
+						/* .notdef, or a glyph the program hasn't got */
+						missing = 1;
+						continue;
+					}
+					if (!PA_BIT(u->seen, c))
+						continue;
+					pw = (int)floorf(fz_advance_glyph(ctx, prog, gid, 0) * 1000 + 0.5f);
+					if (u->cid)
+						dw = pdf_lookup_hmtx(ctx, u->fd, c).w;
+					else if (widths && c >= first && c <= last)
+						dw = pdf_array_get_int(ctx, widths, c - first);
+					else
+						dw = -100000; /* no width given: PDF/A wants one */
+					if (abs(pw - dw) > 1)
+					{
+						bad = 1;
+						want[c] = pw;
+						lo = fz_mini(lo, c), hi = fz_maxi(hi, c);
+					}
+				}
+				if (bad && f->fix)
+				{
+					if (u->cid)
+						pa_put_cid_widths(ctx, doc, pdf_array_get(ctx, pdf_dict_get(ctx, font, PDF_NAME(DescendantFonts)), 0), u->fd, want);
+					else
+						pa_put_widths(ctx, doc, font, widths ? fz_mini(first, lo) : lo, widths ? fz_maxi(last, hi) : hi, want);
+				}
+				if (f->part == 1 && !u->cid && pa_is_subset(ctx, font))
+					pa_charset_drawn(ctx, f, u, prog);
+				if (f->part == 1 && u->cid)
+					pa_cidset_drawn(ctx, doc, f, u);
+				fz_drop_font(ctx, prog);
+				prog = NULL;
+				if (pdf_name_eq(ctx, pdf_dict_get(ctx, font, PDF_NAME(Subtype)), PDF_NAME(TrueType)))
+				{
+					int enc = pa_tt_encoding(ctx, f, u);
+					f->tt_encoding += enc == 1;
+					f->tt_encoding_left += enc == 2;
+				}
+			}
+			f->widths += bad;
+			if (!f->fix && u->cid)
+			{
+				/* An embedded TrueType CIDFont that draws text needs its CID to glyph map. */
+				pdf_obj *cidfont = pdf_array_get(ctx, pdf_dict_get(ctx, font, PDF_NAME(DescendantFonts)), 0), *map = pdf_dict_get(ctx, cidfont, PDF_NAME(CIDToGIDMap));
+				int drawn = 0;
+				for (int c = 0; c < 8192 && !drawn; c++)
+					drawn = u->seen[c] != 0;
+				if (drawn && pdf_name_eq(ctx, pdf_dict_get(ctx, cidfont, PDF_NAME(Subtype)), PDF_NAME(CIDFontType2)) &&
+					pdf_dict_getp(ctx, cidfont, "FontDescriptor/FontFile2") && !pdf_is_stream(ctx, map) && !pdf_name_eq(ctx, map, PDF_NAME(Identity)))
+					f->untyped_fonts++;
+			}
+			if (missing)
+			{
+				f->glyphs++;
+				pa_add(ctx, &f->glyph_pages, u->page);
+			}
+		}
+	}
+	fz_always(ctx)
+	{
+		fz_drop_font(ctx, prog);
+		fz_free(ctx, want);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* Content without resources of its own gets the ones it used (its caller's). */
+static void pa_give_resources(fz_context *ctx, pa_found *f)
+{
+	for (int i = 0; i < pdf_array_len(ctx, f->inherits); i++)
+	{
+		pdf_obj *entry = pdf_array_get(ctx, f->inherits, i), *owner = pdf_array_get(ctx, entry, 0), *res = pdf_array_get(ctx, entry, 1);
+		if (pdf_dict_get(ctx, owner, PDF_NAME(Resources)))
+			continue;
+		if (pdf_is_indirect(ctx, res))
+			pdf_dict_put(ctx, owner, PDF_NAME(Resources), res);
+		else
+			pdf_dict_put_drop(ctx, owner, PDF_NAME(Resources), pdf_deep_copy_obj(ctx, res));
+	}
+}
+
 /* ---- objects reachable from the catalog */
 
-static const char *pa_bad_actions[] = { "Launch", "Sound", "Movie", "ResetForm", "ImportData", "Hide", "SetOCGState", "Rendition", "Trans", "GoTo3DView", NULL };
+/* The actions PDF/A allows (part 1 before GoToE existed); everything else, set-state and no-op ones too, goes. */
+static const char *pa_ok_actions[] = { "GoTo", "GoToR", "Thread", "URI", "SubmitForm", "GoToE", NULL };
 
 /* 0 allowed, 1 JavaScript, 2 another action PDF/A forbids. */
-static int pa_action(fz_context *ctx, pdf_obj *a, const char **name)
+static int pa_action(fz_context *ctx, pdf_obj *a, const char **name, int part)
 {
 	pdf_obj *s = pdf_dict_get(ctx, a, PDF_NAME(S));
 	const char *n;
@@ -9560,10 +11446,10 @@ static int pa_action(fz_context *ctx, pdf_obj *a, const char **name)
 		*name = "a menu command";
 		return strcmp(what, "NextPage") && strcmp(what, "PrevPage") && strcmp(what, "FirstPage") && strcmp(what, "LastPage") ? 2 : 0;
 	}
-	for (int i = 0; pa_bad_actions[i]; i++)
-		if (!strcmp(n, pa_bad_actions[i]))
-			return 2;
-	return 0;
+	for (int i = 0; pa_ok_actions[i]; i++)
+		if (!strcmp(n, pa_ok_actions[i]) && (part > 1 || strcmp(n, "GoToE")))
+			return 0;
+	return 2;
 }
 
 typedef struct
@@ -9619,10 +11505,187 @@ static int pa_plain_filters(fz_context *ctx, pdf_obj *filter)
 	return 1;
 }
 
+/* JPEG 2000 data PDF/A-2 can't take (6.2.8.3): other than 1, 3 or 4 channels, differing or over 38 bit depths, and
+ * (unless the picture names its colour space) colour specifications PDF/A doesn't allow. */
+static int pa_jpx_bad(const unsigned char *d, size_t n, int has_cs)
+{
+	size_t pos = 0;
+	if (n < 12 || memcmp(d + 4, "jP  ", 4))
+		return 0; /* a bare codestream: no header to break the rules */
+	while (pos + 8 <= n)
+	{
+		size_t len = ((size_t)d[pos] << 24) | (d[pos + 1] << 16) | (d[pos + 2] << 8) | d[pos + 3], head = 8;
+		if (len == 1 && pos + 16 <= n)
+		{
+			len = ((size_t)d[pos + 12] << 24) | (d[pos + 13] << 16) | (d[pos + 14] << 8) | d[pos + 15];
+			head = 16;
+		}
+		if (len == 0)
+			len = n - pos;
+		if (len < head || pos + len > n)
+			return 0;
+		if (!memcmp(d + pos + 4, "jp2h", 4))
+		{
+			size_t q = pos + head, end = pos + len;
+			int colr = 0, approx1 = 0;
+			while (q + 8 <= end)
+			{
+				size_t blen = ((size_t)d[q] << 24) | (d[q + 1] << 16) | (d[q + 2] << 8) | d[q + 3];
+				const unsigned char *b = d + q + 8;
+				if (blen < 8 || q + blen > end)
+					break;
+				if (!memcmp(d + q + 4, "ihdr", 4) && blen >= 22)
+				{
+					int nc = (b[8] << 8) | b[9], bpc = b[10];
+					if ((nc != 1 && nc != 3 && nc != 4) || bpc == 255 || (bpc & 0x7f) + 1 > 38)
+						return 1;
+				}
+				else if (!memcmp(d + q + 4, "bpcc", 4))
+					return 1;
+				else if (!memcmp(d + q + 4, "colr", 4) && blen >= 11 && !has_cs)
+				{
+					colr++;
+					approx1 += b[2] == 1;
+					if (b[0] < 1 || b[0] > 3 || (b[0] == 1 && blen >= 15 && ((b[3] << 24) | (b[4] << 16) | (b[5] << 8) | b[6]) == 19))
+						return 1;
+				}
+				q += blen;
+			}
+			return colr > 1 && approx1 != 1;
+		}
+		pos += len;
+	}
+	return 0;
+}
+
+static pdf_obj *pa_icc(fz_context *ctx, pdf_document *doc, fz_colorspace *cs);
+
+/* A picture (JPEG 2000, or 16-bit) stored again as plain 8-bit samples (compressed when saved), in the colour space it
+ * decodes to. */
+static void pa_unjpx(fz_context *ctx, pdf_document *doc, int num, pdf_obj *dict)
+{
+	fz_image *img = NULL;
+	fz_pixmap *pix = NULL;
+	fz_buffer *buf = NULL, *mask = NULL;
+	pdf_obj *ref = pdf_new_indirect(ctx, doc, num, 0), *cs = NULL, *smask = NULL;
+	fz_var(img);
+	fz_var(pix);
+	fz_var(buf);
+	fz_var(mask);
+	fz_var(cs);
+	fz_var(smask);
+	fz_try(ctx)
+	{
+		int w, h, n, alpha;
+		img = pdf_load_image(ctx, doc, ref);
+		pix = fz_get_pixmap_from_image(ctx, img, NULL, NULL, NULL, NULL);
+		w = pix->w, h = pix->h, alpha = pix->alpha, n = pix->n - alpha;
+		buf = fz_new_buffer(ctx, (size_t)w * h * n);
+		if (alpha)
+			mask = fz_new_buffer(ctx, (size_t)w * h);
+		for (int y = 0; y < h; y++)
+		{
+			unsigned char *row = pix->samples + (size_t)y * pix->stride;
+			for (int x = 0; x < w; x++)
+			{
+				fz_append_data(ctx, buf, row + (size_t)x * pix->n, n);
+				if (alpha)
+					fz_append_byte(ctx, mask, row[(size_t)x * pix->n + n]);
+			}
+		}
+		/* The picture's own colour space stays where it names one (an indexed one's base: the samples come out as
+		 * colours); otherwise what the data said. Decoding has applied any Decode array. */
+		if (pdf_name_eq(ctx, pdf_array_get(ctx, pdf_dict_get(ctx, dict, PDF_NAME(ColorSpace)), 0), PDF_NAME(Indexed)))
+		{
+			pdf_obj *base = pdf_keep_obj(ctx, pdf_array_get(ctx, pdf_dict_get(ctx, dict, PDF_NAME(ColorSpace)), 1));
+			pdf_dict_put_drop(ctx, dict, PDF_NAME(ColorSpace), base);
+		}
+		pdf_dict_del(ctx, dict, PDF_NAME(Decode));
+		if (!pdf_dict_get(ctx, dict, PDF_NAME(ColorSpace)))
+		{
+			fz_colorspace *pcs = pix->colorspace;
+			if (pcs && fz_colorspace_is_icc(ctx, pcs) && !fz_colorspace_is_device(ctx, pcs))
+			{
+				cs = pdf_new_array(ctx, doc, 2);
+				pdf_array_push(ctx, cs, PDF_NAME(ICCBased));
+				pdf_array_push_drop(ctx, cs, pa_icc(ctx, doc, pcs));
+			}
+			else
+				cs = pdf_keep_obj(ctx, n == 1 ? PDF_NAME(DeviceGray) : n == 4 ? PDF_NAME(DeviceCMYK) : PDF_NAME(DeviceRGB));
+			pdf_dict_put(ctx, dict, PDF_NAME(ColorSpace), cs);
+		}
+		if (mask && !pdf_dict_get(ctx, dict, PDF_NAME(SMask)) && pdf_dict_get_int(ctx, dict, PDF_NAME(SMaskInData)))
+		{
+			pdf_obj *md = pdf_new_dict(ctx, doc, 6);
+			fz_try(ctx)
+			{
+				pdf_dict_put(ctx, md, PDF_NAME(Type), PDF_NAME(XObject));
+				pdf_dict_put(ctx, md, PDF_NAME(Subtype), PDF_NAME(Image));
+				pdf_dict_put_int(ctx, md, PDF_NAME(Width), w);
+				pdf_dict_put_int(ctx, md, PDF_NAME(Height), h);
+				pdf_dict_put(ctx, md, PDF_NAME(ColorSpace), PDF_NAME(DeviceGray));
+				pdf_dict_put_int(ctx, md, PDF_NAME(BitsPerComponent), 8);
+				smask = pdf_add_stream(ctx, doc, mask, md, 0);
+			}
+			fz_always(ctx)
+				pdf_drop_obj(ctx, md);
+			fz_catch(ctx)
+				fz_rethrow(ctx);
+			pdf_dict_put(ctx, dict, PDF_NAME(SMask), smask);
+		}
+		pdf_dict_del(ctx, dict, PDF_NAME(SMaskInData));
+		pdf_dict_del(ctx, dict, PDF_NAME(DecodeParms));
+		pdf_dict_put_int(ctx, dict, PDF_NAME(Width), w);
+		pdf_dict_put_int(ctx, dict, PDF_NAME(Height), h);
+		pdf_dict_put_int(ctx, dict, PDF_NAME(BitsPerComponent), 8);
+		pdf_update_stream(ctx, doc, ref, buf, 0);
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_obj(ctx, smask);
+		pdf_drop_obj(ctx, cs);
+		fz_drop_buffer(ctx, mask);
+		fz_drop_buffer(ctx, buf);
+		fz_drop_pixmap(ctx, pix);
+		fz_drop_image(ctx, img);
+		pdf_drop_obj(ctx, ref);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
 static void pa_stream(fz_context *ctx, pa_walk *w, int num, pdf_obj *dict)
 {
 	pa_found *f = w->f;
 	pdf_obj *filter = pdf_dict_get(ctx, dict, PDF_NAME(Filter));
+	if (pa_has_filter(ctx, filter, "JPXDecode") && pdf_name_eq(ctx, pdf_dict_get(ctx, dict, PDF_NAME(Subtype)), PDF_NAME(Image)))
+	{
+		/* PDF/A-1 has no JPEG 2000 at all. */
+		int bad = f->part == 1;
+		if (!bad)
+		{
+			fz_buffer *raw = pdf_load_raw_stream_number(ctx, w->doc, num);
+			fz_try(ctx)
+				bad = pa_jpx_bad(raw->data, raw->len, pdf_dict_get(ctx, dict, PDF_NAME(ColorSpace)) != NULL);
+			fz_always(ctx)
+				fz_drop_buffer(ctx, raw);
+			fz_catch(ctx)
+				fz_rethrow(ctx);
+		}
+		if (bad)
+		{
+			f->jpx++;
+			if (f->fix)
+				pa_unjpx(ctx, w->doc, num, dict);
+		}
+	}
+	else if (f->part == 1 && pdf_name_eq(ctx, pdf_dict_get(ctx, dict, PDF_NAME(Subtype)), PDF_NAME(Image)) &&
+		!pdf_dict_get_bool(ctx, dict, PDF_NAME(ImageMask)) && pdf_dict_get_int(ctx, dict, PDF_NAME(BitsPerComponent)) > 8)
+	{
+		f->deep++;
+		if (f->fix)
+			pa_unjpx(ctx, w->doc, num, dict);
+	}
 	if (pa_has_filter(ctx, filter, "LZWDecode") || pa_has_filter(ctx, filter, "LZW"))
 	{
 		f->lzw++;
@@ -9656,7 +11719,10 @@ static void pa_stream(fz_context *ctx, pa_walk *w, int num, pdf_obj *dict)
 	}
 	if (pdf_name_eq(ctx, pdf_dict_get(ctx, dict, PDF_NAME(Subtype)), PDF_NAME(PS)))
 	{
-		f->postscript++;
+		if (f->fix)
+			f->postscript++;
+		else
+			pdf_array_push_drop(ctx, f->ps_streams, pdf_new_indirect(ctx, w->doc, num, 0));
 		if (f->fix)
 		{
 			/* PostScript only printers ran: an empty form in its place. */
@@ -9681,14 +11747,193 @@ static void pa_stream(fz_context *ctx, pa_walk *w, int num, pdf_obj *dict)
 
 static int pa_is_font(fz_context *ctx, pdf_obj *obj);
 
+static int pa_intent_ok(const char *n)
+{
+	return !strcmp(n, "RelativeColorimetric") || !strcmp(n, "AbsoluteColorimetric") || !strcmp(n, "Perceptual") || !strcmp(n, "Saturation");
+}
+
+static int pa_blend_ok(fz_context *ctx, pdf_obj *bm)
+{
+	static const char *modes[] = { "Normal", "Compatible", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "ColorDodge", "ColorBurn",
+		"HardLight", "SoftLight", "Difference", "Exclusion", "Hue", "Saturation", "Color", "Luminosity", NULL };
+	int n = pdf_is_array(ctx, bm) ? pdf_array_len(ctx, bm) : 1;
+	for (int i = 0; i < n; i++)
+	{
+		pdf_obj *m = pdf_is_array(ctx, bm) ? pdf_array_get(ctx, bm, i) : bm;
+		int ok = 0;
+		for (int k = 0; modes[k] && !ok; k++)
+			ok = pdf_is_name(ctx, m) && !strcmp(pdf_to_name(ctx, m), modes[k]);
+		if (!ok)
+			return 0;
+	}
+	return 1;
+}
+
+/* A halftone's transfer function: primaries (and the default) must have none, other colorants one. */
+static void pa_halftone_tf(fz_context *ctx, pa_found *f, pdf_obj *ht, const char *colorant)
+{
+	int primary = !colorant || !strcmp(colorant, "Default") || !strcmp(colorant, "Cyan") || !strcmp(colorant, "Magenta") ||
+		!strcmp(colorant, "Yellow") || !strcmp(colorant, "Black");
+	pdf_obj *tf = pdf_dict_gets(ctx, ht, "TransferFunction");
+	if (primary && tf)
+	{
+		f->gstate++;
+		if (f->fix)
+			pdf_dict_dels(ctx, ht, "TransferFunction");
+	}
+	else if (!primary && !tf)
+	{
+		f->gstate++;
+		if (f->fix)
+			pdf_dict_puts_drop(ctx, ht, "TransferFunction", pdf_new_name(ctx, "Identity"));
+	}
+}
+
+/* Graphics settings PDF/A doesn't allow, put right where a value can be. */
+static void pa_gstate(fz_context *ctx, pa_found *f, pdf_obj *d, pdf_obj *sub)
+{
+	pdf_obj *ri = pdf_dict_get(ctx, d, PDF_NAME(RI)), *bm = pdf_dict_get(ctx, d, PDF_NAME(BM)), *ht = pdf_dict_gets(ctx, d, "HT");
+	pdf_obj *intent = pdf_name_eq(ctx, sub, PDF_NAME(Image)) ? pdf_dict_get(ctx, d, PDF_NAME(Intent)) : NULL;
+	if (ri && !pa_intent_ok(pdf_to_name(ctx, ri)))
+	{
+		f->gstate++;
+		if (f->fix)
+			pdf_dict_put(ctx, d, PDF_NAME(RI), PDF_NAME(RelativeColorimetric));
+	}
+	if (intent && !pa_intent_ok(pdf_to_name(ctx, intent)))
+	{
+		f->gstate++;
+		if (f->fix)
+			pdf_dict_put(ctx, d, PDF_NAME(Intent), PDF_NAME(RelativeColorimetric));
+	}
+	if (bm && !pa_blend_ok(ctx, bm))
+	{
+		f->gstate++;
+		if (f->fix)
+			pdf_dict_put(ctx, d, PDF_NAME(BM), PDF_NAME(Normal));
+	}
+	if (f->part == 1)
+	{
+		/* PDF/A-1 has no transparency: see-through objects can't be taken out without changing the page. */
+		pdf_obj *sm = pdf_dict_get(ctx, d, PDF_NAME(SMask)), *ca = pdf_dict_get(ctx, d, PDF_NAME(CA)), *ca2 = pdf_dict_get(ctx, d, PDF_NAME(ca));
+		if (bm && pa_blend_ok(ctx, bm) && !pdf_name_eq(ctx, bm, PDF_NAME(Normal)) && !(pdf_is_name(ctx, bm) && !strcmp(pdf_to_name(ctx, bm), "Compatible")))
+			f->transparency++;
+		if (sm && !pdf_name_eq(ctx, sm, PDF_NAME(None)))
+			f->transparency++;
+		if ((ca && fabsf(pdf_to_real(ctx, ca) - 1) > 0.000001f) || (ca2 && fabsf(pdf_to_real(ctx, ca2) - 1) > 0.000001f))
+			f->transparency++;
+		return; /* halftones and overprinting are PDF/A-2's rules */
+	}
+	if (pdf_dict_gets(ctx, d, "HTP"))
+	{
+		f->gstate++;
+		if (f->fix)
+			pdf_dict_dels(ctx, d, "HTP");
+	}
+	if (pdf_is_dict(ctx, ht))
+	{
+		int type = pdf_to_int(ctx, pdf_dict_gets(ctx, ht, "HalftoneType"));
+		if (type != 1 && type != 5)
+		{
+			/* Threshold halftones: the device's own instead. */
+			f->gstate++;
+			if (f->fix)
+				pdf_dict_dels(ctx, d, "HT");
+		}
+		else if (type == 1)
+			pa_halftone_tf(ctx, f, ht, NULL);
+		else
+			for (int i = 0; i < pdf_dict_len(ctx, ht); i++)
+			{
+				pdf_obj *one = pdf_dict_get_val(ctx, ht, i);
+				if (pdf_is_dict(ctx, one) && pdf_dict_gets(ctx, one, "HalftoneType"))
+					pa_halftone_tf(ctx, f, one, pdf_to_name(ctx, pdf_dict_get_key(ctx, ht, i)));
+			}
+	}
+	if (pdf_dict_gets(ctx, d, "HalftoneType") && pdf_dict_gets(ctx, d, "HalftoneName"))
+	{
+		f->gstate++;
+		if (f->fix)
+			pdf_dict_dels(ctx, d, "HalftoneName");
+	}
+	/* Overprint mode 1 means nothing for ICC-based CMYK, which device CMYK becomes without a CMYK output intent. */
+	if (pdf_dict_get_int(ctx, d, PDF_NAME(OPM)) == 1 && f->oi != 4 && (pdf_dict_get_bool(ctx, d, PDF_NAME(OP)) || pdf_dict_get_bool(ctx, d, PDF_NAME(op))))
+	{
+		f->opm++;
+		if (f->fix)
+			pdf_dict_put_int(ctx, d, PDF_NAME(OPM), 0);
+	}
+}
+
+/* The character collection of a predefined CMap (ISO 32000-1 Table 118), or NULL. */
+static const char *pa_cmap_ordering(const char *name)
+{
+	static const char *map[][2] = {
+		{ "UniGB", "GB1" }, { "GB", "GB1" }, { "UniCNS", "CNS1" }, { "B5", "CNS1" }, { "HKscs", "CNS1" }, { "ETen", "CNS1" }, { "CNS", "CNS1" },
+		{ "UniJIS", "Japan1" }, { "83pv", "Japan1" }, { "90m", "Japan1" }, { "90p", "Japan1" }, { "Add-", "Japan1" }, { "EUC-", "Japan1" },
+		{ "Ext-", "Japan1" }, { "UniKS", "Korea1" }, { "KSC", "Korea1" },
+	};
+	if (!strcmp(name, "H") || !strcmp(name, "V"))
+		return "Japan1";
+	for (size_t i = 0; i < nelem(map); i++)
+		if (!strncmp(name, map[i][0], strlen(map[i][0])))
+			return map[i][1];
+	return NULL;
+}
+
+/* A Type 0 font: its CIDFont's character collection must be its CMap's (Identity CMaps take any); an embedded TrueType
+ * CIDFont needs its CID to glyph map. Both are details readers go by the font for. */
+static void pa_type0(fz_context *ctx, pa_found *f, pdf_obj *font)
+{
+	pdf_obj *enc = pdf_dict_get(ctx, font, PDF_NAME(Encoding)), *cidfont = pdf_array_get(ctx, pdf_dict_get(ctx, font, PDF_NAME(DescendantFonts)), 0);
+	pdf_obj *have = pdf_dict_get(ctx, cidfont, PDF_NAME(CIDSystemInfo)), *want = NULL, *map = pdf_dict_get(ctx, cidfont, PDF_NAME(CIDToGIDMap));
+	const char *ordering = NULL;
+	if (!pdf_is_dict(ctx, cidfont))
+		return;
+	/* (The check counts this where the font draws text: pa_font_use.) */
+	if (f->fix && pdf_name_eq(ctx, pdf_dict_get(ctx, cidfont, PDF_NAME(Subtype)), PDF_NAME(CIDFontType2)) && pdf_dict_getp(ctx, cidfont, "FontDescriptor/FontFile2") &&
+		!pdf_is_stream(ctx, map) && !pdf_name_eq(ctx, map, PDF_NAME(Identity)))
+	{
+		f->untyped_fonts++;
+		pdf_dict_put(ctx, cidfont, PDF_NAME(CIDToGIDMap), PDF_NAME(Identity));
+	}
+	if (pdf_is_array(ctx, have))
+		have = pdf_array_get(ctx, have, 0);
+	if (pdf_is_stream(ctx, enc))
+	{
+		want = pdf_dict_get(ctx, enc, PDF_NAME(CIDSystemInfo));
+		if (pdf_is_array(ctx, want))
+			want = pdf_array_get(ctx, want, 0);
+	}
+	else if (pdf_is_name(ctx, enc) && !pdf_name_eq(ctx, enc, PDF_NAME(Identity_H)) && !pdf_name_eq(ctx, enc, PDF_NAME(Identity_V)))
+		ordering = pa_cmap_ordering(pdf_to_name(ctx, enc));
+	if (!pdf_is_dict(ctx, have) || (!pdf_is_dict(ctx, want) && !ordering))
+		return;
+	if (want ? strcmp(pdf_dict_get_text_string(ctx, have, PDF_NAME(Registry)), pdf_dict_get_text_string(ctx, want, PDF_NAME(Registry))) ||
+			strcmp(pdf_dict_get_text_string(ctx, have, PDF_NAME(Ordering)), pdf_dict_get_text_string(ctx, want, PDF_NAME(Ordering))) ||
+			pdf_dict_get_int(ctx, have, PDF_NAME(Supplement)) > pdf_dict_get_int(ctx, want, PDF_NAME(Supplement))
+		: strcmp(pdf_dict_get_text_string(ctx, have, PDF_NAME(Registry)), "Adobe") || strcmp(pdf_dict_get_text_string(ctx, have, PDF_NAME(Ordering)), ordering))
+	{
+		f->untyped_fonts++;
+		if (f->fix)
+		{
+			pdf_obj *csi = pdf_dict_put_dict(ctx, cidfont, PDF_NAME(CIDSystemInfo), 3);
+			pdf_dict_put_text_string(ctx, csi, PDF_NAME(Registry), want ? pdf_dict_get_text_string(ctx, want, PDF_NAME(Registry)) : "Adobe");
+			pdf_dict_put_text_string(ctx, csi, PDF_NAME(Ordering), want ? pdf_dict_get_text_string(ctx, want, PDF_NAME(Ordering)) : ordering);
+			pdf_dict_put_int(ctx, csi, PDF_NAME(Supplement), want ? pdf_dict_get_int(ctx, want, PDF_NAME(Supplement)) : 0);
+		}
+	}
+}
+
 static void pa_dict(fz_context *ctx, pa_walk *w, pdf_obj *d)
 {
 	pa_found *f = w->f;
 	pdf_obj *sub = pdf_dict_get(ctx, d, PDF_NAME(Subtype)), *tr2;
 	static const char *keys[] = { "A", "OpenAction", "Next", NULL };
-	/* XMP on pages, pictures and forms is held to PDF/A's rules like the document's: properties from schemas it
-	 * doesn't know make it go. The document's own is written again when fixing. */
-	if (d != pdf_resolve_indirect(ctx, pdf_dict_get(ctx, pdf_trailer(ctx, w->doc), PDF_NAME(Root))) && pa_xmp_foreign(ctx, pdf_dict_get(ctx, d, PDF_NAME(Metadata))))
+	/* XMP on pages, pictures and forms is held to PDF/A's rules like the document's. It may use the document's
+	 * extension schemas, but not when fixing: the document's XMP is written again without them. */
+	if (d != pdf_resolve_indirect(ctx, pdf_dict_get(ctx, pdf_trailer(ctx, w->doc), PDF_NAME(Root))) &&
+		pa_xmp_foreign(ctx, pdf_dict_get(ctx, d, PDF_NAME(Metadata)), f->part, f->fix ? NULL : f->xmp, f->fix))
 	{
 		f->object_meta++;
 		if (f->fix)
@@ -9701,13 +11946,68 @@ static void pa_dict(fz_context *ctx, pa_walk *w, pdf_obj *d)
 		if (f->fix)
 			pdf_dict_put(ctx, d, PDF_NAME(Type), PDF_NAME(Font));
 	}
-	/* A subset's glyph list (optional) must be exact, and often isn't: it goes when fixing. */
-	if (f->fix && pdf_name_eq(ctx, pdf_dict_get(ctx, d, PDF_NAME(Type)), PDF_NAME(FontDescriptor)) &&
+	if (pdf_dict_get(ctx, d, PDF_NAME(AF)))
+	{
+		pdf_obj *af = pdf_dict_get(ctx, d, PDF_NAME(AF));
+		for (int i = 0; i < (pdf_is_array(ctx, af) ? pdf_array_len(ctx, af) : 1); i++)
+			pdf_array_push(ctx, f->afs, pdf_is_array(ctx, af) ? pdf_array_get(ctx, af, i) : af);
+	}
+	pa_gstate(ctx, f, d, sub);
+	if (pdf_name_eq(ctx, sub, PDF_NAME(Type0)))
+		pa_type0(ctx, f, d);
+	/* A signature a copy can't keep valid (its bytes change): its value goes, with the field left unsigned. */
+	if (f->fix == 1 && pdf_dict_get(ctx, d, PDF_NAME(V)) && pdf_name_eq(ctx, pdf_dict_get_inheritable(ctx, d, PDF_NAME(FT)), PDF_NAME(Sig)))
+	{
+		f->signatures++;
+		pdf_dict_del(ctx, d, PDF_NAME(V));
+	}
+	/* Form fields can't have actions of their own. */
+	if (pdf_name_eq(ctx, sub, PDF_NAME(Widget)) && pdf_dict_get(ctx, d, PDF_NAME(A)))
+	{
+		f->actions++;
+		pa_note_action(f, "form field actions");
+		if (f->fix)
+			pdf_dict_del(ctx, d, PDF_NAME(A));
+	}
+	/* A subset's glyph list must be exact, and often isn't. PDF/A-2 makes it optional (it goes when fixing); PDF/A-1
+	 * wants one (it's written from the font). */
+	if (f->part >= 2 && f->fix && pdf_name_eq(ctx, pdf_dict_get(ctx, d, PDF_NAME(Type)), PDF_NAME(FontDescriptor)) &&
 		(pdf_dict_gets(ctx, d, "CIDSet") || pdf_dict_gets(ctx, d, "CharSet")))
 	{
 		f->glyph_lists++;
 		pdf_dict_dels(ctx, d, "CIDSet");
 		pdf_dict_dels(ctx, d, "CharSet");
+	}
+	if (f->part == 1 && pa_is_subset(ctx, d))
+		pa_glyph_set(ctx, w->doc, f, d);
+	if (f->part == 1)
+	{
+		/* No embedded files at all, wherever a file specification holds one. */
+		if (pdf_dict_get(ctx, d, PDF_NAME(EF)))
+		{
+			f->attachments++;
+			if (f->fix)
+				pdf_dict_del(ctx, d, PDF_NAME(EF));
+		}
+		/* Transparency groups: harmless to take off when nothing on the page is see-through. */
+		if (pdf_name_eq(ctx, pdf_dict_getp(ctx, d, "Group/S"), PDF_NAME(Transparency)))
+		{
+			f->groups++;
+			if (f->fix)
+				pdf_dict_del(ctx, d, PDF_NAME(Group));
+		}
+		if ((pdf_name_eq(ctx, sub, PDF_NAME(Image)) || pdf_name_eq(ctx, sub, PDF_NAME(Form))) && pdf_dict_get(ctx, d, PDF_NAME(SMask)))
+			f->transparency++;
+		if (pdf_dict_get(ctx, d, PDF_NAME(Rect)) && pdf_dict_get(ctx, d, PDF_NAME(CA)) && fabsf(pdf_dict_get_real(ctx, d, PDF_NAME(CA)) - 1) > 0.000001f)
+			f->transparency++;
+		/* Pictures of 1, 2, 4 or 8 bits (masks 1). */
+		if (pdf_name_eq(ctx, sub, PDF_NAME(Image)) && pdf_dict_get_bool(ctx, d, PDF_NAME(ImageMask)) && pdf_dict_get(ctx, d, PDF_NAME(BitsPerComponent)) &&
+			pdf_dict_get_int(ctx, d, PDF_NAME(BitsPerComponent)) != 1)
+		{
+			f->deep++;
+			if (f->fix)
+				pdf_dict_put_int(ctx, d, PDF_NAME(BitsPerComponent), 1);
+		}
 	}
 	for (int k = 0; keys[k]; k++)
 	{
@@ -9716,7 +12016,7 @@ static void pa_dict(fz_context *ctx, pa_walk *w, pdf_obj *d)
 		for (int i = 0; i < n; i++)
 		{
 			const char *name = NULL;
-			int kind = pa_action(ctx, pdf_is_array(ctx, a) ? pdf_array_get(ctx, a, i) : a, &name);
+			int kind = pa_action(ctx, pdf_is_array(ctx, a) ? pdf_array_get(ctx, a, i) : a, &name, f->part);
 			if (kind == 1)
 				f->scripts++;
 			else if (kind == 2)
@@ -9760,14 +12060,14 @@ static void pa_dict(fz_context *ctx, pa_walk *w, pdf_obj *d)
 				pdf_dict_dels(ctx, d, "OPI");
 			}
 		}
-		if (pdf_dict_gets(ctx, d, "Subtype2") || pdf_dict_get(ctx, d, PDF_NAME(PS)))
+		if (pdf_is_indirect(ctx, pdf_dict_get(ctx, d, PDF_NAME(PS))))
+			pdf_array_push(ctx, f->ps_alts, pdf_dict_get(ctx, d, PDF_NAME(PS)));
+		/* Counted where content uses the form (pa_op_Do_form); fixing takes it out wherever it is. */
+		if (f->fix && (pdf_dict_gets(ctx, d, "Subtype2") || pdf_dict_get(ctx, d, PDF_NAME(PS))))
 		{
 			f->postscript++;
-			if (f->fix)
-			{
-				pdf_dict_dels(ctx, d, "Subtype2");
-				pdf_dict_del(ctx, d, PDF_NAME(PS));
-			}
+			pdf_dict_dels(ctx, d, "Subtype2");
+			pdf_dict_del(ctx, d, PDF_NAME(PS));
 		}
 	}
 	if (pdf_dict_get(ctx, d, PDF_NAME(TR)))
@@ -9785,6 +12085,61 @@ static void pa_dict(fz_context *ctx, pa_walk *w, pdf_obj *d)
 	}
 }
 
+/* ISO 19005-1 6.1.12, -2 6.1.13: integers, strings and names no bigger than PDF/A readers must handle. */
+static void pa_limits(fz_context *ctx, pa_found *f, pdf_obj *v)
+{
+	if (pdf_is_int(ctx, v))
+	{
+		int64_t i = pdf_to_int64(ctx, v);
+		f->limits += i > 2147483647 || i < -2147483647 - 1;
+	}
+	else if (pdf_is_string(ctx, v))
+		f->limits += pdf_to_str_len(ctx, v) > (f->part == 1 ? 65535u : 32767u);
+	else if (pdf_is_name(ctx, v))
+		f->limits += strlen(pdf_to_name(ctx, v)) > 127;
+	else if (pdf_is_real(ctx, v) && f->part == 1)
+		f->limits += fabsf(pdf_to_real(ctx, v)) > 32767;
+	else if (pdf_is_array(ctx, v))
+		f->limits += (f->part == 1 && pdf_array_len(ctx, v) > 8191) ||
+			(pdf_name_eq(ctx, pdf_array_get(ctx, v, 0), PDF_NAME(DeviceN)) && pdf_array_len(ctx, pdf_array_get(ctx, v, 1)) > (f->part == 1 ? 8 : 32));
+	else if (pdf_is_dict(ctx, v) && f->part == 1)
+		f->limits += pdf_dict_len(ctx, v) > 4095;
+}
+
+/* An ICC profile PDF/A takes in a colour space: for input, output, a monitor or colour conversion, of grey, RGB,
+ * CMYK or Lab as its N says; version below 5 (PDF/A-1: below 3). */
+static int pa_icc_ok(fz_context *ctx, pdf_obj *p, int part)
+{
+	fz_buffer *buf = NULL;
+	int ok = 0;
+	if (!pdf_is_stream(ctx, p))
+		return 0;
+	fz_var(buf);
+	fz_try(ctx)
+	{
+		buf = pdf_load_stream(ctx, p);
+		if (buf->len >= 128)
+		{
+			const unsigned char *d = buf->data;
+			int n = pdf_dict_get_int(ctx, p, PDF_NAME(N));
+			int cs = !memcmp(d + 16, "GRAY", 4) ? 1 : !memcmp(d + 16, "RGB ", 4) || !memcmp(d + 16, "Lab ", 4) ? 3 : !memcmp(d + 16, "CMYK", 4) ? 4 : 0;
+			ok = (!memcmp(d + 12, "prtr", 4) || !memcmp(d + 12, "mntr", 4) || !memcmp(d + 12, "scnr", 4) || !memcmp(d + 12, "spac", 4)) &&
+				cs && cs == n && d[8] < (part == 1 ? 3 : 5);
+		}
+	}
+	fz_always(ctx)
+		fz_drop_buffer(ctx, buf);
+	fz_catch(ctx)
+	{
+		fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+		fz_ignore_error(ctx);
+		ok = 0;
+	}
+	return ok;
+}
+
+static pdf_obj *pa_icc(fz_context *ctx, pdf_document *doc, fz_colorspace *cs);
+
 static void pa_visit(fz_context *ctx, pa_walk *w, pdf_obj *obj, int depth)
 {
 	if (depth > 64)
@@ -9796,15 +12151,58 @@ static void pa_visit(fz_context *ctx, pa_walk *w, pdf_obj *obj, int depth)
 	}
 	if (pdf_is_array(ctx, obj))
 	{
+		/* An ICC-based colour space whose profile PDF/A can't take: a standard one for its components instead (one
+		 * for the document, however many spaces name the old). Each profile is read once. */
+		if (!w->fonts && pdf_name_eq(ctx, pdf_array_get(ctx, obj, 0), PDF_NAME(ICCBased)))
+		{
+			pa_found *f = w->f;
+			pdf_obj *prof = pdf_array_get(ctx, obj, 1);
+			int ok;
+			if (pdf_array_contains(ctx, f->icc_good, prof))
+				ok = 1;
+			else if (pdf_array_contains(ctx, f->icc_bad, prof))
+				ok = 0;
+			else
+			{
+				ok = pa_icc_ok(ctx, prof, f->part);
+				if (pdf_is_indirect(ctx, prof))
+					pdf_array_push(ctx, ok ? f->icc_good : f->icc_bad, prof);
+			}
+			if (!ok)
+			{
+				int n = pdf_dict_get_int(ctx, prof, PDF_NAME(N));
+				f->icc++;
+				if (f->fix && (n == 1 || n == 3 || n == 4))
+				{
+					if (!f->icc_std[n])
+						f->icc_std[n] = pa_icc(ctx, w->doc, n == 1 ? fz_device_gray(ctx) : n == 3 ? fz_device_rgb(ctx) : fz_device_cmyk(ctx));
+					pdf_array_put(ctx, obj, 1, f->icc_std[n]);
+				}
+			}
+		}
 		for (int i = 0; i < pdf_array_len(ctx, obj); i++)
+		{
+			if (!w->fonts)
+				pa_limits(ctx, w->f, pdf_array_get(ctx, obj, i));
 			pa_visit(ctx, w, pdf_array_get(ctx, obj, i), depth + 1);
+		}
 	}
 	else if (pdf_is_dict(ctx, obj))
 	{
 		if (!w->fonts)
+		{
 			pa_dict(ctx, w, obj);
+			pa_limits(ctx, w->f, obj);
+		}
 		for (int i = 0; i < pdf_dict_len(ctx, obj); i++)
+		{
+			if (!w->fonts)
+			{
+				pa_limits(ctx, w->f, pdf_dict_get_key(ctx, obj, i));
+				pa_limits(ctx, w->f, pdf_dict_get_val(ctx, obj, i));
+			}
 			pa_visit(ctx, w, pdf_dict_get_val(ctx, obj, i), depth + 1);
+		}
 	}
 }
 
@@ -9869,7 +12267,36 @@ static void pa_objects(fz_context *ctx, pdf_document *doc, pa_found *f, pdf_obj 
 
 /* ---- catalog, attachments, annotations */
 
-static int pa_output_intent(fz_context *ctx, pdf_document *doc, int *bad)
+/* An output intent's profile as PDF/A takes it: for output or a monitor, grey, RGB or CMYK as its N says, ICC
+ * version below 5 (PDF/A-1: below 3). Its components, or 0. */
+static int pa_profile_ok(fz_context *ctx, pdf_obj *p, int part)
+{
+	fz_buffer *buf = NULL;
+	int n = 0;
+	fz_var(buf);
+	fz_try(ctx)
+	{
+		buf = pdf_load_stream(ctx, p);
+		if (buf->len >= 128)
+		{
+			const unsigned char *d = buf->data;
+			int cs = !memcmp(d + 16, "GRAY", 4) ? 1 : !memcmp(d + 16, "RGB ", 4) ? 3 : !memcmp(d + 16, "CMYK", 4) ? 4 : 0;
+			if ((!memcmp(d + 12, "prtr", 4) || !memcmp(d + 12, "mntr", 4)) && cs && cs == pdf_dict_get_int(ctx, p, PDF_NAME(N)) && d[8] < (part == 1 ? 3 : 5))
+				n = cs;
+		}
+	}
+	fz_always(ctx)
+		fz_drop_buffer(ctx, buf);
+	fz_catch(ctx)
+	{
+		fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+		fz_ignore_error(ctx);
+		n = 0;
+	}
+	return n;
+}
+
+static int pa_output_intent(fz_context *ctx, pdf_document *doc, int *bad, int part)
 {
 	pdf_obj *list = pdf_dict_getp(ctx, pdf_trailer(ctx, doc), "Root/OutputIntents"), *profile = NULL;
 	int n = 0;
@@ -9877,17 +12304,30 @@ static int pa_output_intent(fz_context *ctx, pdf_document *doc, int *bad)
 	for (int i = 0; i < pdf_array_len(ctx, list); i++)
 	{
 		pdf_obj *oi = pdf_array_get(ctx, list, i), *p = pdf_dict_get(ctx, oi, PDF_NAME(DestOutputProfile));
-		if (!pdf_is_name(ctx, pdf_dict_get(ctx, oi, PDF_NAME(S))) && !strcmp(pdf_dict_get_name(ctx, oi, PDF_NAME(S)), "GTS_PDFA1"))
+		int k;
+		if (strcmp(pdf_dict_get_name(ctx, oi, PDF_NAME(S)), "GTS_PDFA1"))
+		{
+			/* Others (PDF/X) must share the profile, and not point to one elsewhere. */
+			if ((p && profile && pdf_resolve_indirect(ctx, p) != pdf_resolve_indirect(ctx, profile)) || pdf_dict_gets(ctx, oi, "DestOutputProfileRef"))
+				*bad = 1;
 			continue;
-		if (!pdf_is_stream(ctx, p) || (profile && pdf_resolve_indirect(ctx, p) != pdf_resolve_indirect(ctx, profile)))
+		}
+		if (!pdf_is_stream(ctx, p) || (profile && pdf_resolve_indirect(ctx, p) != pdf_resolve_indirect(ctx, profile)) || !(k = pa_profile_ok(ctx, p, part)))
 		{
 			*bad = 1;
 			continue;
 		}
 		profile = p;
-		n = pdf_dict_get_int(ctx, p, PDF_NAME(N));
+		n = k;
 	}
-	return n;
+	/* A PDF/X intent listed first, with another profile than the PDF/A one. */
+	for (int i = 0; profile && i < pdf_array_len(ctx, list); i++)
+	{
+		pdf_obj *p = pdf_dict_get(ctx, pdf_array_get(ctx, list, i), PDF_NAME(DestOutputProfile));
+		if (p && pdf_resolve_indirect(ctx, p) != pdf_resolve_indirect(ctx, profile))
+			*bad = 1;
+	}
+	return *bad ? 0 : n;
 }
 
 static char *pa_xmp(fz_context *ctx, pdf_document *doc);
@@ -10001,6 +12441,14 @@ static int pa_file_complete(fz_context *ctx, pa_found *f, pdf_obj *fs, const cha
 	return missing;
 }
 
+static int pa_associated(fz_context *ctx, pa_found *f, pdf_obj *fs)
+{
+	for (int i = 0; i < pdf_array_len(ctx, f->afs); i++)
+		if (pdf_resolve_indirect(ctx, pdf_array_get(ctx, f->afs, i)) == pdf_resolve_indirect(ctx, fs))
+			return 1;
+	return 0;
+}
+
 static void pa_af_add(fz_context *ctx, pdf_document *doc, pdf_obj *owner, pdf_obj *fs)
 {
 	pdf_obj *af = pdf_dict_get(ctx, owner, PDF_NAME(AF));
@@ -10026,7 +12474,7 @@ static void pa_files(fz_context *ctx, pdf_document *doc, pa_found *f, const char
 		for (int i = 0; i < n; i++)
 		{
 			pdf_obj *fs = pdf_dict_get_val(ctx, tree, i);
-			if (f->part == 2 && !pa_file_is_pdfa(ctx, fs))
+			if (f->part == 1 || (f->part == 2 && !pa_file_is_pdfa(ctx, fs)))
 			{
 				f->attachments++;
 				removed++;
@@ -10036,10 +12484,14 @@ static void pa_files(fz_context *ctx, pdf_document *doc, pa_found *f, const char
 			if (f->part == 3)
 			{
 				f->attachments += pa_file_complete(ctx, f, fs, pdf_now);
-				if (f->fix)
-					pa_af_add(ctx, doc, root, fs);
-				else if (!pdf_array_contains(ctx, pdf_dict_get(ctx, root, PDF_NAME(AF)), fs))
-					f->attachments++;
+				/* Associated with something (the document, when nothing else). */
+				if (!pa_associated(ctx, f, fs))
+				{
+					if (f->fix)
+						pa_af_add(ctx, doc, root, fs);
+					else
+						f->attachments++;
+				}
 			}
 		}
 		if (removed && f->fix)
@@ -10054,13 +12506,38 @@ static void pa_files(fz_context *ctx, pdf_document *doc, pa_found *f, const char
 		fz_rethrow(ctx);
 }
 
-static int pa_bad_annot_type(fz_context *ctx, pdf_obj *st)
+static int pa_bad_annot_type(fz_context *ctx, pdf_obj *st, int part)
 {
 	static const char *bad[] = { "3D", "Sound", "Screen", "Movie", "RichMedia", NULL };
 	for (int i = 0; bad[i]; i++)
 		if (!strcmp(pdf_to_name(ctx, st), bad[i]))
 			return 1;
+	return part == 1 && pdf_name_eq(ctx, st, PDF_NAME(FileAttachment));
+}
+
+/* PDF/A-1 knows PDF 1.4's kinds of annotation; others with a look of their own can stay as stamps (same look). */
+static int pa_annot_kind_14(fz_context *ctx, pdf_obj *st)
+{
+	static const char *ok[] = { "Text", "Link", "FreeText", "Line", "Square", "Circle", "Highlight", "Underline", "Squiggly", "StrikeOut", "Stamp",
+		"Ink", "Popup", "Widget", "PrinterMark", "TrapNet", NULL };
+	for (int i = 0; ok[i]; i++)
+		if (!strcmp(pdf_to_name(ctx, st), ok[i]))
+			return 1;
 	return 0;
+}
+
+static int pa_is_button(fz_context *ctx, pdf_obj *a);
+
+/* A look of several states where PDF/A wants one stream (all but buttons): the one showing. */
+static pdf_obj *pa_states_look(fz_context *ctx, pdf_obj *a)
+{
+	pdf_obj *n = pdf_dict_getp(ctx, a, "AP/N"), *as = pdf_dict_get(ctx, a, PDF_NAME(AS)), *pick;
+	if (!pdf_is_dict(ctx, n) || pdf_is_stream(ctx, n) || pa_is_button(ctx, a))
+		return NULL;
+	pick = as ? pdf_dict_get(ctx, n, as) : NULL;
+	if (!pdf_is_stream(ctx, pick))
+		pick = pdf_dict_len(ctx, n) ? pdf_dict_get_val(ctx, n, 0) : NULL;
+	return pdf_is_stream(ctx, pick) ? pick : NULL;
 }
 
 #define PA_NOT_SHOWN (PDF_ANNOT_IS_INVISIBLE | PDF_ANNOT_IS_HIDDEN | PDF_ANNOT_IS_NO_VIEW | PDF_ANNOT_IS_TOGGLE_NO_VIEW)
@@ -10069,6 +12546,66 @@ static int pa_zero_rect(fz_context *ctx, pdf_obj *annot)
 {
 	fz_rect r = pdf_dict_get_rect(ctx, annot, PDF_NAME(Rect));
 	return r.x1 - r.x0 == 0 || r.y1 - r.y0 == 0;
+}
+
+static int pa_is_button(fz_context *ctx, pdf_obj *a)
+{
+	return pdf_name_eq(ctx, pdf_dict_get(ctx, a, PDF_NAME(Subtype)), PDF_NAME(Widget)) && pdf_name_eq(ctx, pdf_dict_get_inheritable(ctx, a, PDF_NAME(FT)), PDF_NAME(Btn));
+}
+
+/* A button whose normal look is one stream, where PDF/A wants it under a state's name. */
+static int pa_button_stream(fz_context *ctx, pdf_obj *a)
+{
+	return pa_is_button(ctx, a) && pdf_is_stream(ctx, pdf_dict_getp(ctx, a, "AP/N"));
+}
+
+/* A button's single look put under its state's name (as it shows now: its AS, or Off). */
+static void pa_button_states(fz_context *ctx, pdf_obj *a)
+{
+	pdf_obj *ap = pdf_dict_get(ctx, a, PDF_NAME(AP)), *stm = pdf_keep_obj(ctx, pdf_dict_get(ctx, ap, PDF_NAME(N)));
+	const char *as = pdf_dict_get_name(ctx, a, PDF_NAME(AS));
+	char state[64];
+	fz_strlcpy(state, *as ? as : "Off", sizeof state);
+	fz_try(ctx)
+	{
+		pdf_obj *n = pdf_dict_put_dict(ctx, ap, PDF_NAME(N), 1);
+		pdf_dict_puts(ctx, n, state, stm);
+		pdf_dict_put_name(ctx, a, PDF_NAME(AS), state);
+	}
+	fz_always(ctx)
+		pdf_drop_obj(ctx, stm);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* An empty look for an annotation MuPDF can't draw: PDF/A wants one, and it had none to show. */
+static void pa_blank_look(fz_context *ctx, pdf_document *doc, pdf_obj *a)
+{
+	fz_rect r = pdf_dict_get_rect(ctx, a, PDF_NAME(Rect));
+	pdf_obj *dict = pdf_new_dict(ctx, doc, 4), *stm = NULL, *ap;
+	fz_buffer *empty = fz_new_buffer(ctx, 1);
+	fz_var(stm);
+	fz_try(ctx)
+	{
+		pdf_dict_put(ctx, dict, PDF_NAME(Type), PDF_NAME(XObject));
+		pdf_dict_put(ctx, dict, PDF_NAME(Subtype), PDF_NAME(Form));
+		pdf_dict_put_rect(ctx, dict, PDF_NAME(BBox), fz_make_rect(0, 0, r.x1 - r.x0, r.y1 - r.y0));
+		stm = pdf_add_stream(ctx, doc, empty, dict, 0);
+		ap = pdf_dict_get(ctx, a, PDF_NAME(AP));
+		if (!pdf_is_dict(ctx, ap))
+			ap = pdf_dict_put_dict(ctx, a, PDF_NAME(AP), 1);
+		pdf_dict_put(ctx, ap, PDF_NAME(N), stm);
+		if (pa_is_button(ctx, a))
+			pa_button_states(ctx, a);
+	}
+	fz_always(ctx)
+	{
+		pdf_drop_obj(ctx, stm);
+		pdf_drop_obj(ctx, dict);
+		fz_drop_buffer(ctx, empty);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
 }
 
 /* Annotations, checked from their objects (fixing works on the loaded page instead). */
@@ -10084,11 +12621,15 @@ static void pa_annots(fz_context *ctx, pdf_document *doc, pa_found *f)
 			int flags = pdf_dict_get_int(ctx, a, PDF_NAME(F));
 			if (!pdf_is_dict(ctx, a))
 				continue;
-			if (pa_bad_annot_type(ctx, st))
+			if (pa_bad_annot_type(ctx, st, f->part) || (f->part == 1 && !pa_annot_kind_14(ctx, st) && !pdf_dict_getp(ctx, a, "AP/N")))
 			{
 				pa_add(ctx, &f->annot_types, i);
 				continue;
 			}
+			if (f->part == 1 && !pa_annot_kind_14(ctx, st))
+				f->annot_kinds++;
+			if (f->part == 1 && (f->oi == 1 || f->oi == 4) && (pdf_dict_get(ctx, a, PDF_NAME(C)) || pdf_dict_get(ctx, a, PDF_NAME(IC))))
+				f->annot_colours++;
 			if (pdf_name_eq(ctx, st, PDF_NAME(Popup)))
 				continue;
 			if (pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)))
@@ -10097,12 +12638,14 @@ static void pa_annots(fz_context *ctx, pdf_document *doc, pa_found *f)
 				if (f->part == 2 && !pa_file_is_pdfa(ctx, fs))
 					f->attachments++;
 				else if (f->part == 3)
-					f->attachments += pa_file_complete(ctx, f, fs, NULL) || !pdf_array_contains(ctx, pdf_dict_get(ctx, a, PDF_NAME(AF)), fs);
+					f->attachments += pa_file_complete(ctx, f, fs, NULL) || !pa_associated(ctx, f, fs);
 			}
 			if (!(flags & PDF_ANNOT_IS_PRINT) || (flags & PA_NOT_SHOWN))
 				pa_add(ctx, &f->annot_flags, i);
 			ap = pdf_dict_get(ctx, a, PDF_NAME(AP));
 			if (pdf_dict_get(ctx, ap, PDF_NAME(D)) || pdf_dict_get(ctx, ap, PDF_NAME(R)))
+				pa_add(ctx, &f->annot_ap, i);
+			else if (pa_button_stream(ctx, a) || pa_states_look(ctx, a))
 				pa_add(ctx, &f->annot_ap, i);
 			else if (!pdf_name_eq(ctx, st, PDF_NAME(Link)) && !pa_zero_rect(ctx, a) && !pdf_dict_get(ctx, ap, PDF_NAME(N)))
 				pa_add(ctx, &f->annot_ap, i);
@@ -10116,7 +12659,21 @@ static void pa_catalog(fz_context *ctx, pdf_document *doc, pa_found *f)
 	pdf_obj *names = pdf_dict_get(ctx, root, PDF_NAME(Names)), *form = pdf_dict_get(ctx, root, PDF_NAME(AcroForm));
 	pdf_obj *oc = pdf_dict_get(ctx, root, PDF_NAME(OCProperties)), *configs;
 	f->encrypted = pdf_dict_get(ctx, trailer, PDF_NAME(Encrypt)) != NULL;
-	f->version = doc->version > 17;
+	f->version = f->part > 1 && doc->version > 17;
+	if (f->part == 1)
+	{
+		/* PDF/A-1 is PDF 1.4: no layers (taking them off shows every layer), at most 8 388 607 objects. */
+		if (f->fix)
+			doc->version = 14;
+		f->limits += pdf_xref_len(ctx, doc) > 8388607;
+		if (oc)
+		{
+			f->ocg = 1;
+			if (f->fix)
+				pdf_dict_del(ctx, root, PDF_NAME(OCProperties));
+			oc = NULL;
+		}
+	}
 	if (pdf_dict_get(ctx, names, PDF_NAME(JavaScript)))
 	{
 		f->scripts++;
@@ -10149,7 +12706,17 @@ static void pa_catalog(fz_context *ctx, pdf_document *doc, pa_found *f)
 			}
 		}
 	}
-	f->oi = pa_output_intent(ctx, doc, &f->bad_oi);
+	f->oi = pa_output_intent(ctx, doc, &f->bad_oi, f->part);
+	/* Rendering XFA isn't PDF/A's: a catalog asking for it is treated as XFA. */
+	if (pdf_dict_gets(ctx, root, "NeedsRendering"))
+	{
+		f->xfa = 1;
+		if (f->fix)
+			pdf_dict_dels(ctx, root, "NeedsRendering");
+	}
+	/* Permissions set by signatures (which a copy can't keep valid). */
+	if (f->fix == 1 && pdf_dict_get(ctx, root, PDF_NAME(Perms)))
+		pdf_dict_del(ctx, root, PDF_NAME(Perms));
 }
 
 /* ---- metadata */
@@ -10163,7 +12730,7 @@ static char *pa_xmp(fz_context *ctx, pdf_document *doc)
 		return NULL;
 	buf = pdf_load_stream(ctx, md);
 	fz_try(ctx)
-		s = buffer_to_string(ctx, buf);
+		s = pa_xmp_decode(ctx, buf);
 	fz_always(ctx)
 		fz_drop_buffer(ctx, buf);
 	fz_catch(ctx)
@@ -10230,6 +12797,48 @@ static void pa_xml_escape(fz_context *ctx, fz_buffer *b, const char *s)
 	}
 }
 
+/* A PDF date read in full: v = year, month, day, hour, minute, second (missing ones as PDF says: 1 or 0); tz the zone
+ * as XMP writes it ("Z", "+05:30"), "Z" when none is given. 0 when it isn't a PDF date. */
+static int pa_pdf_date(const char *s, int v[6], char tz[8])
+{
+	static const int width[6] = { 4, 2, 2, 2, 2, 2 }, dflt[6] = { 0, 1, 1, 0, 0, 0 };
+	if (!strncmp(s, "D:", 2))
+		s += 2;
+	for (int k = 0; k < 6; k++)
+	{
+		v[k] = dflt[k];
+		if (!PA_DIGIT(*s))
+		{
+			if (k == 0)
+				return 0;
+			continue;
+		}
+		v[k] = 0;
+		for (int i = 0; i < width[k]; i++, s++)
+		{
+			if (!PA_DIGIT(*s))
+				return 0;
+			v[k] = v[k] * 10 + (*s - '0');
+		}
+	}
+	if (v[1] < 1 || v[1] > 12 || v[2] < 1 || v[2] > 31 || v[3] > 23 || v[4] > 59 || v[5] > 59)
+		return 0;
+	if (!*s || *s == 'Z' || *s == 'z')
+	{
+		fz_strlcpy(tz, "Z", 8);
+		return !*s || !s[1] || (s[1] == '0' && s[2] == '0');
+	}
+	if ((*s == '+' || *s == '-') && PA_DIGIT(s[1]) && PA_DIGIT(s[2]))
+	{
+		const char *m = s + 3;
+		if (*m == '\'')
+			m++;
+		fz_snprintf(tz, 8, "%c%.2s:%.2s", *s, s + 1, PA_DIGIT(m[0]) && PA_DIGIT(m[1]) ? m : "00");
+		return 1;
+	}
+	return 0;
+}
+
 /* A PDF date ("D:20240131120000+05'30'") as XMP writes it ("2024-01-31T12:00:00+05:30"), as far as it goes. */
 static void pa_iso_date(const char *pdf, char *out, size_t size)
 {
@@ -10276,14 +12885,22 @@ static void pa_info_mismatch(fz_context *ctx, pdf_document *doc, const char *xmp
 	out[0] = 0;
 	for (size_t i = 0; i < nelem(pa_info_keys); i++)
 	{
-		const char *v = pdf_to_text_string(ctx, pdf_dict_gets(ctx, info, pa_info_keys[i][0]));
-		int ok = 0;
-		if (!*v)
+		pdf_obj *o = pdf_dict_gets(ctx, info, pa_info_keys[i][0]);
+		const char *v = pdf_to_text_string(ctx, o);
+		int ok = 0, dv[6];
+		char tz[8];
+		if (o && !pdf_is_string(ctx, o))
+			v = "?"; /* not text: nothing in the XMP can match it */
+		if (!o)
 			continue;
-		if (i >= 6)
+		if (!*v)
+			ok = strstr(xmp, pa_info_keys[i][1]) != NULL; /* empty, but there: the XMP must have it too */
+		else if (i >= 6 && !pa_pdf_date(v, dv, tz))
+			ok = 0;
+		else if (i >= 6)
 		{
 			char iso[40], have[64];
-			pa_iso_date(v, iso, sizeof iso);
+			fz_snprintf(iso, sizeof iso, "%04d-%02d-%02dT%02d:%02d:%02d", dv[0], dv[1], dv[2], dv[3], dv[4], dv[5]);
 			pa_xmp_value(xmp, pa_info_keys[i][1], have, sizeof have);
 			/* Same moment to the second (zones written either way). */
 			ok = iso[0] && !strncmp(have, iso, strlen(iso) < 19 ? strlen(iso) : 19);
@@ -10330,6 +12947,13 @@ static void pa_init(fz_context *ctx, pdf_document *doc, pa_found *f, int part, i
 	f->fix = fix;
 	f->fonts = pdf_new_array(ctx, doc, 4);
 	f->owners = pdf_new_array(ctx, doc, 4);
+	f->inherits = pdf_new_array(ctx, doc, 4);
+	f->afs = pdf_new_array(ctx, doc, 4);
+	f->ps_streams = pdf_new_array(ctx, doc, 1);
+	f->ps_alts = pdf_new_array(ctx, doc, 1);
+	f->icc_good = pdf_new_array(ctx, doc, 1);
+	f->icc_bad = pdf_new_array(ctx, doc, 1);
+	f->xmp = pa_xmp(ctx, doc);
 }
 
 static int pa_font_bold(fz_context *ctx, pdf_obj *desc, const char *name)
@@ -10410,13 +13034,13 @@ char *fo_pdfa_fonts(fo_ctx *c, fo_doc *d)
 	return s;
 }
 
-/* Checks the document against PDF/A-`part` (2 or 3) level b. JSON: what's claimed and what was found (see
+/* Checks the document against PDF/A-`part` (1, 2 or 3) level b. JSON: what's claimed and what was found (see
  * engine/pdfa.rs). */
 char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
 {
 	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
 	fz_buffer *b = NULL;
-	char *s = NULL, *xmp = NULL;
+	char *s = NULL;
 	pa_found f;
 	if (!pdf)
 	{
@@ -10425,21 +13049,34 @@ char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
 	}
 	memset(&f, 0, sizeof f);
 	fz_var(b);
-	fz_var(xmp);
 	fz_try(CTX)
 	{
-		char pa_part[16], conformance[16], mismatch[128];
+		char pa_part[16], conformance[16], mismatch[128], problem[200] = "";
+		const char *xmp;
 		pa_init(CTX, pdf, &f, part, 0);
 		pa_catalog(CTX, pdf, &f);
 		pa_objects(CTX, pdf, &f, NULL);
 		pa_files(CTX, pdf, &f, NULL);
 		pa_annots(CTX, pdf, &f);
 		pa_scan(CTX, pdf, &f);
-		xmp = pa_xmp(CTX, pdf);
+		pa_font_use(CTX, pdf, &f);
+		/* PostScript XObjects, but not forms' PostScript alternatives (counted where the form is drawn). */
+		for (int i = 0; i < pdf_array_len(CTX, f.ps_streams); i++)
+			f.postscript += !pdf_array_contains(CTX, f.ps_alts, pdf_array_get(CTX, f.ps_streams, i));
+		xmp = f.xmp;
+		if (xmp)
+			pa_xmp_check(CTX, xmp, part, NULL, 0, problem, sizeof problem);
+		if (xmp && part >= 2 && !problem[0])
+		{
+			fz_buffer *raw = pdf_load_stream(CTX, pdf_dict_getp(CTX, pdf_trailer(CTX, pdf), "Root/Metadata"));
+			if (pa_xmp_wide(raw))
+				fz_strlcpy(problem, "XMP metadata in UTF-16 or UTF-32 (PDF/A-2 and -3 want UTF-8)", sizeof problem);
+			fz_drop_buffer(CTX, raw);
+		}
 		pa_xmp_value(xmp ? xmp : "", "pdfaid:part", pa_part, sizeof pa_part);
 		pa_xmp_value(xmp ? xmp : "", "pdfaid:conformance", conformance, sizeof conformance);
 		mismatch[0] = 0;
-		if (xmp)
+		if (xmp && part == 1)
 			pa_info_mismatch(CTX, pdf, xmp, mismatch, sizeof mismatch);
 
 		b = fz_new_buffer(CTX, 1024);
@@ -10452,8 +13089,10 @@ char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
 		}
 		else
 			fz_append_string(CTX, b, "null");
-		fz_append_printf(CTX, b, ",\"part\":%d,\"encrypted\":%s,\"version\":%s,\"xmp\":%s,\"xmpForeign\":%s,\"mismatch\":", part,
-			f.encrypted ? "true" : "false", f.version ? "true" : "false", xmp ? "true" : "false", xmp && !pa_xmp_known(xmp) ? "true" : "false");
+		fz_append_printf(CTX, b, ",\"part\":%d,\"encrypted\":%s,\"version\":%s,\"xmp\":%s,\"xmpProblem\":", part,
+			f.encrypted ? "true" : "false", f.version ? "true" : "false", xmp ? "true" : "false");
+		json_str(CTX, b, problem);
+		fz_append_string(CTX, b, ",\"mismatch\":");
 		json_str(CTX, b, mismatch);
 		fz_append_printf(CTX, b, ",\"intent\":%d,\"badIntent\":%s,\"xfa\":%s,\"needAppearances\":%s", f.oi, f.bad_oi ? "true" : "false",
 			f.xfa ? "true" : "false", f.need_ap ? "true" : "false");
@@ -10461,6 +13100,13 @@ char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
 		json_str(CTX, b, f.action_names);
 		fz_append_printf(CTX, b, ",\"lzw\":%d,\"external\":%d,\"postscript\":%d,\"reference\":%d,\"images\":%d,\"transfer\":%d,\"attachments\":%d,\"layers\":%d,\"objectMetadata\":%d,\"untypedFonts\":%d",
 			f.lzw, f.external, f.postscript, f.reference, f.images, f.transfer, f.attachments, f.layers, f.object_meta, f.untyped_fonts);
+		fz_append_printf(CTX, b, ",\"gstate\":%d,\"content\":%d,\"limits\":%d,\"boxes\":%d,\"bigBoxes\":%d,\"inherited\":%d,\"widths\":%d,\"glyphs\":%d,"
+			"\"ttEncoding\":%d,\"ttEncodingLeft\":%d,\"jpx\":%d,\"transparency\":%d,\"groups\":%d,\"ocg\":%d,\"icc\":%d,\"deep\":%d,"
+			"\"annotKinds\":%d,\"annotColours\":%d,\"glyphSets\":%d",
+			f.gstate, f.content, f.limits, f.boxes, f.big_boxes, f.inherited, f.widths, f.glyphs, f.tt_encoding, f.tt_encoding_left, f.jpx, f.transparency,
+			f.groups, f.ocg, f.icc, f.deep, f.annot_kinds, f.annot_colours, f.glyph_sets);
+		pa_json_pages(CTX, b, "glyphPages", &f.glyph_pages);
+		pa_json_pages(CTX, b, "limitPages", &f.limit_pages);
 		pa_json_pages(CTX, b, "gray", &f.gray);
 		pa_json_pages(CTX, b, "rgb", &f.rgb);
 		pa_json_pages(CTX, b, "cmyk", &f.cmyk);
@@ -10476,7 +13122,6 @@ char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
 	fz_always(CTX)
 	{
 		pa_found_drop(CTX, &f);
-		fz_free(CTX, xmp);
 		fz_drop_buffer(CTX, b);
 	}
 	fz_catch(CTX)
@@ -10639,13 +13284,21 @@ static int pa_fix_annot_dict(fz_context *ctx, pdf_document *doc, pa_found *f, pd
 	int flags = pdf_dict_get_int(ctx, obj, PDF_NAME(F));
 	if (!pdf_is_dict(ctx, obj) || pdf_name_eq(ctx, st, PDF_NAME(Popup)))
 		return 1;
-	if (pa_bad_annot_type(ctx, st) || (flags & (PDF_ANNOT_IS_INVISIBLE | PDF_ANNOT_IS_HIDDEN | PDF_ANNOT_IS_NO_VIEW)) ||
-		(pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)) && f->part == 2 && !pa_file_is_pdfa(ctx, fs)))
+	if (pa_bad_annot_type(ctx, st, f->part) || (flags & (PDF_ANNOT_IS_INVISIBLE | PDF_ANNOT_IS_HIDDEN | PDF_ANNOT_IS_NO_VIEW)) ||
+		(pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)) && f->part == 2 && !pa_file_is_pdfa(ctx, fs)) ||
+		(f->part == 1 && !pa_annot_kind_14(ctx, st) && !pdf_dict_getp(ctx, obj, "AP/N")))
 		return 0;
+	if (f->part == 1 && !pa_annot_kind_14(ctx, st))
+	{
+		/* Drawn by its look alone: a stamp shows it the same. */
+		pdf_dict_put(ctx, obj, PDF_NAME(Subtype), PDF_NAME(Stamp));
+		f->annot_kinds++;
+	}
 	if (pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)) && f->part == 3 && fs)
 	{
 		pa_file_complete(ctx, f, fs, now);
-		pa_af_add(ctx, doc, obj, fs);
+		if (!pa_associated(ctx, f, fs))
+			pa_af_add(ctx, doc, obj, fs);
 	}
 	if (!(flags & PDF_ANNOT_IS_PRINT) || (flags & PDF_ANNOT_IS_TOGGLE_NO_VIEW))
 	{
@@ -10654,6 +13307,10 @@ static int pa_fix_annot_dict(fz_context *ctx, pdf_document *doc, pa_found *f, pd
 	}
 	pa_del(ctx, pdf_dict_get(ctx, obj, PDF_NAME(AP)), PDF_NAME(D));
 	pa_del(ctx, pdf_dict_get(ctx, obj, PDF_NAME(AP)), PDF_NAME(R));
+	if (pa_button_stream(ctx, obj))
+		pa_button_states(ctx, obj);
+	else if (pa_states_look(ctx, obj))
+		pdf_dict_put(ctx, pdf_dict_get(ctx, obj, PDF_NAME(AP)), PDF_NAME(N), pa_states_look(ctx, obj));
 	return 1;
 }
 
@@ -10697,7 +13354,7 @@ static void pa_draw(fz_context *ctx, pdf_annot *a, int force, int *made)
 
 /* Annotations as PDF/A wants them. The page's own list first (MuPDF keeps links and form fields apart from the other
  * annotations), then appearances drawn where missing, and for form fields that asked the reader to draw them. */
-static void pa_fix_annots(fz_context *ctx, pdf_document *doc, pa_found *f, int *removed, int *printed, int *made, const char *now)
+static void pa_fix_annots(fz_context *ctx, pdf_document *doc, pa_found *f, int *removed, int *printed, int *made, int *blank, const char *now)
 {
 	int pages = pdf_count_pages(ctx, doc), redraw = f->need_ap;
 	pdf_page *page = NULL;
@@ -10733,6 +13390,18 @@ static void pa_fix_annots(fz_context *ctx, pdf_document *doc, pa_found *f, int *
 		}
 		fz_catch(ctx)
 			fz_rethrow(ctx);
+		/* Kinds MuPDF can't draw: an empty look. Buttons it drew with one look: that under their state's name. */
+		for (int k = 0; k < pdf_array_len(ctx, annots); k++)
+		{
+			pdf_obj *a = pdf_array_get(ctx, annots, k), *st = pdf_dict_get(ctx, a, PDF_NAME(Subtype));
+			if (pa_button_stream(ctx, a))
+				pa_button_states(ctx, a);
+			if (pdf_is_dict(ctx, a) && !pdf_dict_getp(ctx, a, "AP/N") && !pdf_name_eq(ctx, st, PDF_NAME(Link)) && !pdf_name_eq(ctx, st, PDF_NAME(Popup)) && !pa_zero_rect(ctx, a))
+			{
+				pa_blank_look(ctx, doc, a);
+				(*blank)++;
+			}
+		}
 	}
 	if (redraw)
 		pa_del(ctx, pdf_dict_getp(ctx, pdf_trailer(ctx, doc), "Root/AcroForm"), PDF_NAME(NeedAppearances));
@@ -10760,26 +13429,47 @@ static pdf_obj *pa_icc(fz_context *ctx, pdf_document *doc, fz_colorspace *cs)
 	return ref;
 }
 
-static void pa_add_intent(fz_context *ctx, pdf_document *doc, pa_found *f)
+static void pa_add_intent(fz_context *ctx, pdf_document *doc, pa_found *f, int cmyk)
 {
-	pdf_obj *root = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root)), *profile = pa_icc(ctx, doc, fz_device_rgb(ctx)), *list, *oi;
+	pdf_obj *root = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root)), *list, *oi, *old, *good = NULL, *profile = NULL;
+	int good_n = 0;
+	/* A PDF/A intent whose profile PDF/A takes (the intents were wrong only beside it: a PDF/X one with another
+	 * profile, say) stays, with its profile; PDF/A-1 keeps it only for the colours the document uses. */
+	old = pdf_dict_get(ctx, root, PDF_NAME(OutputIntents));
+	for (int i = 0; i < pdf_array_len(ctx, old) && !good; i++)
+	{
+		pdf_obj *o = pdf_array_get(ctx, old, i), *p = pdf_dict_get(ctx, o, PDF_NAME(DestOutputProfile));
+		int k;
+		if (!strcmp(pdf_dict_get_name(ctx, o, PDF_NAME(S)), "GTS_PDFA1") && pdf_is_stream(ctx, p) && (k = pa_profile_ok(ctx, p, f->part)) &&
+			(f->part > 1 || k == (cmyk ? 4 : 3)))
+			good = o, good_n = k;
+	}
+	profile = good ? pdf_keep_obj(ctx, pdf_dict_get(ctx, good, PDF_NAME(DestOutputProfile))) : pa_icc(ctx, doc, cmyk ? fz_device_cmyk(ctx) : fz_device_rgb(ctx));
 	fz_try(ctx)
 	{
-		/* PDF/A intents (missing a profile, or several) give way to the one written here; others (PDF/X) stay. */
-		pdf_obj *old = pdf_keep_obj(ctx, pdf_dict_get(ctx, root, PDF_NAME(OutputIntents)));
+		/* Other PDF/A intents give way; PDF/X ones stay if they have no profile of their own, or this one. */
+		old = pdf_keep_obj(ctx, old);
+		pdf_keep_obj(ctx, good);
 		list = pdf_dict_put_array(ctx, root, PDF_NAME(OutputIntents), 1);
+		if (good)
+			pdf_array_push_drop(ctx, list, good);
 		for (int i = 0; i < pdf_array_len(ctx, old); i++)
 		{
-			pdf_obj *o = pdf_array_get(ctx, old, i);
-			if (strcmp(pdf_dict_get_name(ctx, o, PDF_NAME(S)), "GTS_PDFA1"))
+			pdf_obj *o = pdf_array_get(ctx, old, i), *p = pdf_dict_get(ctx, o, PDF_NAME(DestOutputProfile));
+			if (strcmp(pdf_dict_get_name(ctx, o, PDF_NAME(S)), "GTS_PDFA1") && (!p || pdf_resolve_indirect(ctx, p) == pdf_resolve_indirect(ctx, profile)))
+			{
+				pdf_dict_dels(ctx, o, "DestOutputProfileRef");
 				pdf_array_push(ctx, list, o);
+			}
 		}
 		pdf_drop_obj(ctx, old);
+		if (good)
+			break;
 		oi = pdf_array_push_dict(ctx, list, 6);
 		pdf_dict_put(ctx, oi, PDF_NAME(Type), PDF_NAME(OutputIntent));
 		pdf_dict_put_name(ctx, oi, PDF_NAME(S), "GTS_PDFA1");
-		pdf_dict_put_text_string(ctx, oi, PDF_NAME(OutputConditionIdentifier), "sRGB IEC61966-2.1");
-		pdf_dict_put_text_string(ctx, oi, PDF_NAME(Info), "sRGB IEC61966-2.1");
+		pdf_dict_put_text_string(ctx, oi, PDF_NAME(OutputConditionIdentifier), cmyk ? "CGATS TR 001" : "sRGB IEC61966-2.1");
+		pdf_dict_put_text_string(ctx, oi, PDF_NAME(Info), cmyk ? "U.S. Web Coated (SWOP)" : "sRGB IEC61966-2.1");
 		pdf_dict_puts_drop(ctx, oi, "RegistryName", pdf_new_text_string(ctx, "http://www.color.org"));
 		pdf_dict_put(ctx, oi, PDF_NAME(DestOutputProfile), profile);
 	}
@@ -10787,7 +13477,7 @@ static void pa_add_intent(fz_context *ctx, pdf_document *doc, pa_found *f)
 		pdf_drop_obj(ctx, profile);
 	fz_catch(ctx)
 		fz_rethrow(ctx);
-	f->oi = 3;
+	f->oi = good ? good_n : cmyk ? 4 : 3;
 	f->bad_oi = 0;
 }
 
@@ -10803,8 +13493,24 @@ static int pa_add_defaults(fz_context *ctx, pdf_document *doc, pa_found *f)
 		for (int i = 0; i < n; i++)
 		{
 			pdf_obj *entry = pdf_array_get(ctx, f->owners, i), *res = pdf_array_get(ctx, entry, 0), *cs;
-			int mask = pdf_array_get_int(ctx, entry, 1);
-			if (!pdf_array_get_int(ctx, entry, 2))
+			int mask = pdf_array_get_int(ctx, entry, 1), kind = pdf_array_get_int(ctx, entry, 2);
+			if (kind == 2)
+			{
+				/* A transparency group's blending space. */
+				int k = mask & PA_GRAY ? 0 : mask & PA_RGB ? 1 : 2;
+				if (!spaces[k])
+				{
+					fz_colorspace *dev = k == 0 ? fz_device_gray(ctx) : k == 1 ? fz_device_rgb(ctx) : fz_device_cmyk(ctx);
+					pdf_obj *icc = pa_icc(ctx, doc, dev), *arr = pdf_new_array(ctx, doc, 2);
+					pdf_array_push(ctx, arr, PDF_NAME(ICCBased));
+					pdf_array_push_drop(ctx, arr, icc);
+					spaces[k] = pdf_add_object_drop(ctx, doc, arr);
+				}
+				pdf_dict_put(ctx, pdf_dict_get(ctx, res, PDF_NAME(Group)), PDF_NAME(CS), spaces[k]);
+				added++;
+				continue;
+			}
+			if (!kind)
 			{
 				/* No resources at all: the owner gets its own. */
 				pdf_obj *own = pdf_dict_get(ctx, res, PDF_NAME(Resources));
@@ -10886,12 +13592,13 @@ static void pa_copy_prop(fz_context *ctx, fz_buffer *b, const char *xmp, const c
 	}
 }
 
-/* Standard properties an XMP packet may have beyond what the document information holds: kept when it's rewritten. */
+/* Standard properties an XMP packet may have beyond what the document information holds: kept when it's rewritten,
+ * if they hold values of their type (and the part has them: xmp:Label and Rating came with PDF/A-2). */
 static const char *pa_kept_props[] = {
 	"dc:rights", "dc:subject", "dc:language", "dc:publisher", "dc:contributor", "dc:date", "dc:identifier", "dc:source",
 	"dc:relation", "dc:coverage", "dc:type", "xmpRights:Marked", "xmpRights:WebStatement", "xmpRights:UsageTerms",
 	"xmpRights:Owner", "xmpRights:Certificate", "xmpMM:DocumentID", "xmpMM:InstanceID", "xmpMM:VersionID",
-	"xmpMM:OriginalDocumentID", "xmpMM:RenditionClass", "xmp:Label", "xmp:Rating", "xmp:Nickname", NULL
+	"xmpMM:RenditionClass", "xmp:Label", "xmp:Rating", "xmp:Nickname", NULL
 };
 
 /* XMP metadata written from the document information, saying PDF/A-`part` level b; standard properties the old
@@ -10902,14 +13609,38 @@ static void pa_write_xmp(fz_context *ctx, pdf_document *doc, int part, const cha
 	pdf_obj *info = pdf_dict_get(ctx, trailer, PDF_NAME(Info)), *dict = NULL, *ref = NULL;
 	fz_buffer *b = fz_new_buffer(ctx, 2048);
 	char *old = NULL;
+	pa_xdoc *olddom = NULL;
 	fz_var(dict);
 	fz_var(ref);
 	fz_var(old);
+	fz_var(olddom);
 	fz_try(ctx)
 	{
 		const char *v;
 		char iso[40];
+		pa_xnode *rdf;
 		old = pa_xmp(ctx, doc);
+		olddom = old ? pa_parse_xmp(ctx, old) : NULL;
+		rdf = pa_rdf(pa_xroot(olddom));
+		for (size_t i = 0; pdf_is_dict(ctx, info) && i < nelem(pa_info_keys); i++)
+		{
+			pdf_obj *o = pdf_dict_gets(ctx, info, pa_info_keys[i][0]);
+			int dv[6];
+			char tz[8], full[40];
+			if (!o)
+				continue;
+			/* Not text, empty (the XMP then has nothing to match it), or a date that can't be read: it goes. */
+			if (!pdf_is_string(ctx, o) || !*pdf_to_text_string(ctx, o) || (i >= 6 && !pa_pdf_date(pdf_to_text_string(ctx, o), dv, tz)))
+				pdf_dict_dels(ctx, info, pa_info_keys[i][0]);
+			else if (i >= 6)
+			{
+				if (!strcmp(tz, "Z"))
+					fz_snprintf(full, sizeof full, "D:%04d%02d%02d%02d%02d%02dZ", dv[0], dv[1], dv[2], dv[3], dv[4], dv[5]);
+				else
+					fz_snprintf(full, sizeof full, "D:%04d%02d%02d%02d%02d%02d%.3s'%.2s'", dv[0], dv[1], dv[2], dv[3], dv[4], dv[5], tz, tz + 4);
+				pdf_dict_puts_drop(ctx, info, pa_info_keys[i][0], pdf_new_text_string(ctx, full));
+			}
+		}
 		fz_append_string(ctx, b, "<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
 			"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
 			"<rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\""
@@ -10960,9 +13691,9 @@ static void pa_write_xmp(fz_context *ctx, pdf_document *doc, int part, const cha
 			fz_append_printf(ctx, b, "<xmp:ModifyDate>%s</xmp:ModifyDate>\n", iso);
 		if (now_iso && *now_iso)
 			fz_append_printf(ctx, b, "<xmp:MetadataDate>%s</xmp:MetadataDate>\n", now_iso);
-		/* Only from a packet PDF/A could take: one with unknown schemas may bind these prefixes elsewhere. */
-		if (old && pa_xmp_known(old))
-			for (int i = 0; pa_kept_props[i]; i++)
+		/* As written, where the old packet binds the prefix to the schema and the value is of the property's type. */
+		for (int i = 0; rdf && pa_kept_props[i]; i++)
+			if (pa_xmp_has_good(ctx, rdf, part, pa_kept_props[i]))
 				pa_copy_prop(ctx, b, old, pa_kept_props[i]);
 		fz_append_string(ctx, b, "</rdf:Description>\n</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>");
 		/* Trapped would need its own XMP property: the information entry goes instead. */
@@ -10976,6 +13707,7 @@ static void pa_write_xmp(fz_context *ctx, pdf_document *doc, int part, const cha
 	}
 	fz_always(ctx)
 	{
+		pa_xdrop(ctx, olddom);
 		fz_free(ctx, old);
 		pdf_drop_obj(ctx, ref);
 		pdf_drop_obj(ctx, dict);
@@ -11002,10 +13734,69 @@ static void pa_ensure_id(fz_context *ctx, pdf_document *doc)
 	pdf_array_push_string(ctx, id, (char *)digest, 16);
 }
 
-/* Makes the document conform to PDF/A-`part` (2 or 3) level b as far as it can. `fonts`: lines
+/* Fonts the content scan found not in the file that MuPDF has (base 14): its copies go in. */
+static void pa_embed_base14(fz_context *ctx, pdf_document *doc, pa_found *f, int *embedded, int *failed)
+{
+	for (int i = 0; i < pdf_array_len(ctx, f->fonts); i++)
+	{
+		pdf_obj *font = pdf_array_get(ctx, f->fonts, i);
+		const char *name = pdf_dict_get_name(ctx, font, PDF_NAME(BaseFont)), *plus = strchr(name, '+'), *clean;
+		int len = 0;
+		if (plus && plus - name == 6)
+			name = plus + 1;
+		clean = pdf_clean_font_name(name);
+		if (pdf_to_num(ctx, font) <= 0 || pdf_name_eq(ctx, pdf_dict_get(ctx, font, PDF_NAME(Subtype)), PDF_NAME(Type0)) || !fz_lookup_base14_font(ctx, clean, &len))
+			continue;
+		fz_try(ctx)
+		{
+			pa_embed_font(ctx, doc, pdf_to_num(ctx, font), "", clean);
+			(*embedded)++;
+		}
+		fz_catch(ctx)
+		{
+			fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+			fz_ignore_error(ctx);
+			(*failed)++;
+		}
+	}
+}
+
+/* A new signature's look as PDF/A-`part` wants it (signing a file that says it's PDF/A): it prints, has its normal
+ * look only, MuPDF's copies of base 14 fonts it uses go in, and its device colours are covered. Inside the
+ * signing's revision, so the signature covers it. */
+static void pa_keep_look(fz_context *ctx, pdf_document *doc, pdf_obj *a, int part)
+{
+	pa_found f;
+	pa_proc *p = NULL;
+	int printed = 0, embedded = 0, failed = 0;
+	memset(&f, 0, sizeof f);
+	fz_var(p);
+	fz_try(ctx)
+	{
+		pa_init(ctx, doc, &f, part, 2);
+		f.oi = pa_output_intent(ctx, doc, &f.bad_oi, part);
+		pa_fix_annot_dict(ctx, doc, &f, a, &printed, NULL);
+		p = pa_new_proc(ctx, doc, &f);
+		pa_appearance(ctx, p, a);
+		pdf_close_processor(ctx, &p->super);
+		pa_embed_base14(ctx, doc, &f, &embedded, &failed);
+		if (part >= 2)
+			pa_add_defaults(ctx, doc, &f);
+	}
+	fz_always(ctx)
+	{
+		if (p)
+			pdf_drop_processor(ctx, &p->super);
+		pa_found_drop(ctx, &f);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+}
+
+/* Makes the document conform to PDF/A-`part` (1, 2 or 3) level b as far as it can. `fonts`: lines
  * "num\tpath\tbase14" of fonts to embed (no path: MuPDF's own copy of that base 14 font). `now`: the time as a PDF date and as XMP writes it
  * ("D:...\tYYYY-MM-DDThh:mm:ss+hh:mm"). Returns JSON: what was done. The caller saves without encryption. */
-char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char *now)
+char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char *now, int keep)
 {
 	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
 	fz_buffer *b = NULL;
@@ -11023,14 +13814,17 @@ char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char 
 		if (tab)
 			fz_strlcpy(iso_now, tab + 1, sizeof iso_now);
 	}
-	int embedded = 0, font_failed = 0, removed = 0, printed = 0, made = 0, defaults = 0, intent = 0;
+	int embedded = 0, font_failed = 0, removed = 0, printed = 0, made = 0, blank = 0, defaults = 0, intent = 0;
 	memset(&f, 0, sizeof f);
 	fz_var(b);
 	fz_var(embedded);
 	fz_var(font_failed);
 	fz_try(CTX)
 	{
-		pa_init(CTX, pdf, &f, part, 1);
+		pa_init(CTX, pdf, &f, part, keep ? 2 : 1);
+		/* The document itself (keeping it PDF/A as it's saved): one undo step. */
+		if (keep)
+			pdf_begin_operation(CTX, pdf, "Keep it PDF/A");
 		/* Fonts first, before anything loads them as they were. */
 		for (const char *line = fonts; line && *line;)
 		{
@@ -11062,50 +13856,88 @@ char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char 
 		pa_catalog(CTX, pdf, &f);
 		pa_objects(CTX, pdf, &f, NULL);
 		pa_files(CTX, pdf, &f, pdf_now);
-		pa_fix_annots(CTX, pdf, &f, &removed, &printed, &made, pdf_now);
+		pa_fix_annots(CTX, pdf, &f, &removed, &printed, &made, &blank, pdf_now);
 		if (!f.oi || f.bad_oi)
 		{
-			pa_add_intent(CTX, pdf, &f);
+			/* PDF/A-1 has no default colour spaces: a CMYK document gets a CMYK intent. */
+			int cmyk = 0;
+			if (part == 1)
+			{
+				pa_found pre;
+				memset(&pre, 0, sizeof pre);
+				fz_try(CTX)
+				{
+					pa_init(CTX, pdf, &pre, part, 0);
+					pa_scan(CTX, pdf, &pre);
+					cmyk = pre.cmyk.n > 0 && pre.rgb.n == 0;
+				}
+				fz_always(CTX)
+					pa_found_drop(CTX, &pre);
+				fz_catch(CTX)
+					fz_rethrow(CTX);
+			}
+			pa_add_intent(CTX, pdf, &f, cmyk);
 			intent = 1;
 		}
+		/* PDF/A-1: comment colours only with an RGB intent (their looks are drawn already). */
+		if (part == 1 && f.oi != 3)
+			for (int i = 0; i < pdf_count_pages(CTX, pdf); i++)
+			{
+				pdf_obj *annots = pdf_dict_get(CTX, pdf_lookup_page_obj(CTX, pdf, i), PDF_NAME(Annots));
+				for (int k = 0; k < pdf_array_len(CTX, annots); k++)
+				{
+					pdf_obj *a = pdf_array_get(CTX, annots, k);
+					if (pdf_dict_get(CTX, a, PDF_NAME(C)) || pdf_dict_get(CTX, a, PDF_NAME(IC)))
+						f.annot_colours++;
+					pa_del(CTX, a, PDF_NAME(C));
+					pa_del(CTX, a, PDF_NAME(IC));
+				}
+			}
 		/* Colours: with the intent in place, what's still uncovered gets a default colour space. */
 		pdf_drop_obj(CTX, f.owners);
 		f.owners = pdf_new_array(CTX, pdf, 4);
+		f.inherited = 0;
+		pdf_drop_obj(CTX, f.inherits);
+		f.inherits = pdf_new_array(CTX, pdf, 4);
 		pa_scan(CTX, pdf, &f);
 		defaults = pa_add_defaults(CTX, pdf, &f);
+		pa_give_resources(CTX, &f);
+		pa_font_use(CTX, pdf, &f);
 		/* Appearances drawn above can use fonts not in the file (Helvetica for form fields): MuPDF's copies go in. */
-		for (int i = 0; i < pdf_array_len(CTX, f.fonts); i++)
+		pa_embed_base14(CTX, pdf, &f, &embedded, &font_failed);
+		/* Keeping (the document itself, saved after): the XMP only where it must change, so as little as can be does. */
+		if (keep)
 		{
-			pdf_obj *font = pdf_array_get(CTX, f.fonts, i);
-			const char *name = pdf_dict_get_name(CTX, font, PDF_NAME(BaseFont)), *plus = strchr(name, '+'), *clean;
-			int len = 0;
-			if (plus && plus - name == 6)
-				name = plus + 1;
-			clean = pdf_clean_font_name(name);
-			if (pdf_to_num(CTX, font) <= 0 || pdf_name_eq(CTX, pdf_dict_get(CTX, font, PDF_NAME(Subtype)), PDF_NAME(Type0)) || !fz_lookup_base14_font(CTX, clean, &len))
-				continue;
-			fz_try(CTX)
+			char claim[16] = "", mismatch[128] = "", why[8];
+			fz_buffer *raw = f.xmp ? pdf_load_stream(CTX, pdf_dict_getp(CTX, pdf_trailer(CTX, pdf), "Root/Metadata")) : NULL;
+			int wide = raw && pa_xmp_wide(raw);
+			fz_drop_buffer(CTX, raw);
+			if (f.xmp)
 			{
-				pa_embed_font(CTX, pdf, pdf_to_num(CTX, font), "", clean);
-				embedded++;
+				pa_xmp_value(f.xmp, "pdfaid:part", claim, sizeof claim);
+				if (part == 1)
+					pa_info_mismatch(CTX, pdf, f.xmp, mismatch, sizeof mismatch);
 			}
-			fz_catch(CTX)
-			{
-				fz_rethrow_if(CTX, FZ_ERROR_TRYLATER);
-				fz_ignore_error(CTX);
-				font_failed++;
-			}
+			if (!f.xmp || atoi(claim) != part || mismatch[0] || (wide && part >= 2) || !pa_xmp_check(CTX, f.xmp, part, NULL, 0, why, sizeof why))
+				pa_write_xmp(CTX, pdf, part, iso_now);
 		}
-		pa_write_xmp(CTX, pdf, part, iso_now);
+		else
+			pa_write_xmp(CTX, pdf, part, iso_now);
 		pa_ensure_id(CTX, pdf);
+		if (keep)
+			pdf_end_operation(CTX, pdf);
 
 		b = fz_new_buffer(CTX, 256);
 		fz_append_printf(CTX, b, "{\"fonts\":%d,\"fontsFailed\":%d,\"scripts\":%d,\"actions\":%d,\"annotsRemoved\":%d,\"annotsPrinted\":%d,\"appearances\":%d,"
 			"\"attachments\":%d,\"lzw\":%d,\"lzwLeft\":%d,\"external\":%d,\"postscript\":%d,\"reference\":%d,\"images\":%d,\"transfer\":%d,\"layers\":%d,"
-			"\"intent\":%s,\"defaults\":%d,\"xfa\":%s,\"encrypted\":%s,\"objectMetadata\":%d,\"glyphLists\":%d,\"untypedFonts\":%d}",
+			"\"intent\":%s,\"defaults\":%d,\"xfa\":%s,\"encrypted\":%s,\"objectMetadata\":%d,\"glyphLists\":%d,\"untypedFonts\":%d,",
 			embedded, font_failed, f.scripts, f.actions, removed, printed, made, f.attachments, f.lzw - f.lzw_left, f.lzw_left, f.external,
 			f.postscript, f.reference, f.images, f.transfer, f.layers, intent ? "true" : "false", defaults, f.xfa ? "true" : "false",
 			f.encrypted ? "true" : "false", f.object_meta, f.glyph_lists, f.untyped_fonts);
+		fz_append_printf(CTX, b, "\"blank\":%d,\"gstate\":%d,\"boxes\":%d,\"inherited\":%d,\"signatures\":%d,\"widths\":%d,\"ttEncoding\":%d,\"jpx\":%d,"
+			"\"groups\":%d,\"ocg\":%d,\"icc\":%d,\"deep\":%d,\"annotKinds\":%d,\"annotColours\":%d,\"glyphSets\":%d}",
+			blank, f.gstate + f.opm, f.boxes, f.inherited, f.signatures, f.widths, f.tt_encoding, f.jpx, f.groups, f.ocg, f.icc, f.deep,
+			f.annot_kinds, f.annot_colours, f.glyph_sets);
 		s = buffer_to_string(CTX, b);
 	}
 	fz_always(CTX)
@@ -11115,6 +13947,8 @@ char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char 
 	}
 	fz_catch(CTX)
 	{
+		if (keep)
+			pdf_abandon_operation(CTX, pdf);
 		FAIL();
 		return NULL;
 	}

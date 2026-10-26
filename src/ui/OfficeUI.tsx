@@ -346,6 +346,7 @@ export function FilesToPdf() {
                     <button class="linkish" onClick={() => void openFiles([it.out!])}>
                       Open
                     </button>
+                    {it.warn && <span class="secure-warn">{it.warn}</span>}
                   </span>
                 ) : it.state === "error" ? (
                   <span class="convert-note error-text">{it.note}</span>
@@ -388,6 +389,21 @@ export function FilesToPdf() {
       )}
       {d.items.length > 0 && (
         <>
+          <div class="seg wrap" role="group" aria-label="Kind of PDF">
+            {(
+              [
+                [0, "PDF"],
+                [1, "PDF/A-1b"],
+                [2, "PDF/A-2b"],
+                [3, "PDF/A-3b"],
+              ] as [number, string][]
+            ).map(([v, label]) => (
+              <button key={v} class={`segb ${(d.pdfa ?? 0) === v ? "on" : ""}`} disabled={d.running} onClick={() => set({ pdfa: v })}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {!!d.pdfa && <span class="hint">PDF/A: for keeping. Each file is made a PDF first, then saved as PDF/A, as Convert › PDF/A does.</span>}
           <div class="seg nowrap">
             <button class={`segb ${!d.folder ? "on" : ""}`} disabled={d.running} onClick={() => set({ folder: null })}>
               Next to each file

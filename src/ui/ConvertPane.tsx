@@ -113,7 +113,7 @@ function ThisDocument({ tab }: { tab: Tab }) {
   const [busy, setBusy] = useState<{ done: number; total: number; stopping?: boolean } | null>(null);
   const [error, setError] = useState("");
   const [done, setDone] = useState<ExportDone | null>(null);
-  const [part, setPart] = useState<2 | 3>(2);
+  const [part, setPart] = useState<1 | 2 | 3>(2);
   const [report, setReport] = useState<PdfaReport | null>(null);
   const [checking, setChecking] = useState(false);
   const [pdfaDone, setPdfaDone] = useState<PdfaSaved | null>(null);
@@ -258,9 +258,13 @@ function ThisDocument({ tab }: { tab: Tab }) {
       {pdfa && (
         <div class="tool-field">
           <label>Kind</label>
-          {seg(String(part), [["2", "PDF/A-2b"], ["3", "PDF/A-3b"]], (v) => setPart(Number(v) as 2 | 3))}
+          {seg(String(part), [["1", "PDF/A-1b"], ["2", "PDF/A-2b"], ["3", "PDF/A-3b"]], (v) => setPart(Number(v) as 1 | 2 | 3))}
           <span class="hint">
-            {part === 2 ? "What most portals and archives ask for." : "Like PDF/A-2b, and keeps attached files of any kind (e-invoices need it)."}
+            {part === 1
+              ? "The first kind, for places that still ask for it: no see-through objects, layers or attached files."
+              : part === 2
+                ? "What most portals and archives ask for."
+                : "Like PDF/A-2b, and keeps attached files of any kind (e-invoices need it)."}
           </span>
           {!tab.info.value?.isPdf ? (
             <span class="hint">This file is drawn into a new PDF first, then made PDF/A.</span>
@@ -274,11 +278,11 @@ function ThisDocument({ tab }: { tab: Tab }) {
                 <PdfaIssues report={report} />
                 {report.signed > 0 && (
                   <span class="secure-warn">
-                    This file is signed. The PDF/A copy is a new file, so {report.signed === 1 ? "its signature isn't" : "its signatures aren't"} valid in it: sign the copy
-                    instead.
+                    This file is signed. The PDF/A copy is a new file, so {report.signed === 1 ? "its signature can't stay valid: it's" : "its signatures can't stay valid: they're"}{" "}
+                    taken out of the copy. Sign the copy instead.
                   </span>
                 )}
-                {part === 2 && report.issues.some((i) => i.id === "attachments") && <span class="hint">PDF/A-2b takes those attached files out; PDF/A-3b keeps them.</span>}
+                {part < 3 && report.issues.some((i) => i.id === "attachments") && <span class="hint">PDF/A-{part}b takes those attached files out; PDF/A-3b keeps them.</span>}
                 <button class="linkish pane-link" onClick={() => void check()}>
                   Check again
                 </button>

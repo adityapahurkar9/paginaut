@@ -315,6 +315,8 @@ fn run_desktop() {
             desk::sanitize,
             desk::pdfa_check,
             desk::pdfa_save,
+            desk::pdfa_changes,
+            desk::pdfa_keep,
             desk::attachment_add,
             desk::attachment_remove,
             desk::tables,

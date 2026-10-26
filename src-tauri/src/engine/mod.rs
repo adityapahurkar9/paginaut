@@ -1828,9 +1828,11 @@ impl Engine {
         std::fs::copy(&cur, &write_to).map_err(|e| format!("Couldn't write {write_to}: {e}"))?;
         let mut signing = mupdf::Signing { sign: Box::new(sign), error: None };
         let mut inner = d.inner.lock();
+        // A file that says it's PDF/A stays so: the signature's look is made as that part wants.
+        let pdfa = inner.doc.pdfa_part();
         let mut res = (|| -> Result<(), String> {
             let page = d.page(&mut inner, index)?;
-            page.sign(&req, &mut signing)?;
+            page.sign(&req, &mut signing, pdfa)?;
             drop(page);
             inner.pages.clear();
             inner.doc.save_pdf(&write_to, true)

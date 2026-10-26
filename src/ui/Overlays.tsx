@@ -539,7 +539,7 @@ function AskInner() {
     <div class="overlay">
       <div class="dialog" role="alertdialog" aria-label={d.title}>
         <h2>{d.title}</h2>
-        <span style={{ color: "var(--tx2)" }}>{d.text}</span>
+        <span style={{ color: "var(--tx2)", whiteSpace: "pre-line" }}>{d.text}</span>
         {d.secret !== undefined && (
           <input
             ref={field}
