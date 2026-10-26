@@ -166,7 +166,12 @@ export function Toolbar() {
     if (!el) return;
     const measure = () => {
       const kids = [...el.children] as HTMLElement[];
-      let shown = kids.findIndex((k) => k.offsetLeft + k.offsetWidth > el.clientWidth + 0.5);
+      // The » button's own room counts: without it, the bar is that much wider (else a button that would fit
+      // once » goes stays in the panel).
+      const more = moreBtn.current;
+      const room = el.clientWidth + (more ? more.offsetWidth + parseFloat(getComputedStyle(el.parentElement!).columnGap || "0") : 0);
+      const fitsAll = kids.every((k) => k.offsetLeft + k.offsetWidth <= room + 0.5);
+      let shown = fitsAll ? -1 : kids.findIndex((k) => k.offsetLeft + k.offsetWidth > el.clientWidth + 0.5);
       if (shown < 0) {
         setCut((c) => (c ? null : c));
         setMoreOpen(false);
