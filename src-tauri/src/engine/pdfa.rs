@@ -315,6 +315,9 @@ fn choose_fonts(needs: &[FontNeed], find: FindFont) -> (String, Vec<String>) {
             Err(missing) => subs.push(format!("{}: {}, and no other font can draw its symbols, so it stays out", n.name, why(missing))),
         }
     }
+    // A file can hold the same font several times (one object a page): said once.
+    let mut seen = std::collections::HashSet::new();
+    subs.retain(|s| seen.insert(s.clone()));
     (spec, subs)
 }
 
@@ -510,6 +513,8 @@ mod tests {
         let (spec, subs) = say(need("Times-Roman", "Times-Roman", false));
         assert_eq!((spec.as_str(), subs.len()), ("7		Times-Roman
 ", 0), "base 14: MuPDF's copy, nothing to say");
+        let (spec, subs) = choose_fonts(&[need("Calibri", "", false), FontNeed { num: 8, ..need("Calibri", "", false) }], &find);
+        assert_eq!((spec.lines().count(), subs.len()), (2, 1), "the same font twice: both put in, said once");
         let (spec, subs) = say(need("Wingdings", "", true));
         assert_eq!(spec, "");
         assert_eq!(subs, vec!["Wingdings: not on this computer, and no other font can draw its symbols, so it stays out"]);
