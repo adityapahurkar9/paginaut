@@ -8,7 +8,10 @@ $ErrorActionPreference = "Stop"
 if ($Java) { $env:JAVACMD = $Java }
 elseif (-not $env:JAVACMD -and (Test-Path "E:\Android Studio\jbr\bin\java.exe")) { $env:JAVACMD = "E:\Android Studio\jbr\bin\java.exe" }
 $failed = 0
-Get-ChildItem (Join-Path $Folder "*(PDF-A*).pdf") | ForEach-Object {
+$files = @(Get-ChildItem (Join-Path $Folder "*(PDF-A*).pdf"))
+# Nothing checked isn't a pass (a wrong folder, or files not made yet).
+if (-not $files) { "No PDF/A files (named ""... (PDF-A).pdf"") in $Folder"; exit 1 }
+$files | ForEach-Object {
   $flavour = if ($_.Name -like "*PDF-A-3*") { "3b" } else { "2b" }
   $out = & $VeraPdf --flavour $flavour --format text -v $_.FullName 2>$null
   $lines = $out | Where-Object { $_ -match "^(PASS|FAIL)|^\s+FAIL" }

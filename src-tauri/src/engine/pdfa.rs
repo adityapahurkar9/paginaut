@@ -15,6 +15,8 @@ struct Found {
     encrypted: bool,
     version: bool,
     xmp: bool,
+    /// The document's XMP uses schemas PDF/A doesn't know (and describes none).
+    xmp_foreign: bool,
     mismatch: String,
     intent: i32,
     bad_intent: bool,
@@ -32,6 +34,7 @@ struct Found {
     attachments: usize,
     layers: usize,
     object_metadata: usize,
+    untyped_fonts: usize,
     gray: Vec<usize>,
     rgb: Vec<usize>,
     cmyk: Vec<usize>,
@@ -120,6 +123,7 @@ struct Done {
     encrypted: bool,
     object_metadata: usize,
     glyph_lists: usize,
+    untyped_fonts: usize,
     /// Unreadable pages a damaged file lost when its page tree was rebuilt (set here, not by the fixer).
     #[serde(skip)]
     lost_pages: usize,
@@ -166,6 +170,8 @@ fn report(f: Found) -> Report {
         add("metadata", "No XMP metadata (where a PDF/A file says what it is)".into(), vec![], true);
     } else if !f.mismatch.is_empty() {
         add("metadata", format!("The document's details and its XMP metadata differ: {}", f.mismatch), vec![], true);
+    } else if f.xmp_foreign {
+        add("metadata", "XMP metadata with properties PDF/A doesn't know (from labelling or other tools)".into(), vec![], true);
     }
     let (simple, other): (Vec<&FontNeed>, Vec<&FontNeed>) = f.fonts.iter().partition(|n| n.simple && n.num > 0);
     if !simple.is_empty() {
@@ -221,6 +227,9 @@ fn report(f: Found) -> Report {
     }
     if f.object_metadata > 0 {
         add("object-metadata", format!("XMP metadata on pages or pictures ({}), which PDF/A holds to the same rules as the document's", f.object_metadata), vec![], true);
+    }
+    if f.untyped_fonts > 0 {
+        add("untyped-fonts", format!("{} without their type (a detail most readers skip over)", plural(f.untyped_fonts, "font entry", "font entries")), vec![], true);
     }
     if f.layers > 0 {
         add("layers", "Layer settings without a name, or that switch layers by themselves".into(), vec![], true);
@@ -352,6 +361,7 @@ fn done_text(d: &Done, part: i32) -> Vec<String> {
     say(d.transfer, "Transfer functions removed".into());
     say(d.layers, "Layer settings named".into());
     say(d.object_metadata, "XMP metadata on pages or pictures removed".into());
+    say(d.untyped_fonts, "Font entries given their type".into());
     say(d.glyph_lists, "Glyph lists of font subsets removed (optional, and often not exact)".into());
     say(d.lost_pages, format!("{} left out: damaged beyond reading", plural(d.lost_pages, "page", "pages")));
     say(d.fonts_failed, format!("{} couldn't be put in", plural(d.fonts_failed, "font", "fonts")));
@@ -366,11 +376,36 @@ impl Engine {
         if !d.inner.lock().doc.is_pdf() {
             return Err("Only PDFs can be checked for PDF/A.".into());
         }
-        // A private copy when the file is as saved: a long check doesn't hold up the pages being drawn.
-        let changed = d.inner.lock().doc.has_changes();
-        let f = match if changed { None } else { d.private_copy()? } {
-            Some(copy) => found(&copy, part)?,
-            None => found(&d.inner.lock().doc, part)?,
+        // A private copy (with unsaved changes: of a copy written out first), so a long check doesn't hold up the pages
+        // being drawn.
+        let unsaved = {
+            let inner = d.inner.lock();
+            if inner.doc.has_changes() {
+                let t = super::temp_path(id, "check");
+                inner.doc.save_copy(&t)?;
+                Some(t)
+            } else {
+                None
+            }
+        };
+        let f = match &unsaved {
+            Some(t) => {
+                let res = (|| {
+                    let copy = Document::open(t)?;
+                    if copy.needs_password() {
+                        if let Some(pw) = d.password.lock().as_deref() {
+                            copy.authenticate(pw);
+                        }
+                    }
+                    found(&copy, part)
+                })();
+                let _ = std::fs::remove_file(t);
+                res?
+            }
+            None => match d.private_copy()? {
+                Some(copy) => found(&copy, part)?,
+                None => found(&d.inner.lock().doc, part)?,
+            },
         };
         let mut r = report(f);
         let sigs: Vec<serde_json::Value> = serde_json::from_str(&self.sigs_json(id)?).map_err(|e| e.to_string())?;
@@ -441,5 +476,42 @@ impl Engine {
         let _ = std::fs::remove_file(&tmp);
         let _ = std::fs::remove_file(&written);
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn need(name: &str, base14: &str, symbolic: bool) -> FontNeed {
+        FontNeed { num: 7, name: name.into(), base14: base14.into(), simple: true, bold: false, italic: false, serif: false, symbolic }
+    }
+
+    #[test]
+    fn stand_ins_say_why() {
+        let find = |name: &str, _: bool, _: bool| match name {
+            "Calibri" => Err(FontMissing::Licence),
+            "Verdana" => Ok((PathBuf::from("verdana.ttf"), "Verdana".to_string(), true)),
+            "Tahoma" => Ok((PathBuf::from("dejavu.ttf"), "DejaVu Sans".to_string(), false)),
+            _ => Err(FontMissing::NotInstalled),
+        };
+        let say = |n: FontNeed| choose_fonts(&[n], &find);
+        let (spec, subs) = say(need("Calibri", "", false));
+        assert_eq!(spec, "7		Helvetica
+");
+        assert_eq!(subs, vec!["Calibri: its licence doesn't allow putting it in files, Helvetica used instead"]);
+        let (_, subs) = say(need("Arial", "Helvetica", false));
+        assert_eq!(subs, vec!["Arial: not on this computer, Helvetica used instead (same letter widths)"]);
+        let (spec, subs) = say(need("Verdana", "", false));
+        assert_eq!((spec.as_str(), subs.len()), ("7	verdana.ttf	
+", 0));
+        let (_, subs) = say(need("Tahoma", "", false));
+        assert_eq!(subs, vec!["Tahoma: not on this computer, DejaVu Sans used instead"]);
+        let (spec, subs) = say(need("Times-Roman", "Times-Roman", false));
+        assert_eq!((spec.as_str(), subs.len()), ("7		Times-Roman
+", 0), "base 14: MuPDF's copy, nothing to say");
+        let (spec, subs) = say(need("Wingdings", "", true));
+        assert_eq!(spec, "");
+        assert_eq!(subs, vec!["Wingdings: not on this computer, and no other font can draw its symbols, so it stays out"]);
     }
 }

@@ -9149,6 +9149,83 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 #define PA_GRAY 1
 #define PA_RGB 2
 #define PA_CMYK 4
+#define PA_DIGIT(ch) ((ch) >= '0' && (ch) <= '9')
+
+/* Whether an XMP packet keeps to schemas PDF/A knows (the XMP specification's, PDF/A's own), or describes others
+ * with an extension schema. Properties from anywhere else (labelling tools, say) break PDF/A. */
+static int pa_xmp_known(const char *xmp)
+{
+	static const char *known[] = {
+		"adobe:ns:meta/", "http://www.w3.org/1999/02/22-rdf-syntax-ns#", "http://www.w3.org/XML/1998/namespace",
+		"http://purl.org/dc/elements/1.1/", "http://ns.adobe.com/xap/1.0/", "http://ns.adobe.com/pdf/1.3/",
+		"http://ns.adobe.com/photoshop/1.0/", "http://ns.adobe.com/tiff/1.0/", "http://ns.adobe.com/exif/1.0/",
+		"http://ns.adobe.com/camera-raw-settings/1.0/", "http://ns.adobe.com/xmp/1.0/DynamicMedia/",
+		"http://ns.adobe.com/xmp/Identifier/qual/1.0/", "http://www.aiim.org/pdfa/ns/", "http://www.aiim.org/pdfua/ns/id/", NULL
+	};
+	if (strstr(xmp, "http://www.aiim.org/pdfa/ns/schema#"))
+		return 1;
+	for (const char *p = strstr(xmp, "xmlns"); p; p = strstr(p + 5, "xmlns"))
+	{
+		const char *q = p + 5, *end;
+		char quote;
+		int ok = 0;
+		if (*q == ':')
+			while (*q && *q != '=' && *q != ' ' && *q != '>')
+				q++;
+		while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')
+			q++;
+		if (*q != '=')
+			continue;
+		q++;
+		while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')
+			q++;
+		quote = *q++;
+		if ((quote != '"' && quote != '\'') || !(end = strchr(q, quote)))
+			return 0;
+		for (int i = 0; known[i]; i++)
+			ok |= (size_t)(end - q) >= strlen(known[i]) && !strncmp(q, known[i], strlen(known[i]));
+		if (!ok)
+			return 0;
+	}
+	return 1;
+}
+
+static char *pa_xmp_text(fz_context *ctx, pdf_obj *md)
+{
+	fz_buffer *buf = pdf_load_stream(ctx, md);
+	char *s = NULL;
+	fz_try(ctx)
+		s = buffer_to_string(ctx, buf);
+	fz_always(ctx)
+		fz_drop_buffer(ctx, buf);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return s;
+}
+
+/* XMP on a page, picture or form whose properties PDF/A doesn't know (or that can't be read). */
+static int pa_xmp_foreign(fz_context *ctx, pdf_obj *md)
+{
+	char *s = NULL;
+	int bad = 0;
+	if (!pdf_is_stream(ctx, md))
+		return 0;
+	fz_var(s);
+	fz_try(ctx)
+	{
+		s = pa_xmp_text(ctx, md);
+		bad = !pa_xmp_known(s);
+	}
+	fz_always(ctx)
+		fz_free(ctx, s);
+	fz_catch(ctx)
+	{
+		fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+		fz_ignore_error(ctx);
+		bad = 1;
+	}
+	return bad;
+}
 
 /* Deletes a key from a dictionary that may not be there (MuPDF throws for those). */
 static void pa_del(fz_context *ctx, pdf_obj *dict, pdf_obj *key)
@@ -9189,7 +9266,7 @@ typedef struct
 	int bad_oi;      /* PDF/A output intents that differ, or one without a profile */
 	int encrypted, version, xfa, need_ap;
 	int scripts, actions, lzw, lzw_left, external, postscript, reference, images, transfer, transparency;
-	int attachments, layers, object_meta, glyph_lists;
+	int attachments, layers, object_meta, glyph_lists, untyped_fonts;
 	char action_names[160];
 	pa_list gray, rgb, cmyk, font_pages, annot_types, annot_flags, annot_ap;
 	pdf_obj *fonts;  /* fonts used and not embedded */
@@ -9497,6 +9574,7 @@ typedef struct
 	int len;
 	int *stack;
 	int top, cap;
+	pdf_obj *fonts; /* set: only collect the fonts not in the file (no checks) */
 } pa_walk;
 
 static void pa_push(fz_context *ctx, pa_walk *w, pdf_obj *ref)
@@ -9601,18 +9679,27 @@ static void pa_stream(fz_context *ctx, pa_walk *w, int num, pdf_obj *dict)
 	}
 }
 
+static int pa_is_font(fz_context *ctx, pdf_obj *obj);
+
 static void pa_dict(fz_context *ctx, pa_walk *w, pdf_obj *d)
 {
 	pa_found *f = w->f;
 	pdf_obj *sub = pdf_dict_get(ctx, d, PDF_NAME(Subtype)), *tr2;
 	static const char *keys[] = { "A", "OpenAction", "Next", NULL };
-	/* XMP on pages, pictures and forms is held to PDF/A's rules like the document's (custom properties need
-	 * schemas): it goes. The document's own is written again when fixing. */
-	if (pdf_dict_get(ctx, d, PDF_NAME(Metadata)) && d != pdf_resolve_indirect(ctx, pdf_dict_get(ctx, pdf_trailer(ctx, w->doc), PDF_NAME(Root))))
+	/* XMP on pages, pictures and forms is held to PDF/A's rules like the document's: properties from schemas it
+	 * doesn't know make it go. The document's own is written again when fixing. */
+	if (d != pdf_resolve_indirect(ctx, pdf_dict_get(ctx, pdf_trailer(ctx, w->doc), PDF_NAME(Root))) && pa_xmp_foreign(ctx, pdf_dict_get(ctx, d, PDF_NAME(Metadata))))
 	{
 		f->object_meta++;
 		if (f->fix)
 			pdf_dict_del(ctx, d, PDF_NAME(Metadata));
+	}
+	/* Font dictionaries must say they are fonts (some producers leave it out; readers cope). */
+	if (!pdf_dict_get(ctx, d, PDF_NAME(Type)) && pa_is_font(ctx, d))
+	{
+		f->untyped_fonts++;
+		if (f->fix)
+			pdf_dict_put(ctx, d, PDF_NAME(Type), PDF_NAME(Font));
 	}
 	/* A subset's glyph list (optional) must be exact, and often isn't: it goes when fixing. */
 	if (f->fix && pdf_name_eq(ctx, pdf_dict_get(ctx, d, PDF_NAME(Type)), PDF_NAME(FontDescriptor)) &&
@@ -9714,16 +9801,32 @@ static void pa_visit(fz_context *ctx, pa_walk *w, pdf_obj *obj, int depth)
 	}
 	else if (pdf_is_dict(ctx, obj))
 	{
-		pa_dict(ctx, w, obj);
+		if (!w->fonts)
+			pa_dict(ctx, w, obj);
 		for (int i = 0; i < pdf_dict_len(ctx, obj); i++)
 			pa_visit(ctx, w, pdf_dict_get_val(ctx, obj, i), depth + 1);
 	}
 }
 
-/* Every object a reader can reach from the catalog (the trailer's Encrypt and Info aren't content). */
-static void pa_objects(fz_context *ctx, pdf_document *doc, pa_found *f)
+/* A font dictionary: typed as one, or (some producers leave the type out) a font subtype with a font name.
+ * CIDFonts come with the Type0 font that uses them. */
+static int pa_is_font(fz_context *ctx, pdf_obj *obj)
 {
-	pa_walk w = { doc, f, NULL, pdf_xref_len(ctx, doc), NULL, 0, 0 };
+	pdf_obj *type = pdf_dict_get(ctx, obj, PDF_NAME(Type)), *sub = pdf_dict_get(ctx, obj, PDF_NAME(Subtype));
+	if (pdf_name_eq(ctx, sub, PDF_NAME(CIDFontType0)) || pdf_name_eq(ctx, sub, PDF_NAME(CIDFontType2)))
+		return 0;
+	if (pdf_name_eq(ctx, type, PDF_NAME(Font)))
+		return 1;
+	return !type && pdf_dict_get(ctx, obj, PDF_NAME(BaseFont)) &&
+		(pdf_name_eq(ctx, sub, PDF_NAME(Type1)) || pdf_name_eq(ctx, sub, PDF_NAME(MMType1)) || pdf_name_eq(ctx, sub, PDF_NAME(TrueType)) ||
+			pdf_name_eq(ctx, sub, PDF_NAME(Type0)));
+}
+
+/* Every object a reader can reach from the catalog (the trailer's Encrypt and Info aren't content). With `fonts`:
+ * only collects into it the fonts not in the file. */
+static void pa_objects(fz_context *ctx, pdf_document *doc, pa_found *f, pdf_obj *fonts)
+{
+	pa_walk w = { doc, f, NULL, pdf_xref_len(ctx, doc), NULL, 0, 0, fonts };
 	fz_var(w.stack);
 	w.seen = fz_calloc(ctx, w.len > 0 ? w.len : 1, 1);
 	fz_try(ctx)
@@ -9737,7 +9840,12 @@ static void pa_objects(fz_context *ctx, pdf_document *doc, pa_found *f)
 			fz_try(ctx)
 			{
 				obj = pdf_load_object(ctx, doc, num);
-				if (pdf_obj_num_is_stream(ctx, doc, num))
+				if (fonts)
+				{
+					if (pa_is_font(ctx, obj) && !pa_font_embedded(ctx, obj))
+						pdf_array_push_drop(ctx, fonts, pdf_new_indirect(ctx, doc, num, 0));
+				}
+				else if (pdf_obj_num_is_stream(ctx, doc, num))
 					pa_stream(ctx, &w, num, obj);
 				pa_visit(ctx, &w, obj, 0);
 			}
@@ -10145,13 +10253,13 @@ static void pa_iso_date(const char *pdf, char *out, size_t size)
 		fz_snprintf(out, size, "%.4s", d);
 	if (n >= 12 && (*tz == 'Z' || *tz == 'z'))
 		fz_strlcat(out, "Z", size);
-	else if (n >= 12 && (*tz == '+' || *tz == '-') && tz[1] >= '0' && tz[2] >= '0')
+	else if (n >= 12 && (*tz == '+' || *tz == '-') && PA_DIGIT(tz[1]) && PA_DIGIT(tz[2]))
 	{
 		char zone[8];
 		const char *m = tz + 3;
 		if (*m == '\'')
 			m++;
-		fz_snprintf(zone, sizeof zone, "%c%.2s:%.2s", *tz, tz + 1, m[0] >= '0' && m[0] <= '9' ? m : "00");
+		fz_snprintf(zone, sizeof zone, "%c%.2s:%.2s", *tz, tz + 1, PA_DIGIT(m[0]) && PA_DIGIT(m[1]) ? m : "00");
 		fz_strlcat(out, zone, size);
 	}
 }
@@ -10262,46 +10370,27 @@ static void pa_json_fonts(fz_context *ctx, fz_buffer *b, pdf_obj *fonts)
 	fz_append_byte(ctx, b, ']');
 }
 
-/* The fonts not in the file, from its objects alone (no page content read): what Save as PDF/A embeds first. A
- * font no page uses may come along; the content scan after fixing finds any left. JSON {"fonts":[...]}. */
+/* The fonts not in the file that the catalog reaches (no page content read): what Save as PDF/A embeds first. A font
+ * in resources no content uses may come along; the content scan after fixing finds any left. JSON {"fonts":[...]}. */
 char *fo_pdfa_fonts(fo_ctx *c, fo_doc *d)
 {
 	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
 	pdf_obj *fonts = NULL;
 	fz_buffer *b = NULL;
 	char *s = NULL;
+	pa_found f;
 	if (!pdf)
 	{
 		snprintf(c->err, sizeof c->err, "not a PDF");
 		return NULL;
 	}
+	memset(&f, 0, sizeof f);
 	fz_var(fonts);
 	fz_var(b);
 	fz_try(CTX)
 	{
-		int n = pdf_xref_len(CTX, pdf);
 		fonts = pdf_new_array(CTX, pdf, 8);
-		for (int i = 1; i < n; i++)
-		{
-			pdf_obj *obj = NULL, *sub;
-			fz_var(obj);
-			fz_try(CTX)
-			{
-				obj = pdf_load_object(CTX, pdf, i);
-				sub = pdf_dict_get(CTX, obj, PDF_NAME(Subtype));
-				/* CIDFonts come with the Type0 font that uses them. */
-				if (pdf_name_eq(CTX, pdf_dict_get(CTX, obj, PDF_NAME(Type)), PDF_NAME(Font)) && !pdf_name_eq(CTX, sub, PDF_NAME(CIDFontType0)) &&
-					!pdf_name_eq(CTX, sub, PDF_NAME(CIDFontType2)) && !pa_font_embedded(CTX, obj))
-					pdf_array_push_drop(CTX, fonts, pdf_new_indirect(CTX, pdf, i, 0));
-			}
-			fz_always(CTX)
-				pdf_drop_obj(CTX, obj);
-			fz_catch(CTX)
-			{
-				fz_rethrow_if(CTX, FZ_ERROR_TRYLATER);
-				fz_ignore_error(CTX);
-			}
-		}
+		pa_objects(CTX, pdf, &f, fonts);
 		b = fz_new_buffer(CTX, 256);
 		fz_append_string(CTX, b, "{\"fonts\":");
 		pa_json_fonts(CTX, b, fonts);
@@ -10342,7 +10431,7 @@ char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
 		char pa_part[16], conformance[16], mismatch[128];
 		pa_init(CTX, pdf, &f, part, 0);
 		pa_catalog(CTX, pdf, &f);
-		pa_objects(CTX, pdf, &f);
+		pa_objects(CTX, pdf, &f, NULL);
 		pa_files(CTX, pdf, &f, NULL);
 		pa_annots(CTX, pdf, &f);
 		pa_scan(CTX, pdf, &f);
@@ -10363,15 +10452,15 @@ char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
 		}
 		else
 			fz_append_string(CTX, b, "null");
-		fz_append_printf(CTX, b, ",\"part\":%d,\"encrypted\":%s,\"version\":%s,\"xmp\":%s,\"mismatch\":", part, f.encrypted ? "true" : "false",
-			f.version ? "true" : "false", xmp ? "true" : "false");
+		fz_append_printf(CTX, b, ",\"part\":%d,\"encrypted\":%s,\"version\":%s,\"xmp\":%s,\"xmpForeign\":%s,\"mismatch\":", part,
+			f.encrypted ? "true" : "false", f.version ? "true" : "false", xmp ? "true" : "false", xmp && !pa_xmp_known(xmp) ? "true" : "false");
 		json_str(CTX, b, mismatch);
 		fz_append_printf(CTX, b, ",\"intent\":%d,\"badIntent\":%s,\"xfa\":%s,\"needAppearances\":%s", f.oi, f.bad_oi ? "true" : "false",
 			f.xfa ? "true" : "false", f.need_ap ? "true" : "false");
 		fz_append_printf(CTX, b, ",\"scripts\":%d,\"actions\":%d,\"actionNames\":", f.scripts, f.actions);
 		json_str(CTX, b, f.action_names);
-		fz_append_printf(CTX, b, ",\"lzw\":%d,\"external\":%d,\"postscript\":%d,\"reference\":%d,\"images\":%d,\"transfer\":%d,\"attachments\":%d,\"layers\":%d,\"objectMetadata\":%d",
-			f.lzw, f.external, f.postscript, f.reference, f.images, f.transfer, f.attachments, f.layers, f.object_meta);
+		fz_append_printf(CTX, b, ",\"lzw\":%d,\"external\":%d,\"postscript\":%d,\"reference\":%d,\"images\":%d,\"transfer\":%d,\"attachments\":%d,\"layers\":%d,\"objectMetadata\":%d,\"untypedFonts\":%d",
+			f.lzw, f.external, f.postscript, f.reference, f.images, f.transfer, f.attachments, f.layers, f.object_meta, f.untyped_fonts);
 		pa_json_pages(CTX, b, "gray", &f.gray);
 		pa_json_pages(CTX, b, "rgb", &f.rgb);
 		pa_json_pages(CTX, b, "cmyk", &f.cmyk);
@@ -10749,22 +10838,83 @@ static int pa_add_defaults(fz_context *ctx, pdf_document *doc, pa_found *f)
 	return added;
 }
 
-/* XMP metadata written from the document information, saying PDF/A-`part` level b. */
+/* Copies property `prop` ("dc:rights") from an XMP packet as an element: an element as it is, an attribute (on
+ * rdf:Description) as <prop>value</prop>. */
+static void pa_copy_prop(fz_context *ctx, fz_buffer *b, const char *xmp, const char *prop)
+{
+	size_t n = strlen(prop);
+	for (const char *p = strstr(xmp, prop); p; p = strstr(p + n, prop))
+	{
+		const char *after = p + n, *q;
+		if (p > xmp && p[-1] == '<' && (*after == '>' || *after == '/' || *after == ' ' || *after == '\t' || *after == '\r' || *after == '\n'))
+		{
+			const char *gt = strchr(after, '>'), *end;
+			char close[80];
+			if (!gt)
+				return;
+			if (gt[-1] == '/')
+				end = gt + 1;
+			else
+			{
+				fz_snprintf(close, sizeof close, "</%s>", prop);
+				if (!(end = strstr(gt, close)))
+					return;
+				end += strlen(close);
+			}
+			fz_append_data(ctx, b, p - 1, end - (p - 1));
+			fz_append_byte(ctx, b, '\n');
+			return;
+		}
+		if (p > xmp && (p[-1] == ' ' || p[-1] == '\t' || p[-1] == '\r' || p[-1] == '\n'))
+		{
+			char quote;
+			const char *end;
+			for (q = after; *q == ' ' || *q == '\t' || *q == '\r' || *q == '\n'; q++)
+				;
+			if (*q != '=')
+				continue;
+			for (q++; *q == ' ' || *q == '\t' || *q == '\r' || *q == '\n'; q++)
+				;
+			quote = *q++;
+			if ((quote != '"' && quote != '\'') || !(end = strchr(q, quote)))
+				return;
+			fz_append_printf(ctx, b, "<%s>", prop);
+			fz_append_data(ctx, b, q, end - q);
+			fz_append_printf(ctx, b, "</%s>\n", prop);
+			return;
+		}
+	}
+}
+
+/* Standard properties an XMP packet may have beyond what the document information holds: kept when it's rewritten. */
+static const char *pa_kept_props[] = {
+	"dc:rights", "dc:subject", "dc:language", "dc:publisher", "dc:contributor", "dc:date", "dc:identifier", "dc:source",
+	"dc:relation", "dc:coverage", "dc:type", "xmpRights:Marked", "xmpRights:WebStatement", "xmpRights:UsageTerms",
+	"xmpRights:Owner", "xmpRights:Certificate", "xmpMM:DocumentID", "xmpMM:InstanceID", "xmpMM:VersionID",
+	"xmpMM:OriginalDocumentID", "xmpMM:RenditionClass", "xmp:Label", "xmp:Rating", "xmp:Nickname", NULL
+};
+
+/* XMP metadata written from the document information, saying PDF/A-`part` level b; standard properties the old
+ * packet had beyond that (rights, subjects, document IDs) are kept. */
 static void pa_write_xmp(fz_context *ctx, pdf_document *doc, int part, const char *now_iso)
 {
 	pdf_obj *trailer = pdf_trailer(ctx, doc), *root = pdf_dict_get(ctx, trailer, PDF_NAME(Root));
 	pdf_obj *info = pdf_dict_get(ctx, trailer, PDF_NAME(Info)), *dict = NULL, *ref = NULL;
 	fz_buffer *b = fz_new_buffer(ctx, 2048);
+	char *old = NULL;
 	fz_var(dict);
 	fz_var(ref);
+	fz_var(old);
 	fz_try(ctx)
 	{
 		const char *v;
 		char iso[40];
+		old = pa_xmp(ctx, doc);
 		fz_append_string(ctx, b, "<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
 			"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
 			"<rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\""
-			" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">\n");
+			" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\""
+			" xmlns:xmpRights=\"http://ns.adobe.com/xap/1.0/rights/\" xmlns:xmpMM=\"http://ns.adobe.com/xap/1.0/mm/\">\n");
 		fz_append_printf(ctx, b, "<pdfaid:part>%d</pdfaid:part>\n<pdfaid:conformance>B</pdfaid:conformance>\n<dc:format>application/pdf</dc:format>\n", part);
 		if (*(v = pdf_dict_get_text_string(ctx, info, PDF_NAME(Title))))
 		{
@@ -10810,6 +10960,10 @@ static void pa_write_xmp(fz_context *ctx, pdf_document *doc, int part, const cha
 			fz_append_printf(ctx, b, "<xmp:ModifyDate>%s</xmp:ModifyDate>\n", iso);
 		if (now_iso && *now_iso)
 			fz_append_printf(ctx, b, "<xmp:MetadataDate>%s</xmp:MetadataDate>\n", now_iso);
+		/* Only from a packet PDF/A could take: one with unknown schemas may bind these prefixes elsewhere. */
+		if (old && pa_xmp_known(old))
+			for (int i = 0; pa_kept_props[i]; i++)
+				pa_copy_prop(ctx, b, old, pa_kept_props[i]);
 		fz_append_string(ctx, b, "</rdf:Description>\n</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>");
 		/* Trapped would need its own XMP property: the information entry goes instead. */
 		if (pdf_is_dict(ctx, info))
@@ -10822,6 +10976,7 @@ static void pa_write_xmp(fz_context *ctx, pdf_document *doc, int part, const cha
 	}
 	fz_always(ctx)
 	{
+		fz_free(ctx, old);
 		pdf_drop_obj(ctx, ref);
 		pdf_drop_obj(ctx, dict);
 		fz_drop_buffer(ctx, b);
@@ -10905,7 +11060,7 @@ char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char 
 			line = *end ? end + 1 : end;
 		}
 		pa_catalog(CTX, pdf, &f);
-		pa_objects(CTX, pdf, &f);
+		pa_objects(CTX, pdf, &f, NULL);
 		pa_files(CTX, pdf, &f, pdf_now);
 		pa_fix_annots(CTX, pdf, &f, &removed, &printed, &made, pdf_now);
 		if (!f.oi || f.bad_oi)
@@ -10947,10 +11102,10 @@ char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char 
 		b = fz_new_buffer(CTX, 256);
 		fz_append_printf(CTX, b, "{\"fonts\":%d,\"fontsFailed\":%d,\"scripts\":%d,\"actions\":%d,\"annotsRemoved\":%d,\"annotsPrinted\":%d,\"appearances\":%d,"
 			"\"attachments\":%d,\"lzw\":%d,\"lzwLeft\":%d,\"external\":%d,\"postscript\":%d,\"reference\":%d,\"images\":%d,\"transfer\":%d,\"layers\":%d,"
-			"\"intent\":%s,\"defaults\":%d,\"xfa\":%s,\"encrypted\":%s,\"objectMetadata\":%d,\"glyphLists\":%d}",
+			"\"intent\":%s,\"defaults\":%d,\"xfa\":%s,\"encrypted\":%s,\"objectMetadata\":%d,\"glyphLists\":%d,\"untypedFonts\":%d}",
 			embedded, font_failed, f.scripts, f.actions, removed, printed, made, f.attachments, f.lzw - f.lzw_left, f.lzw_left, f.external,
 			f.postscript, f.reference, f.images, f.transfer, f.layers, intent ? "true" : "false", defaults, f.xfa ? "true" : "false",
-			f.encrypted ? "true" : "false", f.object_meta, f.glyph_lists);
+			f.encrypted ? "true" : "false", f.object_meta, f.glyph_lists, f.untyped_fonts);
 		s = buffer_to_string(CTX, b);
 	}
 	fz_always(CTX)

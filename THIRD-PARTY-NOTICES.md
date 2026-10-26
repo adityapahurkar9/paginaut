@@ -11,6 +11,11 @@ HarfBuzz, libjpeg, OpenJPEG, jbig2dec, Little CMS, MuJS, zlib, Brotli, Gumbo, Ex
 zxing-cpp and cmark-gfm under their own licences (see the MuPDF source, `thirdparty/`).
 https://mupdf.com
 
+Save as PDF/A puts fonts into the files it writes. The base 14 ones (Helvetica, Times, Courier, Symbol,
+ZapfDingbats and the stand-ins for fonts not on the computer) are URW's, from MuPDF, under the SIL Open Font
+License 1.1, which allows embedding them in documents. Installed fonts are only put in when their own licence
+allows embedding (OS/2 fsType). The sRGB colour profile it adds is MuPDF's own.
+
 ## Tesseract and Leptonica (Windows: text recognition)
 
 Tesseract: Apache License 2.0. Leptonica: BSD 2-Clause. Models from tesseract-ocr/tessdata_fast,

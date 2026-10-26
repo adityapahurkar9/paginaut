@@ -40,8 +40,16 @@ compatible with it (no RarLab unRAR code, for one: its licence forbids rebuildin
 | Piper (natural voices for Read aloud, Windows) | piper 2023.11.14-2; voices from rhasspy/piper-voices at one commit | Downloaded on request (`src-tauri/src/piper.rs`, `piper_voices.rs`) | Update the release and the voice commit together with their hashes. |
 | App icons | drawn in `assets/icon.svg` | `src-tauri/icons`, Android mipmaps | `node assets/render-icon.mjs`, `npx tauri icon`, `E:/Anaconda/python.exe assets/android-icons.py`. |
 
+## Tools for testing (not shipped)
+
+| What | Version | Where | How to update |
+|---|---|---|---|
+| **veraPDF** (the reference PDF/A validator; Java) | 1.30.3 (greenfield) | Not kept anywhere: installed when needed from software.verapdf.org/releases/verapdf-installer.zip, headless with an IzPack auto-install XML (`java -jar verapdf-izpack-installer-*.jar auto-install.xml`; Android Studio's JBR runs it) | Install a newer one the same way. `tools/pdfa-validate.ps1 -VeraPdf <verapdf.bat> -Folder <dir>` checks what `examples/pdfa_test.rs` saved; every file must pass. |
+
 ## After any update
 
 1. `npm run typecheck`, then build both apps (`npx tauri build`; `bash tools/android.sh <abi>`).
 2. Open a PDF with forms, a scanned PDF, an EPUB, CBZ and CBR comics (RAR 4 and 5, plain and solid), XPS and Markdown.
-3. On Android, the oldest emulator too (Android 7, API 24) and a 32-bit one.
+3. MuPDF (or the PDF/A code): `python tools/make-pdfa-samples.py testfiles`, then `examples/pdfa_test.rs` on `testfiles`
+   and each `testfiles/office/*` folder, and `tools/pdfa-validate.ps1` (veraPDF) over the results.
+4. On Android, the oldest emulator too (Android 7, API 24) and a 32-bit one.
