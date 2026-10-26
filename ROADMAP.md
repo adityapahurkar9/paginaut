@@ -473,6 +473,7 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
 - [x] Convert pane on the right (in place of the Sign pane; opening one closes the other), opened and closed by
       Tools › Convert (0.7.11: straight away, no menu first) and from the command palette: "This document to" and "Files to PDF" in one place, Office suite choices at
       the bottom
+- [x] This document to PDF/A-2b or -3b (0.9.9): see the PDF/A section
 - [x] This document to Word (.docx): Microsoft Word when installed (Word reads the PDF itself: paragraphs, tables and
       pictures editable, close to the layout; 1.5 s), else Paginaut's own writer (src-tauri/src/docx.rs): text as
       paragraphs with size, bold, italic, colour, alignment and font, tables as Word tables, pictures, in reading order,
@@ -688,6 +689,27 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
 - [ ] Store listing, AAB upload (a personal Play account must run a closed test with 12 testers for 14 days
       first); source made public first (AGPL); 1.0 for the store release
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
+- [x] 0.3.1, 0.4.0 (2026-10-13): Paginaut's Standard theme, then the desktop's 16 colour themes (src/themedata.ts shared by
+      both apps; Settings: theme previews, light or dark); Read and Book's plain paper takes the theme's; the shelf's
+      folder picker starts in Download (Android 11 and later refuse Download itself: a tip says so)
+- [x] 0.5.0: "Search and pick books" (Android's picker, several at once; picked books join the shelf); the whole-phone
+      scan looks in Android/media (WhatsApp's documents) but never another app's data. mobile.rs checks every path
+      handed to the engine (the cache, or a readable document on shared storage; writes only to the cache). Builds stop
+      if the manifest gains a permission, an exported component or wider sharing; a copy that asks for more shows
+      "Paginaut stopped". docs/PLAY-DATA-SAFETY.md: the Data safety answers and a privacy policy draft
+- [x] 0.5.1: Hide from screenshots (View sheet): Android's secure window, on before the first frame after a restart
+- [x] 0.6.0: MuPDF in its own isolated process (EngineService, android:isolatedProcess: no permissions, files or
+      network). The app opens each document read-only and passes the open file over a socket (engine_link.rs, handles
+      by SCM_RIGHTS); temporary files are made by the app and handed over (engine/sandbox.rs). If the engine stops, a new
+      one reopens the documents (passwords too) and searches and Read mode carry on; a watchdog lets go of one that
+      hangs; a document that stops it twice in two minutes is refused, and the reader says so. Message sizes capped
+- [x] 0.6.1–0.6.3: the engine's temporary files capped (512, none when the phone is nearly full); printing files over
+      128 MB read in place; review fixes (printing off the main thread, close and cancel watched, quiet searches count
+      as a stuck engine). tools/android-engine-test.sh: 23 checks
+- [x] 0.6.4, 0.6.5 (2026-10-26): password-protected PDFs show their pages (engine fix shared with desktop 0.9.8); a
+      wrong password after unlocking leaves the pages drawing; errors that aren't a wrong password say what happened;
+      after an engine restart, a password that no longer opens the file closes it with a message. The engine test
+      checks locked pages draw (5 checks; 25 pass with the test files in place)
 
 ## PDF/A: archival PDFs (-2b and -3b done in 0.9.9; -1b and the rest planned)
 PDF/A (ISO 19005) is the PDF that still opens and looks the same decades later: what courts, government portals and
@@ -782,7 +804,6 @@ app's feature names).
 - [x] Passwords (both apps): a wrong password tried on an unlocked file leaves its pages drawing; errors that aren't a
       wrong password say what happened (desktop password dialog, Android); Android: after an engine restart, a
       password that no longer opens the file closes it with a message
-- [x] Android 0.6.4 (2026-10-26): password-protected PDFs show their pages (same fix as 0.9.8)
 
 ## 0.9.8 (Windows, Linux): password-protected PDFs show their pages
 - [x] A PDF opened with its password no longer shows blank pages. MuPDF's needs-password check tries the empty
