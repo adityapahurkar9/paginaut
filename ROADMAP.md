@@ -710,6 +710,12 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       wrong password after unlocking leaves the pages drawing; errors that aren't a wrong password say what happened;
       after an engine restart, a password that no longer opens the file closes it with a message. The engine test
       checks locked pages draw (5 checks; 25 pass with the test files in place)
+- [ ] Next Android release: desktop 0.9.10 changed native code the Android build compiles in. No Android release was
+      made for it (0.6.5 stays current); a debug x86_64 build compiles and nothing Android runs behaves differently,
+      but the next release should run tools/android-engine-test.sh and check these: paginaut.c's PDF/A code
+      (fo_pdfa_*, unused on Android) now includes MuPDF's FreeType headers (build.rs adds the include path for
+      Android too) and calls FreeType under fz_ft_lock; fo_sign_page took a new last argument (pdfa; signing is
+      desktop-only); Document::pdfa_part and Page::sign's new argument are in the shared engine
 
 ## PDF/A: archival PDFs (-2b and -3b in 0.9.9; -1b, Office files, signing and saving in 0.9.10)
 PDF/A (ISO 19005) is the PDF that still opens and looks the same decades later: what courts, government portals and
