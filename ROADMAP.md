@@ -711,7 +711,7 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       after an engine restart, a password that no longer opens the file closes it with a message. The engine test
       checks locked pages draw (5 checks; 25 pass with the test files in place)
 
-## PDF/A: archival PDFs (-2b and -3b done in 0.9.9; -1b and the rest planned)
+## PDF/A: archival PDFs (-2b and -3b in 0.9.9; -1b, Office files, signing and saving in 0.9.10)
 PDF/A (ISO 19005) is the PDF that still opens and looks the same decades later: what courts, government portals and
 archives ask for. First PDF/A-2b (looks preserved; allows transparency, JPEG 2000 and layers), then -1b (older
 portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags, so they wait for tagging (below);
@@ -725,8 +725,17 @@ portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags,
       picture alternates, transfer functions, PDF 2.0, missing XMP or details that disagree with it. Objects are walked
       from the catalog; fonts and colours come from a content processor over every page and appearance (what's used).
       Done in C over MuPDF's objects (a Rust walk would have needed a large FFI), worded in Rust
-- [ ] Check: letters without Unicode ("u"), glyph widths against font programs, non-symbolic TrueType encodings,
-      CIDSet, transparency groups' colour spaces; for -1b transparency
+- [x] Check, 0.9.10: XMP read properly (its own small XML parser: MuPDF's drops namespace prefixes; UTF-8, -16 and -32)
+      and held to veraPDF's lists of XMP 2005 (and, for -1, 2004) properties and value types, extension schemas
+      included; glyph widths against the font programs, characters a font hasn't got (.notdef), non-symbolic
+      TrueType encodings, CID fonts' character collections and CID to glyph maps; output intent profiles (class,
+      colour space, ICC version, one profile for every intent); transparency groups' blending spaces, Type 3 glyphs'
+      colours, inline pictures' abbreviated colour spaces; actions on an allow-list (set-state and no-op ones out);
+      rendering intents, blend modes, halftones; content using resources it doesn't hold; JPEG 2000 headers;
+      size limits (numbers, strings, names, q nesting, page boundaries); attachments associated by any object's AF.
+      Document info need only match the XMP for -1 (-2 and -3 only recommend it)
+- [ ] Check: letters without Unicode ("u"); operators PDF doesn't define and broken hex strings in content (MuPDF's
+      interpreter skips them without telling)
 - [x] Save as PDF/A-2b or -3b (new file, "… (PDF-A).pdf"): fonts embedded from the system's (Windows registry,
       fontconfig; licences that forbid embedding respected; each stand-in named with why), MuPDF's copies for the base 14, widths
       taken from the program; sRGB output intent (MuPDF's built-in profile) and default colour spaces where device CMYK
@@ -734,14 +743,27 @@ portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags,
       document IDs) when PDF/A could take it; symbol fonts' codes spelled out by glyph name; JavaScript, encryption (needs the permissions password) and forbidden
       actions removed; appearances drawn; hidden annotations and fields removed; LZW recompressed; damaged page trees
       rebuilt as Repair does. Checked again after saving; what still fails is listed
-- [ ] Save as PDF/A-1b: transparency flattened (a page rendered to a picture as the last resort, said so)
+- [x] 0.9.10 fixes to match: widths taken from the font programs (simple, CID and Type 3 fonts), PDF/X intents with
+      their own profile dropped, groups' blending spaces made ICC-based, page resources put on the page, halftones and
+      rendering intents put right, form fields' own actions removed, buttons' looks under their state names, an empty
+      look for annotations MuPDF can't draw, signatures taken out of copies (they can't stay valid), JPEG 2000 with
+      bad headers stored again without loss, document dates written in full, info entries that aren't text dropped;
+      pictures' XMP kept only when every property can be checked
+- [x] Save as PDF/A-1b (0.9.10): PDF 1.4 (no layers, attached files or JPEG 2000; 16-bit pictures as 8-bit), CharSet
+      and CIDSet glyph lists for font subsets, comments of kinds PDF 1.4 hasn't got kept as stamps (same look), a CMYK
+      output intent for CMYK documents, ICC profiles below version 3. Transparency groups with nothing see-through
+      are taken off; real transparency is listed as something PDF/A-1 can't hold (PDF/A-2b can)
+- [ ] PDF/A-1b: transparency flattened (a page rendered to a picture as the last resort, said so)
 - [x] In the app: PDF/A in the Convert pane's targets (checked as soon as it's chosen, with a warning for signed
-      files); Properties (Ctrl+D) shows a file's PDF/A claim, a Check button, and a note that changing details there
-      makes them differ from the PDF/A metadata
-- [ ] Saving other changes to a PDF/A file warns that they may break it (or re-applies the fixes)
-- [ ] Office files to PDF/A: Word's and LibreOffice's own PDF/A export in Convert › Files to PDF (an option that's
-      already there in both)
-- [ ] Signing a PDF/A file keeps it PDF/A (the signature's appearance and the incremental save follow the rules)
+      files); Properties (Ctrl+D) shows a file's PDF/A claim, a Check button, and a note that saving says if a change
+      would break it. 0.9.10: PDF/A-1b among the kinds
+- [x] Saving changes to a file that says it's PDF/A (0.9.10): the problems the changes bring (not the file's own) are
+      listed first, with Keep it PDF/A (the Save as PDF/A fixes on the document itself, one undo step, signatures
+      kept, saved as an update), Save anyway or Cancel; checked again after saving
+- [x] Office files to PDF/A (0.9.10): Convert › Files to PDF makes PDF, PDF/A-1b, -2b or -3b; the Office conversion
+      (cached) is saved as PDF/A, with what's left and the fonts that stood in shown by each file
+- [x] Signing a PDF/A file keeps it PDF/A (0.9.10): the signature's look prints, has its normal look only, gets MuPDF's
+      base 14 fonts and default colour spaces, all inside the signing's revision
 - [x] Tests: examples/pdfa_test.rs (every testfiles PDF conforms after saving, looks the same, keeps its pages;
       attachments for -2 and -3; protection; unsaved changes; XMP kept and dropped; untyped fonts: samples from
       tools/make-pdfa-samples.py); unit tests for font names, licences and the stand-in messages
@@ -749,7 +771,22 @@ portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags,
       Office-made PDFs in testfiles/office (tools/pdfa-validate.ps1). It found what our check missed, now fixed:
       symbolic fonts read through the encoding they name (ZapfDingbats check marks), wrong CIDSet glyph lists in
       font subsets, XMP with custom properties on pictures, font entries without their type
-- [ ] Tests: veraPDF's own test corpus against our checker; the user's portal files
+- [x] veraPDF's test corpus (2,906 files; tools: examples/pdfa_corpus.rs, then tools/pdfa-validate.ps1 or veraPDF on
+      the folder). Our check on the files veraPDF expects to fail and to pass, and veraPDF on what Save as PDF/A
+      makes of each:
+      | | fail files caught | pass files we flag | our copies veraPDF passes |
+      |---|---|---|---|
+      | PDF/A-1b | 278 of 306 | 0 of 263 | 547 of 569 |
+      | PDF/A-2b | 537 of 609 (161 before) | 0 of 377 (5 before) | 936 of 986 (840 before) |
+      | PDF/A-3b | 5 of 5 | 0 of 7 | 12 of 12 |
+      What veraPDF still fails is mostly what a copy can't change without rewriting page content (sizes beyond
+      PDF/A's limits, broken hex strings, inline pictures, characters fonts haven't got), which the check lists as
+      left
+- [x] examples/pdfa_keep_test.rs: a comment added to a PDF/A file is said to break it, kept, saved as an update and
+      still PDF/A; a signed PDF/A file still PDF/A with a valid signature (-1b, -2b, -3b; veraPDF passes all).
+      examples/pdfa_office_test.rs: Word, Excel and PowerPoint files to PDF/A (veraPDF passes 14 of 15: Excel's
+      see-through chart can't be PDF/A-1b)
+- [ ] Tests: the user's portal files
 
 ## PDF/UA: checking accessible PDFs (planned, after PDF/A)
 PDF/UA (ISO 14289) is the accessible PDF: tagged, so a screen reader reads it in order, with pictures described and
@@ -794,6 +831,11 @@ app's feature names).
       instead of guessing
 - [ ] Tests: untagged documents of rising difficulty (letter, report, two columns, tables, forms, a scanned book):
       add tags, then the checker; compared with Acrobat's results on the same files (installed on the user's PC)
+
+## 0.9.10 (Windows, Linux): PDF/A-1b, Office files to PDF/A, signing and saving PDF/A files
+- [x] PDF/A-1b; Office files straight to PDF/A; signing keeps a PDF/A file PDF/A; saving changes to one warns and can
+      keep it PDF/A; the check and Save as PDF/A held to veraPDF's test corpus (see the PDF/A section)
+- [x] A crash in Check for PDF/A on PDF/A-1 font subsets (FreeType called without MuPDF's lock)
 
 ## 0.9.9 (Windows, Linux) and Android 0.6.5: PDF/A, and fixes
 - [x] PDF/A-2b and -3b: check a document, save a copy as PDF/A (Convert pane), its claim in Properties (see the PDF/A

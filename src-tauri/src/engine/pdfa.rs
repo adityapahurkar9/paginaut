@@ -1,4 +1,4 @@
-//! PDF/A (ISO 19005), parts 2 and 3, level b: checking a document and saving a copy that conforms. The checks and
+//! PDF/A (ISO 19005), parts 1, 2 and 3, level b: checking a document and saving a copy that conforms. The checks and
 //! fixes run natively (paginaut.c, fo_pdfa_*); this side words what they found, picks the fonts to embed and saves.
 
 use super::mupdf::Document;
@@ -15,8 +15,8 @@ struct Found {
     encrypted: bool,
     version: bool,
     xmp: bool,
-    /// The document's XMP uses schemas PDF/A doesn't know (and describes none).
-    xmp_foreign: bool,
+    /// What the document's XMP has that PDF/A can't take (a property it doesn't know, a value of the wrong kind), or "".
+    xmp_problem: String,
     mismatch: String,
     intent: i32,
     bad_intent: bool,
@@ -35,6 +35,27 @@ struct Found {
     layers: usize,
     object_metadata: usize,
     untyped_fonts: usize,
+    gstate: usize,
+    content: usize,
+    limits: usize,
+    boxes: usize,
+    big_boxes: usize,
+    inherited: usize,
+    widths: usize,
+    glyphs: usize,
+    tt_encoding: usize,
+    tt_encoding_left: usize,
+    jpx: usize,
+    transparency: usize,
+    groups: usize,
+    ocg: usize,
+    icc: usize,
+    deep: usize,
+    annot_kinds: usize,
+    annot_colours: usize,
+    glyph_sets: usize,
+    glyph_pages: Vec<usize>,
+    limit_pages: Vec<usize>,
     gray: Vec<usize>,
     rgb: Vec<usize>,
     cmyk: Vec<usize>,
@@ -124,6 +145,21 @@ struct Done {
     object_metadata: usize,
     glyph_lists: usize,
     untyped_fonts: usize,
+    blank: usize,
+    gstate: usize,
+    boxes: usize,
+    inherited: usize,
+    signatures: usize,
+    widths: usize,
+    tt_encoding: usize,
+    jpx: usize,
+    groups: usize,
+    ocg: usize,
+    icc: usize,
+    deep: usize,
+    annot_kinds: usize,
+    annot_colours: usize,
+    glyph_sets: usize,
     /// Unreadable pages a damaged file lost when its page tree was rebuilt (set here, not by the fixer).
     #[serde(skip)]
     lost_pages: usize,
@@ -170,8 +206,8 @@ fn report(f: Found) -> Report {
         add("metadata", "No XMP metadata (where a PDF/A file says what it is)".into(), vec![], true);
     } else if !f.mismatch.is_empty() {
         add("metadata", format!("The document's details and its XMP metadata differ: {}", f.mismatch), vec![], true);
-    } else if f.xmp_foreign {
-        add("metadata", "XMP metadata with properties PDF/A doesn't know (from labelling or other tools)".into(), vec![], true);
+    } else if !f.xmp_problem.is_empty() {
+        add("metadata", format!("XMP metadata PDF/A can't take: {}", f.xmp_problem), vec![], true);
     }
     let (simple, other): (Vec<&FontNeed>, Vec<&FontNeed>) = f.fonts.iter().partition(|n| n.simple && n.num > 0);
     if !simple.is_empty() {
@@ -218,7 +254,9 @@ fn report(f: Found) -> Report {
         add("xfa", "XFA form data (dynamic forms): the form's ordinary fields stay".into(), vec![], true);
     }
     if f.attachments > 0 {
-        let text = if f.part == 2 {
+        let text = if f.part == 1 {
+            format!("{}: PDF/A-1 allows none (PDF/A-3 keeps any)", plural(f.attachments, "attached file", "attached files"))
+        } else if f.part == 2 {
             format!("{} that aren't PDF/A files themselves (PDF/A-3 allows any file)", plural(f.attachments, "attached file", "attached files"))
         } else {
             format!("{} not described as PDF/A-3 asks (their relationship to the document, type or date)", plural(f.attachments, "attached file", "attached files"))
@@ -229,7 +267,87 @@ fn report(f: Found) -> Report {
         add("object-metadata", format!("XMP metadata on pages or pictures ({}), which PDF/A holds to the same rules as the document's", f.object_metadata), vec![], true);
     }
     if f.untyped_fonts > 0 {
-        add("untyped-fonts", format!("{} without their type (a detail most readers skip over)", plural(f.untyped_fonts, "font entry", "font entries")), vec![], true);
+        add(
+            "untyped-fonts",
+            format!("{} missing details PDF/A needs, or with ones that don't match (most readers skip over them)", plural(f.untyped_fonts, "font entry", "font entries")),
+            vec![],
+            true,
+        );
+    }
+    if f.widths > 0 {
+        add("widths", format!("{} whose letter widths don't match the font itself (saving takes the font's)", plural(f.widths, "font", "fonts")), vec![], true);
+    }
+    if f.glyphs > 0 {
+        add(
+            "glyphs",
+            format!("Text in {} that hasn't got some of its characters: PDF/A doesn't allow it, and saving can't add them", plural(f.glyphs, "font", "fonts")),
+            pages_of(&[&f.glyph_pages]),
+            false,
+        );
+    }
+    if f.tt_encoding + f.tt_encoding_left > 0 {
+        add(
+            "encodings",
+            format!("{} with a character encoding PDF/A doesn't allow", plural(f.tt_encoding + f.tt_encoding_left, "TrueType font", "TrueType fonts")),
+            vec![],
+            f.tt_encoding_left == 0,
+        );
+    }
+    if f.gstate > 0 {
+        add("graphics", format!("Graphics settings PDF/A doesn't allow ({}): rendering intents, blend modes, halftones or overprinting", f.gstate), vec![], true);
+    }
+    if f.inherited > 0 {
+        add("resources", format!("Content using fonts, pictures or colours it doesn't hold itself ({})", plural(f.inherited, "place", "places")), vec![], true);
+    }
+    if f.jpx > 0 {
+        add("jpx", format!("JPEG 2000 pictures PDF/A-{} can't take as they are ({})", f.part, f.jpx), vec![], true);
+    }
+    if f.boxes > 0 {
+        add("boxes", "Page boundaries less than 3 units across".into(), vec![], true);
+    }
+    if f.transparency > 0 {
+        add(
+            "transparency",
+            "See-through objects (transparency): PDF/A-1 doesn't allow them, and saving can't take them out without changing how the pages look. PDF/A-2b allows them".into(),
+            vec![],
+            false,
+        );
+    } else if f.groups > 0 {
+        add("groups", "Transparency groups PDF/A-1 doesn't allow (nothing in them is see-through: saving takes them off)".into(), vec![], true);
+    }
+    if f.ocg > 0 {
+        add("layers", "Layers: PDF/A-1 has none (saving takes them off, and every layer shows)".into(), vec![], true);
+    }
+    if f.icc > 0 {
+        add("icc", format!("Colour profiles PDF/A-{} can't take ({}): standard ones go in instead", f.part, f.icc), vec![], true);
+    }
+    if f.deep > 0 {
+        add("deep", format!("16-bit pictures ({}): PDF/A-1 takes up to 8 bits (saving stores them as 8-bit)", f.deep), vec![], true);
+    }
+    if f.annot_kinds > 0 {
+        add("annot-kinds", format!("{} of kinds PDF/A-1 doesn't have (saving keeps them as stamps that look the same)", plural(f.annot_kinds, "comment", "comments")), vec![], true);
+    }
+    if f.annot_colours > 0 {
+        add("annot-colours", "Comment colours, which PDF/A-1 allows only with an RGB colour profile".into(), vec![], true);
+    }
+    if f.glyph_sets > 0 {
+        add("glyph-sets", format!("{} without an exact list of their glyphs (PDF/A-1 wants one)", plural(f.glyph_sets, "font subset", "font subsets")), vec![], true);
+    }
+    if f.content > 0 {
+        add(
+            "content",
+            format!("Page content PDF/A doesn't allow, which saving leaves as it is ({}): inline pictures with LZW data or smoothing, unknown rendering intents", f.content),
+            vec![],
+            false,
+        );
+    }
+    if f.limits + f.big_boxes > 0 {
+        add(
+            "limits",
+            format!("Numbers, names, text or nesting beyond PDF/A's limits, or pages over 200 inches across ({})", f.limits + f.big_boxes),
+            pages_of(&[&f.limit_pages]),
+            false,
+        );
     }
     if f.layers > 0 {
         add("layers", "Layer settings without a name, or that switch layers by themselves".into(), vec![], true);
@@ -255,12 +373,26 @@ fn report(f: Found) -> Report {
     Report { claim: f.claim, part: f.part, issues, signed: 0 }
 }
 
+/// What a document's unsaved changes would break of the PDF/A it says it meets.
+#[derive(Serialize)]
+pub struct Changes {
+    pub part: i32,
+    pub issues: Vec<Issue>,
+}
+
+/// What keeping a document PDF/A did before it's saved.
+#[derive(Serialize)]
+pub struct Kept {
+    pub done: Vec<String>,
+    pub substitutes: Vec<String>,
+}
+
 fn found(doc: &Document, part: i32) -> Result<Found, String> {
     serde_json::from_str(&doc.pdfa_check(part)?).map_err(|e| e.to_string())
 }
 
 fn check_part(part: i32) -> Result<(), String> {
-    if part == 2 || part == 3 { Ok(()) } else { Err("PDF/A-2 and PDF/A-3 are the parts Paginaut makes and checks.".into()) }
+    if (1..=3).contains(&part) { Ok(()) } else { Err("PDF/A-1, -2 and -3 are the parts Paginaut makes and checks.".into()) }
 }
 
 /// Base 14 stand-ins for fonts not on this computer.
@@ -355,7 +487,14 @@ fn done_text(d: &Done, part: i32) -> Vec<String> {
     say(d.annots_removed, format!("{} removed (sound, video, 3D, or never shown)", plural(d.annots_removed, "annotation", "annotations")));
     say(d.annots_printed, format!("{} set to print", plural(d.annots_printed, "comment or field", "comments or fields")));
     say(d.appearances, format!("{} drawn", plural(d.appearances, "comment or field", "comments or fields")));
-    say(d.attachments, if part == 2 { format!("{} removed (not PDF/A files)", plural(d.attachments, "attached file", "attached files")) } else { format!("{} described as PDF/A-3 asks", plural(d.attachments, "attached file", "attached files")) });
+    say(
+        d.attachments,
+        match part {
+            1 => format!("{} removed (PDF/A-1 allows none)", plural(d.attachments, "attached file", "attached files")),
+            2 => format!("{} removed (not PDF/A files)", plural(d.attachments, "attached file", "attached files")),
+            _ => format!("{} described as PDF/A-3 asks", plural(d.attachments, "attached file", "attached files")),
+        },
+    );
     say(d.xfa as usize, "XFA form data removed".into());
     say(d.lzw, format!("LZW data recompressed ({})", d.lzw));
     say(d.external + d.reference, "Links to content in other files removed".into());
@@ -363,8 +502,23 @@ fn done_text(d: &Done, part: i32) -> Vec<String> {
     say(d.images, "Picture alternates and smoothing removed".into());
     say(d.transfer, "Transfer functions removed".into());
     say(d.layers, "Layer settings named".into());
+    say(d.blank, format!("{} given an empty look (kinds Paginaut can't draw)", plural(d.blank, "annotation", "annotations")));
     say(d.object_metadata, "XMP metadata on pages or pictures removed".into());
-    say(d.untyped_fonts, "Font entries given their type".into());
+    say(d.untyped_fonts, "Font entries given the details PDF/A needs".into());
+    say(d.widths, format!("Letter widths taken from the {} themselves", if d.widths == 1 { "font" } else { "fonts" }));
+    say(d.tt_encoding, "TrueType fonts given the encoding they were drawn with".into());
+    say(d.gstate, "Graphics settings PDF/A doesn't allow put right".into());
+    say(d.inherited, "Content given the resources it used from the page".into());
+    say(d.jpx, format!("{} stored again (without loss)", plural(d.jpx, "JPEG 2000 picture", "JPEG 2000 pictures")));
+    say(d.boxes, "Page boundaries widened to PDF/A's smallest".into());
+    say(d.signatures, format!("{} taken out (a copy can't keep them valid)", plural(d.signatures, "signature", "signatures")));
+    say(d.groups, "Transparency groups taken off (nothing in them was see-through)".into());
+    say(d.ocg, "Layers taken off (every layer shows)".into());
+    say(d.icc, format!("{} PDF/A can't take replaced with standard ones", plural(d.icc, "colour profile", "colour profiles")));
+    say(d.deep, format!("{} stored as 8-bit", plural(d.deep, "16-bit picture", "16-bit pictures")));
+    say(d.annot_kinds, format!("{} of kinds PDF/A-1 hasn't got kept as stamps (same look)", plural(d.annot_kinds, "comment", "comments")));
+    say(d.annot_colours, "Comment colours taken out (their looks stay)".into());
+    say(d.glyph_sets, format!("Glyph lists written for {}", plural(d.glyph_sets, "font subset", "font subsets")));
     say(d.glyph_lists, "Glyph lists of font subsets removed (optional, and often not exact)".into());
     say(d.lost_pages, format!("{} left out: damaged beyond reading", plural(d.lost_pages, "page", "pages")));
     say(d.fonts_failed, format!("{} couldn't be put in", plural(d.fonts_failed, "font", "fonts")));
@@ -414,6 +568,64 @@ impl Engine {
         let sigs: Vec<serde_json::Value> = serde_json::from_str(&self.sigs_json(id)?).map_err(|e| e.to_string())?;
         r.signed = sigs.iter().filter(|s| s["signed"] == true).count();
         Ok(r)
+    }
+
+    /// For a document that says it's PDF/A: the problems its unsaved changes bring (ones the file on disk has already
+    /// aren't counted). None when it doesn't say so, or the file can't be checked as it is (protected, damaged).
+    pub fn pdfa_changes(&self, id: DocId) -> Result<Option<Changes>, String> {
+        let d = self.doc(id)?;
+        let part = {
+            let inner = d.inner.lock();
+            if !inner.doc.is_pdf() || d.converted.read().is_some() {
+                return Ok(None);
+            }
+            inner.doc.pdfa_part()
+        };
+        if part == 0 {
+            return Ok(None);
+        }
+        let Ok(before) = self.pdfa_check_file(&d.path(), part) else { return Ok(None) };
+        let after = self.pdfa_check(id, part)?;
+        // By what's said too: its counts and names change when the edits add more of a kind the file already had.
+        let had: std::collections::HashSet<(&str, &str)> = before.issues.iter().map(|i| (i.id, i.text.as_str())).collect();
+        let issues: Vec<Issue> = after.issues.into_iter().filter(|i| !had.contains(&(i.id, i.text.as_str()))).collect();
+        Ok((!issues.is_empty()).then_some(Changes { part, issues }))
+    }
+
+    /// Makes the document's changes keep it PDF/A-`part` before it's saved: the fixes Save as PDF/A makes, on the
+    /// document itself (one undo step; signatures and the file's history stay).
+    pub fn pdfa_keep(&self, id: DocId, part: i32, find: FindFont) -> Result<Kept, String> {
+        check_part(part)?;
+        let d = self.doc(id)?;
+        self.release_private_doc(id);
+        let inner = d.inner.lock();
+        #[derive(Deserialize)]
+        struct Fonts {
+            fonts: Vec<FontNeed>,
+        }
+        let needs: Fonts = serde_json::from_str(&inner.doc.pdfa_fonts()?).map_err(|e| e.to_string())?;
+        let (spec, substitutes) = choose_fonts(&needs.fonts, find);
+        let done: Done = serde_json::from_str(&inner.doc.pdfa_fix(part, &spec, &now_dates(), true)?).map_err(|e| e.to_string())?;
+        drop(inner);
+        // What's drawn changed (fonts put in, colour spaces): drawn again.
+        d.lists.lock().clear();
+        d.texts.lock().clear();
+        // Only what was done says so: keeping a file has nothing to mark.
+        let done = done_text(&done, part).into_iter().skip(1).collect();
+        Ok(Kept { done, substitutes })
+    }
+
+    /// Saves the PDF at `src` (an Office file's conversion, say) as a PDF/A-`part` file at `out`, every page.
+    pub fn pdfa_from_file(&self, src: &str, out: &str, part: i32, find: FindFont) -> Result<Saved, String> {
+        let info = self.open(src)?;
+        let res = if info.needs_password {
+            Err("It needs a password to open.".to_string())
+        } else {
+            let n = info.page_count;
+            self.save_pdfa(info.doc_id, (0..n).collect(), vec![0; n], out, part, find)
+        };
+        self.close(info.doc_id);
+        res
     }
 
     /// Checks a PDF on disk (a copy just saved, say).
@@ -468,7 +680,7 @@ impl Engine {
             }
             let needs: Fonts = serde_json::from_str(&doc.pdfa_fonts()?).map_err(|e| e.to_string())?;
             let (spec, substitutes) = choose_fonts(&needs.fonts, find);
-            let mut done: Done = serde_json::from_str(&doc.pdfa_fix(part, &spec, &now_dates())?).map_err(|e| e.to_string())?;
+            let mut done: Done = serde_json::from_str(&doc.pdfa_fix(part, &spec, &now_dates(), false)?).map_err(|e| e.to_string())?;
             done.lost_pages = lost;
             doc.save_pdf_with(&written, Some(None), false)?;
             drop(doc);

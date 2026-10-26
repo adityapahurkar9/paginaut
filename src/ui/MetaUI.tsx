@@ -127,7 +127,7 @@ function PropertiesInner({ tab }: { tab: Tab }) {
           ))}
         </dl>
         {!info.isPdf && <span class="hint">Only PDFs can be changed here. Save this file as a PDF first (Save as).</span>}
-        {props?.pdfa && <span class="hint">Changing its details here makes them differ from its PDF/A metadata: save it as PDF/A again afterwards (Convert pane).</span>}
+        {props?.pdfa && <span class="hint">It's marked {props.pdfa}. When you save, Paginaut says if a change would break that, and can keep it PDF/A.</span>}
         {error && <span class="error-text">{error}</span>}
         <div class="row">
           {info.isPdf && (

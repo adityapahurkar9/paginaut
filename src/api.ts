@@ -251,6 +251,12 @@ export interface PdfaReport {
   signed: number;
 }
 
+/** Problems a document's unsaved changes would bring to a file that says it's PDF/A (none there before). */
+export interface PdfaChanges {
+  part: number;
+  issues: PdfaReport["issues"];
+}
+
 export interface PdfaSaved {
   path: string;
   done: string[];
@@ -490,10 +496,14 @@ export const api = {
     invoke<{ pages: number; marks: number; left: number }>("redact_apply", { doc, cover, rgb, label }),
   /** Takes out metadata (1), scripts (2), attached files (4), comments (8), hidden text (16); one undo step. */
   sanitize: (doc: number, what: number) => invoke<{ meta: number; scripts: number; files: number; comments: number; hidden: number }>("sanitize", { doc, what }),
-  /** Checks the document against PDF/A-`part` (2 or 3) level b. */
+  /** Checks the document against PDF/A-`part` (1, 2 or 3) level b. */
   pdfaCheck: (doc: number, part: number) => invoke<PdfaReport>("pdfa_check", { doc, part }),
   /** Saves the pages in `order` (turned by `rot`) as a new PDF/A file at `out`, fixing what can be fixed, and checks it. */
   pdfaSave: (doc: number, order: number[], rot: number[], out: string, part: number) => invoke<PdfaSaved>("pdfa_save", { doc, order, rot, out, part }),
+  /** For a file that says it's PDF/A: what its unsaved changes would break (null: it doesn't say so, or nothing). */
+  pdfaChanges: (doc: number) => invoke<PdfaChanges | null>("pdfa_changes", { doc }),
+  /** Makes the document's changes keep it PDF/A-`part` before it's saved (one undo step). */
+  pdfaKeep: (doc: number, part: number) => invoke<Pick<PdfaSaved, "done" | "substitutes">>("pdfa_keep", { doc, part }),
   /** Attaches the file at `path` to the document (one undo step in the engine). */
   attachmentAdd: (doc: number, path: string) => invoke<void>("attachment_add", { doc, path }),
   /** Removes attachment `i`: off the document's list, or its pin off its page (one undo step). */
@@ -554,7 +564,9 @@ export const api = {
   officeInstallStop: () => invoke<void>("office_install_stop"),
   officeRemove: () => invoke<OfficeEngines>("office_remove"),
   /** Converts an Office file into the PDF `out`; resolves with the converter's name. */
-  officeConvert: (path: string, out: string, engine?: OfficeEngine) => invoke<string>("office_convert", { path, out, engine: engine ?? null }),
+  /** A file into the PDF `out` (with `pdfa`, a PDF/A part: as PDF/A). left: what PDF/A it couldn't meet; substitutes: fonts that stood in. */
+  officeConvert: (path: string, out: string, engine?: OfficeEngine, pdfa?: number) =>
+    invoke<{ by: string; left: string[]; substitutes: string[] }>("office_convert", { path, out, engine: engine ?? null, pdfa: pdfa || null }),
   /** Which programs can make Word and PowerPoint files here, best first. */
   convertOptions: () => invoke<{ docx: OfficeEngine[]; pptx: OfficeEngine[] }>("convert_options"),
   /** Converts under `sid` (newId()), which convertStop takes to stop it. */

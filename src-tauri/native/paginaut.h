@@ -272,11 +272,12 @@ int fo_annot_set_image(fo_ctx *c, fo_page *p, int num, const unsigned char *data
  * MuPDF calls cb with the bytes to sign: it writes the CMS blob into out (at most
  * cap bytes) and returns its length, or -1. dn: CN, O, OU, email, country.
  * num: an existing empty signature field's object number, or -1 for a new one.
- * flags: PDF_SIGNATURE_SHOW_*; lock: lock every form field (new fields only). */
+ * flags: PDF_SIGNATURE_SHOW_*; lock: lock every form field (new fields only).
+ * pdfa: the PDF/A part the file says it meets (0 none): the signature's look is made as that part wants. */
 typedef ptrdiff_t (*fo_sign_cb)(void *user, const unsigned char *data, size_t len, unsigned char *out, size_t cap);
 int fo_sign_page(fo_ctx *c, fo_page *p, int num, const float rect[4], fo_sign_cb cb, void *user, size_t max,
 	const char *const dn[5], const char *reason, const char *location,
-	const unsigned char *img, size_t img_len, int flags, int lock);
+	const unsigned char *img, size_t img_len, int flags, int lock, int pdfa);
 char *fo_sigs_json(fo_ctx *c, fo_doc *d);
 int fo_sig_data(fo_ctx *c, fo_doc *d, int i, unsigned char **data, size_t *len, unsigned char **cms, size_t *cms_len);
 
@@ -314,7 +315,7 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part);
 /* The fonts not in the file, from its objects alone: JSON {"fonts":[...]}. */
 char *fo_pdfa_fonts(fo_ctx *c, fo_doc *d);
-char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char *now);
+char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char *now, int keep);
 /* What the XMP claims ("2B"), or "". */
 int fo_pdfa_claim(fo_ctx *c, fo_doc *d, char *out, int size);
 

@@ -44,12 +44,14 @@ compatible with it (no RarLab unRAR code, for one: its licence forbids rebuildin
 
 | What | Version | Where | How to update |
 |---|---|---|---|
-| **veraPDF** (the reference PDF/A validator; Java) | 1.30.3 (greenfield) | Not kept anywhere: installed when needed from software.verapdf.org/releases/verapdf-installer.zip, headless with an IzPack auto-install XML (`java -jar verapdf-izpack-installer-*.jar auto-install.xml`; Android Studio's JBR runs it) | Install a newer one the same way. `tools/pdfa-validate.ps1 -VeraPdf <verapdf.bat> -Folder <dir>` checks what `examples/pdfa_test.rs` saved; every file must pass. |
+| **veraPDF** (the reference PDF/A validator; Java) | 1.30.3 (greenfield) | Not kept anywhere: installed when needed from software.verapdf.org/releases/verapdf-installer.zip, headless with an IzPack auto-install XML (`java -jar verapdf-izpack-installer-*.jar auto-install.xml`; Android Studio's JBR runs it) | Install a newer one the same way. `tools/pdfa-validate.ps1 -VeraPdf <verapdf.bat> -Folder <dir>` checks what `examples/pdfa_test.rs`, `pdfa_keep_test.rs` and `pdfa_office_test.rs` saved; every file must pass. |
+| **veraPDF test corpus** (veraPDF's PDF/A test files, each named for the result veraPDF expects) | GitHub master, 2026-10-26 | Not kept: `git clone --depth 1 https://github.com/veraPDF/veraPDF-corpus` (Windows: `git config core.longpaths true` first) | Clone again. `examples/pdfa_corpus.rs <corpus>/PDF_A-2b 2 <out>` checks every file and saves each as PDF/A; then veraPDF on `<out>`. The results in ROADMAP.md's PDF/A section shouldn't get worse. |
 
 ## After any update
 
 1. `npm run typecheck`, then build both apps (`npx tauri build`; `bash tools/android.sh <abi>`).
 2. Open a PDF with forms, a scanned PDF, an EPUB, CBZ and CBR comics (RAR 4 and 5, plain and solid), XPS and Markdown.
 3. MuPDF (or the PDF/A code): `python tools/make-pdfa-samples.py testfiles`, then `examples/pdfa_test.rs` on `testfiles`
-   and each `testfiles/office/*` folder, and `tools/pdfa-validate.ps1` (veraPDF) over the results.
+   and each `testfiles/office/*` folder, `examples/pdfa_keep_test.rs` and `examples/pdfa_office_test.rs`, and
+   `tools/pdfa-validate.ps1` (veraPDF) over the results; the corpus run for big changes.
 4. On Android, the oldest emulator too (Android 7, API 24) and a 32-bit one.

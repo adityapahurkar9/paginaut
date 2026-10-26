@@ -5,7 +5,7 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { api, type DocInfo, type Inserted, type InsertSource, type SaveOptions } from "./api";
 import * as E from "./edits";
 import { formsChanged, initForms } from "./forms";
-import { baseName, rememberFile, setSaveHook, settings, showToast, type Tab } from "./store";
+import { ask, baseName, rememberFile, setSaveHook, settings, showToast, type Tab } from "./store";
 
 /** Pages an action applies to: the thumbnail selection if it includes `page`, else just `page`. */
 export function targets(tab: Tab, page?: number): number[] {
@@ -302,18 +302,44 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
   } else if (E.isIdentity(e) && !tab.docChanged.value) {
     return true;
   }
+  // A file that says it's PDF/A: changes that would break that are said first, and can be put right as it saves.
+  let keep = 0;
+  if (info.isPdf) {
+    const ch = await api.pdfaChanges(info.docId).catch(() => null);
+    if (ch?.issues.length) {
+      const go = await ask(
+        `Keep it PDF/A-${ch.part}b?`,
+        `This file says it's PDF/A-${ch.part}b, and your changes would break that:\n${ch.issues.map((i) => `• ${i.text}`).join("\n")}\n\n` +
+          "Paginaut can put that right as it saves, with the same fixes as Save as PDF/A (signatures stay valid).",
+        [
+          { label: "Cancel", value: "cancel" },
+          { label: "Save anyway", value: "anyway" },
+          { label: "Keep it PDF/A", value: "keep", primary: true },
+        ],
+      );
+      if (go !== "keep" && go !== "anyway") return false;
+      if (go === "keep") keep = ch.part;
+    }
+  }
   tab.saving.value = true;
   const t0 = performance.now();
   try {
     const view = tab.viewer?.viewState();
+    const kept = keep ? await api.pdfaKeep(info.docId, keep) : null;
     const saved = await api.save(info.docId, e.order, e.rot, target);
     await adoptSaved(tab, saved, view?.page);
     const lost = e.order.length - saved.pageCount;
+    // Checked again as saved: what Paginaut couldn't put right is said.
+    const left = keep ? (await api.pdfaCheck(saved.docId, keep).catch(() => null))?.issues ?? [] : [];
     showToast(
       lost > 0
         ? `Saved ${baseName(saved.path)}. The file was damaged: ${lost} ${lost === 1 ? "page" : "pages"} couldn't be read and ${lost === 1 ? "was" : "were"} left out.`
-        : `Saved ${baseName(saved.path)} · ${Math.round(performance.now() - t0)} ms`,
-      lost > 0 ? 9000 : undefined,
+        : left.length
+          ? `Saved ${baseName(saved.path)}, but it's no longer PDF/A-${keep}b: ${left.map((i) => i.text).join("; ")}`
+          : kept?.substitutes.length
+            ? `Saved ${baseName(saved.path)} as PDF/A-${keep}b. Fonts stood in: ${kept.substitutes.join("; ")}`
+            : `Saved ${baseName(saved.path)} · ${Math.round(performance.now() - t0)} ms`,
+      lost > 0 || left.length || kept?.substitutes.length ? 9000 : undefined,
     );
     return true;
   } catch (err) {

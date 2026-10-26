@@ -169,10 +169,12 @@ export interface ConvertItem {
   state: "waiting" | "converting" | "done" | "error";
   out?: string;
   note?: string;
+  /** Done, but not all of it: PDF/A it couldn't meet, or fonts that stood in. */
+  warn?: string;
 }
 
-/** Files waiting to become PDFs (the Convert pane's "Files to PDF"). */
-export const convertDialog = signal<{ items: ConvertItem[]; folder: string | null; running: boolean } | null>(null);
+/** Files waiting to become PDFs (the Convert pane's "Files to PDF"); pdfa: the PDF/A part to make them (0: plain PDF). */
+export const convertDialog = signal<{ items: ConvertItem[]; folder: string | null; running: boolean; pdfa?: number } | null>(null);
 
 /** The conversion of the document the Convert pane (right side) shows. */
 export type ExportTarget = "docx" | "xlsx" | "pptx" | "md" | "images" | "txt" | "pdfa";
@@ -189,7 +191,7 @@ export function startConvert(paths: string[] = []) {
   const cur = convertDialog.value;
   const have = new Set(cur?.items.map((i) => i.path.toLowerCase()));
   const added: ConvertItem[] = paths.filter((p) => convertible(p) && !have.has(p.toLowerCase())).map((path) => ({ path, engine: "auto", state: "waiting" }));
-  convertDialog.value = { items: [...(cur?.items ?? []), ...added], folder: cur?.folder ?? null, running: cur?.running ?? false };
+  convertDialog.value = { items: [...(cur?.items ?? []), ...added], folder: cur?.folder ?? null, running: cur?.running ?? false, pdfa: cur?.pdfa };
   openConvertPane();
 }
 
@@ -230,8 +232,12 @@ export async function runConvert() {
     taken.add(out.toLowerCase());
     update(i, { state: "converting" });
     try {
-      const by = await api.officeConvert(it.path, out, it.engine === "auto" ? undefined : it.engine);
-      update(i, { state: "done", out, note: by });
+      const r = await api.officeConvert(it.path, out, it.engine === "auto" ? undefined : it.engine, d.pdfa);
+      const warn = [
+        r.left.length ? `Not quite PDF/A-${d.pdfa}b: ${r.left.join("; ")}` : "",
+        r.substitutes.length ? `Fonts that stood in: ${r.substitutes.join("; ")}` : "",
+      ].filter(Boolean);
+      update(i, { state: "done", out, note: d.pdfa ? `${r.by} · PDF/A-${d.pdfa}b` : r.by, warn: warn.join(". ") || undefined });
     } catch (e) {
       update(i, { state: "error", note: String(e) });
     }

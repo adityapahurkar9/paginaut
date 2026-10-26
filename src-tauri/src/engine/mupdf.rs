@@ -745,10 +745,19 @@ impl Document {
         unsafe { CStr::from_ptr(buf.as_ptr().cast()) }.to_string_lossy().into_owned()
     }
 
-    /// PDF/A: makes the document conform as far as it can; JSON of what was done (see fo_pdfa_fix).
-    pub fn pdfa_fix(&self, part: i32, fonts: &str, now: &str) -> Result<String> {
+    /// The PDF/A part the document says it meets (its XMP), or 0.
+    pub fn pdfa_part(&self) -> i32 {
+        match self.pdfa_claim().chars().next() {
+            Some(c @ '1'..='3') => c as i32 - '0' as i32,
+            _ => 0,
+        }
+    }
+
+    /// PDF/A: makes the document conform as far as it can; JSON of what was done (see fo_pdfa_fix). `keep`: this is
+    /// the document itself, to be saved (signatures stay, one undo step), not a copy.
+    pub fn pdfa_fix(&self, part: i32, fonts: &str, now: &str, keep: bool) -> Result<String> {
         let (f, n) = (CString::new(fonts).map_err(|e| e.to_string())?, CString::new(now).map_err(|e| e.to_string())?);
-        with_kind(self.1, |c| take_string(c, unsafe { fo_pdfa_fix(c, self.0, part, f.as_ptr(), n.as_ptr()) }).ok_or_else(|| last_error(c)))
+        with_kind(self.1, |c| take_string(c, unsafe { fo_pdfa_fix(c, self.0, part, f.as_ptr(), n.as_ptr(), keep as c_int) }).ok_or_else(|| last_error(c)))
     }
 
     /// Embedded files as JSON (see fo_attachments_json).
@@ -852,8 +861,8 @@ impl Page {
 
     /// Adds a signed signature field. The signature itself is made by
     /// `signing` during the next incremental save, which must happen while
-    /// `signing` is alive.
-    pub fn sign(&self, req: &SignRequest, signing: &mut Signing) -> Result<()> {
+    /// `signing` is alive. `pdfa` (a PDF/A part, or 0): its look made as that part wants.
+    pub fn sign(&self, req: &SignRequest, signing: &mut Signing, pdfa: i32) -> Result<()> {
         let dn: Vec<CString> = req.dn.iter().map(|s| CString::new(s.as_str()).unwrap_or_default()).collect();
         let dn_ptrs: Vec<*const c_char> = dn.iter().map(|s| s.as_ptr()).collect();
         let reason = CString::new(req.reason.as_str()).unwrap_or_default();
@@ -876,6 +885,7 @@ impl Page {
                     img_len,
                     req.flags as c_int,
                     req.lock as c_int,
+                    pdfa as c_int,
                 )
             };
             if rc == 0 { Ok(()) } else { Err(last_error(c)) }

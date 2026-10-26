@@ -146,7 +146,7 @@ extern "C" {
     pub fn fo_pdfa_check(c: *mut fo_ctx, d: *mut fo_doc, part: c_int) -> *mut c_char;
     pub fn fo_pdfa_fonts(c: *mut fo_ctx, d: *mut fo_doc) -> *mut c_char;
     pub fn fo_pdfa_claim(c: *mut fo_ctx, d: *mut fo_doc, out: *mut c_char, size: c_int) -> c_int;
-    pub fn fo_pdfa_fix(c: *mut fo_ctx, d: *mut fo_doc, part: c_int, fonts: *const c_char, now: *const c_char) -> *mut c_char;
+    pub fn fo_pdfa_fix(c: *mut fo_ctx, d: *mut fo_doc, part: c_int, fonts: *const c_char, now: *const c_char, keep: c_int) -> *mut c_char;
     pub fn fo_tables_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
     pub fn fo_table_in_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, area: *const c_float, cols: *const c_float, ncols: c_int, rows: *const c_float, nrows: c_int) -> *mut c_char;
     pub fn fo_pictures_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
@@ -226,6 +226,7 @@ extern "C" {
         img_len: usize,
         flags: c_int,
         lock: c_int,
+        pdfa: c_int,
     ) -> c_int;
     pub fn fo_sigs_json(c: *mut fo_ctx, d: *mut fo_doc) -> *mut c_char;
     pub fn fo_sig_data(c: *mut fo_ctx, d: *mut fo_doc, i: c_int, data: *mut *mut u8, len: *mut usize, cms: *mut *mut u8, cms_len: *mut usize) -> c_int;
