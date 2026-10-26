@@ -435,7 +435,12 @@ pub async fn pdfa_check(state: State<'_, AppState>, doc: DocId, part: i32) -> Re
 pub async fn pdfa_save(state: State<'_, AppState>, doc: DocId, order: Vec<usize>, rot: Vec<i32>, out: String, part: i32) -> Res<crate::engine::pdfa::Saved> {
     let engine = state.engine.clone();
     blocking(move || {
-        let find = |name: &str, bold: bool, italic: bool| crate::fonts::find(name, bold, italic).map(|f| (f.path, f.family, f.exact));
+        let find = |name: &str, bold: bool, italic: bool| {
+            crate::fonts::find(name, bold, italic).map(|f| (f.path, f.family, f.exact)).map_err(|m| match m {
+                crate::fonts::Missing::Licence => crate::engine::pdfa::FontMissing::Licence,
+                crate::fonts::Missing::NotInstalled => crate::engine::pdfa::FontMissing::NotInstalled,
+            })
+        };
         engine.save_pdfa(doc, order, rot, &out, part, &find)
     })
     .await

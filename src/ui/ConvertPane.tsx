@@ -318,7 +318,14 @@ function ThisDocument({ tab }: { tab: Tab }) {
             ))}
           </ul>
           {pdfaDone.substitutes.length > 0 && (
-            <span class="secure-warn">Fonts not on this computer, so others were put in (the text may look a little different): {pdfaDone.substitutes.join("; ")}</span>
+            <div class="secure-warn">
+              Some fonts couldn't be put in the file as they are, so others were (the text may look a little different):
+              <ul class="pdfa-done">
+                {pdfaDone.substitutes.map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ul>
+            </div>
           )}
           {pdfaDone.left.issues.length > 0 ? (
             <>

@@ -9189,7 +9189,7 @@ typedef struct
 	int bad_oi;      /* PDF/A output intents that differ, or one without a profile */
 	int encrypted, version, xfa, need_ap;
 	int scripts, actions, lzw, lzw_left, external, postscript, reference, images, transfer, transparency;
-	int attachments, layers;
+	int attachments, layers, object_meta, glyph_lists;
 	char action_names[160];
 	pa_list gray, rgb, cmyk, font_pages, annot_types, annot_flags, annot_ap;
 	pdf_obj *fonts;  /* fonts used and not embedded */
@@ -9606,6 +9606,22 @@ static void pa_dict(fz_context *ctx, pa_walk *w, pdf_obj *d)
 	pa_found *f = w->f;
 	pdf_obj *sub = pdf_dict_get(ctx, d, PDF_NAME(Subtype)), *tr2;
 	static const char *keys[] = { "A", "OpenAction", "Next", NULL };
+	/* XMP on pages, pictures and forms is held to PDF/A's rules like the document's (custom properties need
+	 * schemas): it goes. The document's own is written again when fixing. */
+	if (pdf_dict_get(ctx, d, PDF_NAME(Metadata)) && d != pdf_resolve_indirect(ctx, pdf_dict_get(ctx, pdf_trailer(ctx, w->doc), PDF_NAME(Root))))
+	{
+		f->object_meta++;
+		if (f->fix)
+			pdf_dict_del(ctx, d, PDF_NAME(Metadata));
+	}
+	/* A subset's glyph list (optional) must be exact, and often isn't: it goes when fixing. */
+	if (f->fix && pdf_name_eq(ctx, pdf_dict_get(ctx, d, PDF_NAME(Type)), PDF_NAME(FontDescriptor)) &&
+		(pdf_dict_gets(ctx, d, "CIDSet") || pdf_dict_gets(ctx, d, "CharSet")))
+	{
+		f->glyph_lists++;
+		pdf_dict_dels(ctx, d, "CIDSet");
+		pdf_dict_dels(ctx, d, "CharSet");
+	}
 	for (int k = 0; keys[k]; k++)
 	{
 		pdf_obj *a = pdf_dict_gets(ctx, d, keys[k]);
@@ -10354,8 +10370,8 @@ char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
 			f.xfa ? "true" : "false", f.need_ap ? "true" : "false");
 		fz_append_printf(CTX, b, ",\"scripts\":%d,\"actions\":%d,\"actionNames\":", f.scripts, f.actions);
 		json_str(CTX, b, f.action_names);
-		fz_append_printf(CTX, b, ",\"lzw\":%d,\"external\":%d,\"postscript\":%d,\"reference\":%d,\"images\":%d,\"transfer\":%d,\"attachments\":%d,\"layers\":%d",
-			f.lzw, f.external, f.postscript, f.reference, f.images, f.transfer, f.attachments, f.layers);
+		fz_append_printf(CTX, b, ",\"lzw\":%d,\"external\":%d,\"postscript\":%d,\"reference\":%d,\"images\":%d,\"transfer\":%d,\"attachments\":%d,\"layers\":%d,\"objectMetadata\":%d",
+			f.lzw, f.external, f.postscript, f.reference, f.images, f.transfer, f.attachments, f.layers, f.object_meta);
 		pa_json_pages(CTX, b, "gray", &f.gray);
 		pa_json_pages(CTX, b, "rgb", &f.rgb);
 		pa_json_pages(CTX, b, "cmyk", &f.cmyk);
@@ -10486,6 +10502,30 @@ static void pa_embed_font(fz_context *ctx, pdf_document *doc, int num, const cha
 		pdf_dict_put_int(ctx, font, PDF_NAME(FirstChar), first);
 		pdf_dict_put_int(ctx, font, PDF_NAME(LastChar), last);
 		pdf_dict_put(ctx, font, PDF_NAME(Widths), widths);
+		/* A symbolic Type 1 font is drawn through its own symbols whatever encoding it names (MuPDF does so), but
+		 * other readers take the encoding as written: WinAnsi on form fields' ZapfDingbats makes check marks
+		 * "three", which it hasn't got. The codes are spelled out by glyph name, as they were drawn. */
+		if (!ttf && (flags & 4))
+		{
+			pdf_obj *enc = pdf_dict_put_dict(ctx, font, PDF_NAME(Encoding), 2), *diff;
+			int next = -1;
+			pdf_dict_put(ctx, enc, PDF_NAME(Type), PDF_NAME(Encoding));
+			diff = pdf_dict_put_array(ctx, enc, PDF_NAME(Differences), last - first + 2);
+			for (int code = first; code <= last; code++)
+			{
+				int gid = pdf_font_cid_to_gid(ctx, fd, code);
+				char glyph[64];
+				if (gid <= 0)
+					continue;
+				fz_get_glyph_name(ctx, prog, gid, glyph, sizeof glyph);
+				if (!glyph[0] || !strcmp(glyph, ".notdef"))
+					continue;
+				if (code != next)
+					pdf_array_push_int(ctx, diff, code);
+				pdf_array_push_name(ctx, diff, glyph);
+				next = code + 1;
+			}
+		}
 	}
 	fz_always(ctx)
 	{
@@ -10907,10 +10947,10 @@ char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char 
 		b = fz_new_buffer(CTX, 256);
 		fz_append_printf(CTX, b, "{\"fonts\":%d,\"fontsFailed\":%d,\"scripts\":%d,\"actions\":%d,\"annotsRemoved\":%d,\"annotsPrinted\":%d,\"appearances\":%d,"
 			"\"attachments\":%d,\"lzw\":%d,\"lzwLeft\":%d,\"external\":%d,\"postscript\":%d,\"reference\":%d,\"images\":%d,\"transfer\":%d,\"layers\":%d,"
-			"\"intent\":%s,\"defaults\":%d,\"xfa\":%s,\"encrypted\":%s}",
+			"\"intent\":%s,\"defaults\":%d,\"xfa\":%s,\"encrypted\":%s,\"objectMetadata\":%d,\"glyphLists\":%d}",
 			embedded, font_failed, f.scripts, f.actions, removed, printed, made, f.attachments, f.lzw - f.lzw_left, f.lzw_left, f.external,
 			f.postscript, f.reference, f.images, f.transfer, f.layers, intent ? "true" : "false", defaults, f.xfa ? "true" : "false",
-			f.encrypted ? "true" : "false");
+			f.encrypted ? "true" : "false", f.object_meta, f.glyph_lists);
 		s = buffer_to_string(CTX, b);
 	}
 	fz_always(CTX)

@@ -696,7 +696,7 @@ portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags,
 "u" (every letter maps to Unicode) comes with -2b's checks. MuPDF has no PDF/A support: checks and fixes are ours
 (paginaut.c fo_pdfa_*, engine/pdfa.rs).
 - [x] Check (-2b, -3b): what a file claims (XMP pdfaid) and which rules it breaks, in plain words and grouped, with
-      pages: fonts not in the file, device colours no output intent or default colour space covers, JavaScript and
+      pages: fonts not in the file, XMP on pages or pictures, device colours no output intent or default colour space covers, JavaScript and
       forbidden actions, encryption, annotations and fields that don't print or have no (or extra) appearances, XFA,
       NeedAppearances, attachments (-2: PDF/A files only; -3: described), layers, LZW, external and PostScript content,
       picture alternates, transfer functions, PDF 2.0, missing XMP or details that disagree with it. Objects are walked
@@ -705,7 +705,7 @@ portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags,
 - [ ] Check: letters without Unicode ("u"), glyph widths against font programs, non-symbolic TrueType encodings,
       CIDSet, transparency groups' colour spaces; for -1b transparency
 - [x] Save as PDF/A-2b or -3b (new file, "… (PDF-A).pdf"): fonts embedded from the system's (Windows registry,
-      fontconfig; licences that forbid embedding respected; stand-ins named), MuPDF's copies for the base 14, widths
+      fontconfig; licences that forbid embedding respected; each stand-in named with why), MuPDF's copies for the base 14, widths
       taken from the program; sRGB output intent (MuPDF's built-in profile) and default colour spaces where device CMYK
       is used; XMP written from the document info; JavaScript, encryption (needs the permissions password) and forbidden
       actions removed; appearances drawn; hidden annotations and fields removed; LZW recompressed; damaged page trees
@@ -720,8 +720,11 @@ portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags,
 - [ ] Signing a PDF/A file keeps it PDF/A (the signature's appearance and the incremental save follow the rules)
 - [x] Tests: examples/pdfa_test.rs (every testfiles PDF conforms after saving, looks the same, keeps its pages;
       attachments for -2 and -3; protection; unsaved changes)
-- [ ] Tests: veraPDF (the reference validator, Java; not shipped) over the saved files and its own test corpus;
-      the user's portal files
+- [x] veraPDF (the reference validator, Java; not shipped) passes every saved file: the 13 from testfiles and the 20
+      Office-made PDFs in testfiles/office (tools/pdfa-validate.ps1). It found what our check missed, now fixed:
+      symbolic fonts read through the encoding they name (ZapfDingbats check marks), wrong CIDSet glyph lists in
+      font subsets, XMP with custom properties on pictures
+- [ ] Tests: veraPDF's own test corpus against our checker; the user's portal files
 
 ## PDF/UA: checking accessible PDFs (planned, after PDF/A)
 PDF/UA (ISO 14289) is the accessible PDF: tagged, so a screen reader reads it in order, with pictures described and

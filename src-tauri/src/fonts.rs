@@ -118,12 +118,21 @@ fn pdf_font_key(name: &str, bold: bool, italic: bool) -> (String, String) {
     (family, style)
 }
 
-/// A TrueType file its licence lets be embedded in documents: OS/2 fsType not "restricted" (0x0002) and not
-/// "bitmaps only" (0x0200). Fonts without an OS/2 table are taken as installable.
-fn embeddable_truetype(p: &Path) -> bool {
-    let Ok(data) = std::fs::read(p) else { return false };
+/// Why a font couldn't be found to put in a file.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Missing {
+    /// Not installed (or only as a kind of file a PDF can't hold, like a collection).
+    NotInstalled,
+    /// Installed, but its licence doesn't allow putting it in documents.
+    Licence,
+}
+
+/// Whether a file is a TrueType font its licence lets be embedded in documents: OS/2 fsType not "restricted"
+/// (0x0002) and not "bitmaps only" (0x0200). Fonts without an OS/2 table are taken as installable.
+fn embeddable_truetype(p: &Path) -> Result<(), Missing> {
+    let Ok(data) = std::fs::read(p) else { return Err(Missing::NotInstalled) };
     if data.len() < 12 || !(data[..4] == [0, 1, 0, 0] || &data[..4] == b"true") {
-        return false;
+        return Err(Missing::NotInstalled);
     }
     let u16_at = |at: usize| data.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
     let u32_at = |at: usize| data.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
@@ -132,15 +141,16 @@ fn embeddable_truetype(p: &Path) -> bool {
         let entry = 12 + i * 16;
         if data.get(entry..entry + 4) == Some(b"OS/2") {
             let fs_type = u32_at(entry + 8).and_then(|offset| u16_at(offset + 8)).unwrap_or(0);
-            return fs_type & 0x000f != 0x0002 && fs_type & 0x0200 == 0;
+            return if fs_type & 0x000f != 0x0002 && fs_type & 0x0200 == 0 { Ok(()) } else { Err(Missing::Licence) };
         }
     }
-    true
+    Ok(())
 }
 
 #[cfg(windows)]
-pub fn find(name: &str, bold: bool, italic: bool) -> Option<Found> {
+pub fn find(name: &str, bold: bool, italic: bool) -> Result<Found, Missing> {
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    let mut why = Missing::NotInstalled;
     let (family, style) = pdf_font_key(name, bold, italic);
     let fonts_dir = PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into())).join("Fonts");
     let wanted: Vec<String> = if style.is_empty() { vec![family.clone(), format!("{family}regular")] } else { vec![format!("{family}{style}")] };
@@ -153,16 +163,24 @@ pub fn find(name: &str, bold: bool, italic: bool) -> Option<Found> {
                 continue;
             }
             let path = if data.contains(['\\', '/']) { PathBuf::from(&data) } else { fonts_dir.join(&data) };
-            if embeddable_truetype(&path) {
-                return Some(Found { path, family: full.to_string(), exact: true });
+            match embeddable_truetype(&path) {
+                Ok(()) => return Ok(Found { path, family: full.to_string(), exact: true }),
+                Err(Missing::Licence) => why = Missing::Licence,
+                Err(Missing::NotInstalled) => {}
             }
         }
     }
-    None
+    Err(why)
 }
 
 #[cfg(not(windows))]
-pub fn find(name: &str, bold: bool, italic: bool) -> Option<Found> {
+pub fn find(name: &str, bold: bool, italic: bool) -> Result<Found, Missing> {
+    find_fc(name, bold, italic).unwrap_or(Err(Missing::NotInstalled))
+}
+
+/// fontconfig's choice for the font; None when fc-match couldn't be asked.
+#[cfg(not(windows))]
+fn find_fc(name: &str, bold: bool, italic: bool) -> Option<Result<Found, Missing>> {
     let (family, style) = pdf_font_key(name, bold, italic);
     // fontconfig wants the family with its spaces: "TimesNewRoman" → "Times New Roman".
     let raw = name.split_once('+').filter(|(t, _)| t.len() == 6).map_or(name, |(_, r)| r);
@@ -181,7 +199,13 @@ pub fn find(name: &str, bold: bool, italic: bool) -> Option<Found> {
     let path = PathBuf::from(lines.next()?);
     let got = lines.next()?.split(',').next()?.to_string();
     let norm = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
-    embeddable_truetype(&path).then(|| Found { exact: norm(&got) == family, path, family: got })
+    let exact = norm(&got) == family;
+    Some(match embeddable_truetype(&path) {
+        Ok(()) => Ok(Found { exact, path, family: got }),
+        // The font itself, but not allowed in files; a stand-in that isn't is simply not used.
+        Err(Missing::Licence) if exact => Err(Missing::Licence),
+        Err(_) => Err(Missing::NotInstalled),
+    })
 }
 
 #[cfg(windows)]

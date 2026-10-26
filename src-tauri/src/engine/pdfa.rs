@@ -31,6 +31,7 @@ struct Found {
     transfer: usize,
     attachments: usize,
     layers: usize,
+    object_metadata: usize,
     gray: Vec<usize>,
     rgb: Vec<usize>,
     cmyk: Vec<usize>,
@@ -117,13 +118,24 @@ struct Done {
     defaults: usize,
     xfa: bool,
     encrypted: bool,
+    object_metadata: usize,
+    glyph_lists: usize,
     /// Unreadable pages a damaged file lost when its page tree was rebuilt (set here, not by the fixer).
     #[serde(skip)]
     lost_pages: usize,
 }
 
-/// A system font file for a font a PDF names, and whether it's that font (not a stand-in). Desktop: fonts::find.
-pub type FindFont<'a> = &'a dyn Fn(&str, bool, bool) -> Option<(PathBuf, String, bool)>;
+/// Why a font a PDF names couldn't be found to put in it.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FontMissing {
+    NotInstalled,
+    /// Installed, but its licence doesn't allow putting it in documents.
+    Licence,
+}
+
+/// A system font file for a font a PDF names (by name, bold, italic): its path, family, and whether it's that font
+/// (not a stand-in). Desktop: fonts::find.
+pub type FindFont<'a> = &'a dyn Fn(&str, bool, bool) -> Result<(PathBuf, String, bool), FontMissing>;
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
@@ -207,6 +219,9 @@ fn report(f: Found) -> Report {
         };
         add("attachments", text, vec![], true);
     }
+    if f.object_metadata > 0 {
+        add("object-metadata", format!("XMP metadata on pages or pictures ({}), which PDF/A holds to the same rules as the document's", f.object_metadata), vec![], true);
+    }
     if f.layers > 0 {
         add("layers", "Layer settings without a name, or that switch layers by themselves".into(), vec![], true);
     }
@@ -258,33 +273,37 @@ const BASE14: [&str; 14] = [
     "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic", "Symbol", "ZapfDingbats",
 ];
 
-/// The fixer's font lines ("num\tpath\tbase14"), and the fonts put in as stand-ins (said to the user).
+/// The fixer's font lines ("num\tpath\tbase14"), and what was put in instead of fonts that couldn't be, with why
+/// (said to the user).
 fn choose_fonts(needs: &[FontNeed], find: FindFont) -> (String, Vec<String>) {
     let mut spec = String::new();
     let mut subs = Vec::new();
     for n in needs.iter().filter(|n| n.simple && n.num > 0) {
         let is_base14 = BASE14.contains(&n.name.as_str());
         // The font itself where it's installed; a base 14 font from MuPDF's copies (same widths); otherwise a stand-in.
-        let found = if is_base14 { None } else { find(&n.name, n.bold, n.italic) };
+        let found = if is_base14 { Err(FontMissing::NotInstalled) } else { find(&n.name, n.bold, n.italic) };
+        let why = |missing: FontMissing| match missing {
+            FontMissing::Licence => "its licence doesn't allow putting it in files",
+            FontMissing::NotInstalled => "not on this computer",
+        };
         match found {
-            Some((path, family, exact)) => {
+            Ok((path, family, exact)) => {
                 spec.push_str(&format!("{}\t{}\t\n", n.num, path.to_string_lossy()));
                 if !exact {
-                    subs.push(format!("{}: {family} used instead", n.name));
+                    subs.push(format!("{}: not on this computer, {family} used instead", n.name));
                 }
             }
-            None if !n.base14.is_empty() => {
+            Err(_) if is_base14 => spec.push_str(&format!("{}\t\t{}\n", n.num, n.base14)),
+            Err(missing) if !n.base14.is_empty() => {
                 spec.push_str(&format!("{}\t\t{}\n", n.num, n.base14));
-                if !is_base14 {
-                    subs.push(format!("{}: {} used instead (same letter widths)", n.name, n.base14));
-                }
+                subs.push(format!("{}: {}, {} used instead (same letter widths)", n.name, why(missing), n.base14));
             }
-            None if !n.symbolic => {
+            Err(missing) if !n.symbolic => {
                 let s = stand_in(n);
                 spec.push_str(&format!("{}\t\t{s}\n", n.num));
-                subs.push(format!("{}: {s} used instead", n.name));
+                subs.push(format!("{}: {}, {s} used instead", n.name, why(missing)));
             }
-            None => {}
+            Err(missing) => subs.push(format!("{}: {}, and no other font can draw its symbols, so it stays out", n.name, why(missing))),
         }
     }
     (spec, subs)
@@ -332,6 +351,8 @@ fn done_text(d: &Done, part: i32) -> Vec<String> {
     say(d.images, "Picture alternates and smoothing removed".into());
     say(d.transfer, "Transfer functions removed".into());
     say(d.layers, "Layer settings named".into());
+    say(d.object_metadata, "XMP metadata on pages or pictures removed".into());
+    say(d.glyph_lists, "Glyph lists of font subsets removed (optional, and often not exact)".into());
     say(d.lost_pages, format!("{} left out: damaged beyond reading", plural(d.lost_pages, "page", "pages")));
     say(d.fonts_failed, format!("{} couldn't be put in", plural(d.fonts_failed, "font", "fonts")));
     out

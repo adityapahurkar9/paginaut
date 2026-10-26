@@ -2,7 +2,7 @@
 //! Every PDF in the folder is saved as PDF/A-2b into the temp folder; what's left must be only what can't be fixed,
 //! and page 1 must look as it did. Works on copies; never touches the originals.
 use paginaut_lib::engine::mupdf::render_size;
-use paginaut_lib::engine::pdfa::Report;
+use paginaut_lib::engine::pdfa::{FontMissing, Report};
 use paginaut_lib::engine::{Engine, Protection, SaveOptions};
 
 /// Page 1 rendered small (RGBA).
@@ -42,7 +42,12 @@ fn main() {
             failures += 1;
         }
     };
-    let find = |name: &str, bold: bool, italic: bool| paginaut_lib::fonts::find(name, bold, italic).map(|f| (f.path, f.family, f.exact));
+    let find = |name: &str, bold: bool, italic: bool| {
+        paginaut_lib::fonts::find(name, bold, italic).map(|f| (f.path, f.family, f.exact)).map_err(|m| match m {
+            paginaut_lib::fonts::Missing::Licence => FontMissing::Licence,
+            paginaut_lib::fonts::Missing::NotInstalled => FontMissing::NotInstalled,
+        })
+    };
     let mut files: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "pdf")).collect();
     files.sort();
     for path in files {
@@ -92,6 +97,12 @@ fn main() {
             Err(e) => check(&format!("{name} saved as PDF/A"), false, e),
         }
     }
+    // The rest works on testfiles' labels.pdf (other folders: only the files above).
+    if !std::path::Path::new(&format!("{dir}/labels.pdf")).exists() {
+        println!("{}", if failures == 0 { "ALL PASSED" } else { "SOME FAILED" });
+        std::process::exit(if failures == 0 { 0 } else { 1 });
+    }
+
     // An attached file that isn't a PDF: PDF/A-2 takes it out, PDF/A-3 keeps it, described.
     let with = format!("{tmp}/attached.pdf");
     let note = format!("{tmp}/note.txt");
