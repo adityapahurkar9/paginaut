@@ -313,6 +313,8 @@ fn run_desktop() {
             desk::redact_apply,
             desk::redact_clear,
             desk::sanitize,
+            desk::pdfa_check,
+            desk::pdfa_save,
             desk::attachment_add,
             desk::attachment_remove,
             desk::tables,

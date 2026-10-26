@@ -2325,6 +2325,8 @@ int fo_pdf_save(fo_ctx *c, fo_doc *d, const char *path, int incremental)
 	}
 	fz_catch(CTX)
 	{
+		if (sections >= 0)
+			pdf->num_incremental_sections = sections;
 		FAIL();
 		return -1;
 	}
@@ -9270,15 +9272,16 @@ static void pa_colour(fz_context *ctx, pa_proc *p, int fam)
 {
 	pa_found *f = p->f;
 	pdf_resource_stack *rs = p->super.rstack;
-	pdf_obj *where, *entry;
+	/* Default colour spaces count from the resources of the content using them (not a page's, inside a form). */
+	pdf_obj *spaces = pdf_dict_get(ctx, rs ? rs->resources : NULL, PDF_NAME(ColorSpace)), *where, *entry;
 	int missing = 0, kind, n;
 	if (!fam)
 		return;
-	if ((fam & PA_GRAY) && !f->oi && !pdf_lookup_resource(ctx, rs, PDF_NAME(ColorSpace), "DefaultGray"))
+	if ((fam & PA_GRAY) && !f->oi && !pdf_dict_gets(ctx, spaces, "DefaultGray"))
 		missing |= PA_GRAY;
-	if ((fam & PA_RGB) && f->oi != 3 && !pdf_lookup_resource(ctx, rs, PDF_NAME(ColorSpace), "DefaultRGB"))
+	if ((fam & PA_RGB) && f->oi != 3 && !pdf_dict_gets(ctx, spaces, "DefaultRGB"))
 		missing |= PA_RGB;
-	if ((fam & PA_CMYK) && f->oi != 4 && !pdf_lookup_resource(ctx, rs, PDF_NAME(ColorSpace), "DefaultCMYK"))
+	if ((fam & PA_CMYK) && f->oi != 4 && !pdf_dict_gets(ctx, spaces, "DefaultCMYK"))
 		missing |= PA_CMYK;
 	if (!missing)
 		return;
@@ -9763,19 +9766,54 @@ static int pa_output_intent(fz_context *ctx, pdf_document *doc, int *bad)
 	return n;
 }
 
-static int pa_file_is_pdf(fz_context *ctx, pdf_obj *fs)
+static char *pa_xmp(fz_context *ctx, pdf_document *doc);
+static void pa_xmp_value(const char *xmp, const char *prop, char *out, size_t size);
+
+/* An attached file that is itself PDF/A-1 or -2: what part 2 allows attached. */
+static int pa_file_is_pdfa(fz_context *ctx, pdf_obj *fs)
 {
 	pdf_obj *ef = pdf_dict_getp(ctx, fs, "EF/F");
-	const char *name = pdf_dict_get_text_string(ctx, fs, PDF_NAME(UF));
-	size_t n;
-	if (!*name)
-		name = pdf_dict_get_text_string(ctx, fs, PDF_NAME(F));
-	n = strlen(name);
+	fz_buffer *buf = NULL;
+	fz_stream *stm = NULL;
+	pdf_document *sub = NULL;
+	char *xmp = NULL;
+	int ok = 0;
 	if (!ef)
 		ef = pdf_dict_getp(ctx, fs, "EF/UF");
-	if (!strcmp(pdf_dict_get_name(ctx, ef, PDF_NAME(Subtype)), "application/pdf"))
-		return 1;
-	return n > 4 && !fz_strcasecmp(name + n - 4, ".pdf");
+	if (!pdf_is_stream(ctx, ef))
+		return 0;
+	fz_var(buf);
+	fz_var(stm);
+	fz_var(sub);
+	fz_var(xmp);
+	fz_try(ctx)
+	{
+		buf = pdf_load_stream(ctx, ef);
+		if (buf->len > 5 && !memcmp(buf->data, "%PDF-", 5))
+		{
+			char part[16];
+			stm = fz_open_buffer(ctx, buf);
+			sub = pdf_open_document_with_stream(ctx, stm);
+			xmp = pa_xmp(ctx, sub);
+			pa_xmp_value(xmp ? xmp : "", "pdfaid:part", part, sizeof part);
+			ok = part[0] == '1' || part[0] == '2';
+		}
+	}
+	fz_always(ctx)
+	{
+		fz_free(ctx, xmp);
+		pdf_drop_document(ctx, sub);
+		fz_drop_stream(ctx, stm);
+		fz_drop_buffer(ctx, buf);
+	}
+	fz_catch(ctx)
+	{
+		/* Damaged, or locked with a password: not one part 2 can keep. */
+		fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
+		fz_ignore_error(ctx);
+		ok = 0;
+	}
+	return ok;
 }
 
 static const char *pa_mime(const char *name)
@@ -9864,7 +9902,7 @@ static void pa_files(fz_context *ctx, pdf_document *doc, pa_found *f, const char
 		for (int i = 0; i < n; i++)
 		{
 			pdf_obj *fs = pdf_dict_get_val(ctx, tree, i);
-			if (f->part == 2 && !pa_file_is_pdf(ctx, fs))
+			if (f->part == 2 && !pa_file_is_pdfa(ctx, fs))
 			{
 				f->attachments++;
 				removed++;
@@ -9932,7 +9970,7 @@ static void pa_annots(fz_context *ctx, pdf_document *doc, pa_found *f)
 			if (pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)))
 			{
 				pdf_obj *fs = pdf_dict_get(ctx, a, PDF_NAME(FS));
-				if (f->part == 2 && !pa_file_is_pdf(ctx, fs))
+				if (f->part == 2 && !pa_file_is_pdfa(ctx, fs))
 					f->attachments++;
 				else if (f->part == 3)
 					f->attachments += pa_file_complete(ctx, f, fs, NULL) || !pdf_array_contains(ctx, pdf_dict_get(ctx, a, PDF_NAME(AF)), fs);
@@ -10176,6 +10214,97 @@ static int pa_font_bold(fz_context *ctx, pdf_obj *desc, const char *name)
 		strstr(name, "Bold") || strstr(name, "bold") || strstr(name, "Black") || strstr(name, "Heavy");
 }
 
+/* [...]: fonts not in the file, with what's needed to pick one to put in (engine/pdfa.rs FontNeed). */
+static void pa_json_fonts(fz_context *ctx, fz_buffer *b, pdf_obj *fonts)
+{
+	fz_append_byte(ctx, b, '[');
+	for (int i = 0; i < pdf_array_len(ctx, fonts); i++)
+	{
+		pdf_obj *font = pdf_array_get(ctx, fonts, i), *desc = font;
+		pdf_obj *sub = pdf_dict_get(ctx, font, PDF_NAME(Subtype));
+		const char *name = pdf_dict_get_name(ctx, font, PDF_NAME(BaseFont)), *plus = strchr(name, '+');
+		const char *clean;
+		int simple = !pdf_name_eq(ctx, sub, PDF_NAME(Type0)), flags, len = 0;
+		if (plus && plus - name == 6)
+			name = plus + 1;
+		if (!simple)
+			desc = pdf_array_get(ctx, pdf_dict_get(ctx, font, PDF_NAME(DescendantFonts)), 0);
+		desc = pdf_dict_get(ctx, desc, PDF_NAME(FontDescriptor));
+		flags = pdf_dict_get_int(ctx, desc, PDF_NAME(Flags));
+		clean = pdf_clean_font_name(name);
+		fz_append_printf(ctx, b, "%s{\"num\":%d,\"name\":", i ? "," : "", pdf_to_num(ctx, font));
+		json_str(ctx, b, name);
+		fz_append_string(ctx, b, ",\"base14\":");
+		json_str(ctx, b, fz_lookup_base14_font(ctx, clean, &len) ? clean : "");
+		fz_append_string(ctx, b, ",\"type\":");
+		json_str(ctx, b, pdf_to_name(ctx, sub));
+		fz_append_printf(ctx, b, ",\"simple\":%s,\"bold\":%s,\"italic\":%s,\"serif\":%s,\"symbolic\":%s}", simple ? "true" : "false",
+			pa_font_bold(ctx, desc, name) ? "true" : "false",
+			(flags & 64) || pdf_dict_get_real(ctx, desc, PDF_NAME(ItalicAngle)) != 0 || strstr(name, "Italic") || strstr(name, "Oblique") ? "true" : "false",
+			(flags & 2) ? "true" : "false", (flags & 4) ? "true" : "false");
+	}
+	fz_append_byte(ctx, b, ']');
+}
+
+/* The fonts not in the file, from its objects alone (no page content read): what Save as PDF/A embeds first. A
+ * font no page uses may come along; the content scan after fixing finds any left. JSON {"fonts":[...]}. */
+char *fo_pdfa_fonts(fo_ctx *c, fo_doc *d)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	pdf_obj *fonts = NULL;
+	fz_buffer *b = NULL;
+	char *s = NULL;
+	if (!pdf)
+	{
+		snprintf(c->err, sizeof c->err, "not a PDF");
+		return NULL;
+	}
+	fz_var(fonts);
+	fz_var(b);
+	fz_try(CTX)
+	{
+		int n = pdf_xref_len(CTX, pdf);
+		fonts = pdf_new_array(CTX, pdf, 8);
+		for (int i = 1; i < n; i++)
+		{
+			pdf_obj *obj = NULL, *sub;
+			fz_var(obj);
+			fz_try(CTX)
+			{
+				obj = pdf_load_object(CTX, pdf, i);
+				sub = pdf_dict_get(CTX, obj, PDF_NAME(Subtype));
+				/* CIDFonts come with the Type0 font that uses them. */
+				if (pdf_name_eq(CTX, pdf_dict_get(CTX, obj, PDF_NAME(Type)), PDF_NAME(Font)) && !pdf_name_eq(CTX, sub, PDF_NAME(CIDFontType0)) &&
+					!pdf_name_eq(CTX, sub, PDF_NAME(CIDFontType2)) && !pa_font_embedded(CTX, obj))
+					pdf_array_push_drop(CTX, fonts, pdf_new_indirect(CTX, pdf, i, 0));
+			}
+			fz_always(CTX)
+				pdf_drop_obj(CTX, obj);
+			fz_catch(CTX)
+			{
+				fz_rethrow_if(CTX, FZ_ERROR_TRYLATER);
+				fz_ignore_error(CTX);
+			}
+		}
+		b = fz_new_buffer(CTX, 256);
+		fz_append_string(CTX, b, "{\"fonts\":");
+		pa_json_fonts(CTX, b, fonts);
+		fz_append_byte(CTX, b, '}');
+		s = buffer_to_string(CTX, b);
+	}
+	fz_always(CTX)
+	{
+		pdf_drop_obj(CTX, fonts);
+		fz_drop_buffer(CTX, b);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
 /* Checks the document against PDF/A-`part` (2 or 3) level b. JSON: what's claimed and what was found (see
  * engine/pdfa.rs). */
 char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
@@ -10234,33 +10363,9 @@ char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part)
 		pa_json_pages(CTX, b, "annotTypes", &f.annot_types);
 		pa_json_pages(CTX, b, "annotFlags", &f.annot_flags);
 		pa_json_pages(CTX, b, "annotAppearances", &f.annot_ap);
-		fz_append_string(CTX, b, ",\"fonts\":[");
-		for (int i = 0; i < pdf_array_len(CTX, f.fonts); i++)
-		{
-			pdf_obj *font = pdf_array_get(CTX, f.fonts, i), *desc = font;
-			pdf_obj *sub = pdf_dict_get(CTX, font, PDF_NAME(Subtype));
-			const char *name = pdf_dict_get_name(CTX, font, PDF_NAME(BaseFont)), *plus = strchr(name, '+');
-			const char *clean;
-			int simple = !pdf_name_eq(CTX, sub, PDF_NAME(Type0)), flags, len = 0;
-			if (plus && plus - name == 6)
-				name = plus + 1;
-			if (!simple)
-				desc = pdf_array_get(CTX, pdf_dict_get(CTX, font, PDF_NAME(DescendantFonts)), 0);
-			desc = pdf_dict_get(CTX, desc, PDF_NAME(FontDescriptor));
-			flags = pdf_dict_get_int(CTX, desc, PDF_NAME(Flags));
-			clean = pdf_clean_font_name(name);
-			fz_append_printf(CTX, b, "%s{\"num\":%d,\"name\":", i ? "," : "", pdf_to_num(CTX, font));
-			json_str(CTX, b, name);
-			fz_append_string(CTX, b, ",\"base14\":");
-			json_str(CTX, b, fz_lookup_base14_font(CTX, clean, &len) ? clean : "");
-			fz_append_string(CTX, b, ",\"type\":");
-			json_str(CTX, b, pdf_to_name(CTX, sub));
-			fz_append_printf(CTX, b, ",\"simple\":%s,\"bold\":%s,\"italic\":%s,\"serif\":%s,\"symbolic\":%s}", simple ? "true" : "false",
-				pa_font_bold(CTX, desc, name) ? "true" : "false",
-				(flags & 64) || pdf_dict_get_real(CTX, desc, PDF_NAME(ItalicAngle)) != 0 || strstr(name, "Italic") || strstr(name, "Oblique") ? "true" : "false",
-				(flags & 2) ? "true" : "false", (flags & 4) ? "true" : "false");
-		}
-		fz_append_string(CTX, b, "]}");
+		fz_append_string(CTX, b, ",\"fonts\":");
+		pa_json_fonts(CTX, b, f.fonts);
+		fz_append_byte(CTX, b, '}');
 		s = buffer_to_string(CTX, b);
 	}
 	fz_always(CTX)
@@ -10406,7 +10511,7 @@ static int pa_fix_annot_dict(fz_context *ctx, pdf_document *doc, pa_found *f, pd
 	if (!pdf_is_dict(ctx, obj) || pdf_name_eq(ctx, st, PDF_NAME(Popup)))
 		return 1;
 	if (pa_bad_annot_type(ctx, st) || (flags & (PDF_ANNOT_IS_INVISIBLE | PDF_ANNOT_IS_HIDDEN | PDF_ANNOT_IS_NO_VIEW)) ||
-		(pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)) && f->part == 2 && !pa_file_is_pdf(ctx, fs)))
+		(pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)) && f->part == 2 && !pa_file_is_pdfa(ctx, fs)))
 		return 0;
 	if (pdf_name_eq(ctx, st, PDF_NAME(FileAttachment)) && f->part == 3 && fs)
 	{
@@ -10421,6 +10526,21 @@ static int pa_fix_annot_dict(fz_context *ctx, pdf_document *doc, pa_found *f, pd
 	pa_del(ctx, pdf_dict_get(ctx, obj, PDF_NAME(AP)), PDF_NAME(D));
 	pa_del(ctx, pdf_dict_get(ctx, obj, PDF_NAME(AP)), PDF_NAME(R));
 	return 1;
+}
+
+/* Takes a form field's widget out of the form (its parent's Kids, or the form's Fields), and a parent it leaves
+ * with no kids with it. */
+static void pa_remove_field(fz_context *ctx, pdf_document *doc, pdf_obj *widget, int depth)
+{
+	pdf_obj *parent = pdf_dict_get(ctx, widget, PDF_NAME(Parent));
+	pdf_obj *list = parent ? pdf_dict_get(ctx, parent, PDF_NAME(Kids)) : pdf_dict_getp(ctx, pdf_trailer(ctx, doc), "Root/AcroForm/Fields");
+	if (depth > 16)
+		return;
+	for (int i = pdf_array_len(ctx, list) - 1; i >= 0; i--)
+		if (pdf_resolve_indirect(ctx, pdf_array_get(ctx, list, i)) == pdf_resolve_indirect(ctx, widget))
+			pdf_array_delete(ctx, list, i);
+	if (parent && pdf_array_len(ctx, list) == 0)
+		pa_remove_field(ctx, doc, parent, depth + 1);
 }
 
 /* Draws an annotation's normal appearance where it has none (or always, `force`), as MuPDF draws that kind. */
@@ -10457,11 +10577,16 @@ static void pa_fix_annots(fz_context *ctx, pdf_document *doc, pa_found *f, int *
 	{
 		pdf_obj *annots = pdf_dict_get(ctx, pdf_lookup_page_obj(ctx, doc, i), PDF_NAME(Annots));
 		for (int k = pdf_array_len(ctx, annots) - 1; k >= 0; k--)
-			if (!pa_fix_annot_dict(ctx, doc, f, pdf_array_get(ctx, annots, k), printed, now))
-			{
-				pdf_array_delete(ctx, annots, k);
-				(*removed)++;
-			}
+		{
+			pdf_obj *a = pdf_array_get(ctx, annots, k);
+			if (pa_fix_annot_dict(ctx, doc, f, a, printed, now))
+				continue;
+			/* A hidden form field goes from the form too, not only from the page. */
+			if (pdf_name_eq(ctx, pdf_dict_get(ctx, a, PDF_NAME(Subtype)), PDF_NAME(Widget)))
+				pa_remove_field(ctx, doc, a, 0);
+			pdf_array_delete(ctx, annots, k);
+			(*removed)++;
+		}
 		if (!pdf_array_len(ctx, annots))
 			continue;
 		fz_try(ctx)
@@ -10799,4 +10924,35 @@ char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char 
 		return NULL;
 	}
 	return s;
+}
+
+/* The PDF/A part and level the file's XMP claims ("2B"), or "" (none, or not a PDF). */
+int fo_pdfa_claim(fo_ctx *c, fo_doc *d, char *out, int size)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	char *xmp = NULL;
+	out[0] = 0;
+	if (!pdf)
+		return 0;
+	fz_var(xmp);
+	fz_try(CTX)
+	{
+		xmp = pa_xmp(CTX, pdf);
+		if (xmp)
+		{
+			char part[16], level[16];
+			pa_xmp_value(xmp, "pdfaid:part", part, sizeof part);
+			pa_xmp_value(xmp, "pdfaid:conformance", level, sizeof level);
+			if (part[0])
+				fz_snprintf(out, size, "%s%s", part, level);
+		}
+	}
+	fz_always(CTX)
+		fz_free(CTX, xmp);
+	fz_catch(CTX)
+	{
+		FAIL();
+		return -1;
+	}
+	return 0;
 }

@@ -423,6 +423,24 @@ pub async fn redact_apply(state: State<'_, AppState>, doc: DocId, cover: bool, r
     blocking(move || engine.doc(doc)?.redact_apply(cover, rgb, &label)).await
 }
 
+/// Checks the document against PDF/A-`part` (2 or 3) level b.
+#[tauri::command]
+pub async fn pdfa_check(state: State<'_, AppState>, doc: DocId, part: i32) -> Res<crate::engine::pdfa::Report> {
+    let engine = state.engine.clone();
+    blocking(move || engine.pdfa_check(doc, part)).await
+}
+
+/// Saves the pages in `order` (turned by `rot`) as a new PDF/A-`part` file at `out`, then checks it.
+#[tauri::command]
+pub async fn pdfa_save(state: State<'_, AppState>, doc: DocId, order: Vec<usize>, rot: Vec<i32>, out: String, part: i32) -> Res<crate::engine::pdfa::Saved> {
+    let engine = state.engine.clone();
+    blocking(move || {
+        let find = |name: &str, bold: bool, italic: bool| crate::fonts::find(name, bold, italic).map(|f| (f.path, f.family, f.exact));
+        engine.save_pdfa(doc, order, rot, &out, part, &find)
+    })
+    .await
+}
+
 /// Takes metadata (1), scripts (2), attached files (4), comments (8) or hidden text (16) out (one undo step).
 #[tauri::command]
 pub async fn sanitize(state: State<'_, AppState>, doc: DocId, what: i32) -> Res<crate::engine::Sanitized> {

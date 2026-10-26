@@ -79,6 +79,8 @@ pub struct Report {
     pub claim: Option<Claim>,
     pub part: i32,
     pub issues: Vec<Issue>,
+    /// Signatures in the document (a PDF/A copy is a new file: they won't be valid in it).
+    pub signed: usize,
 }
 
 /// What Save as PDF/A did, and what the copy still breaks.
@@ -199,7 +201,7 @@ fn report(f: Found) -> Report {
     }
     if f.attachments > 0 {
         let text = if f.part == 2 {
-            format!("{} other than PDFs (PDF/A-3 allows them)", plural(f.attachments, "attached file", "attached files"))
+            format!("{} that aren't PDF/A files themselves (PDF/A-3 allows any file)", plural(f.attachments, "attached file", "attached files"))
         } else {
             format!("{} not described as PDF/A-3 asks (their relationship to the document, type or date)", plural(f.attachments, "attached file", "attached files"))
         };
@@ -226,7 +228,7 @@ fn report(f: Found) -> Report {
     if f.transfer > 0 {
         add("transfer", format!("Transfer functions (colour adjustments for printing) ({})", f.transfer), vec![], true);
     }
-    Report { claim: f.claim, part: f.part, issues }
+    Report { claim: f.claim, part: f.part, issues, signed: 0 }
 }
 
 fn found(doc: &Document, part: i32) -> Result<Found, String> {
@@ -322,7 +324,7 @@ fn done_text(d: &Done, part: i32) -> Vec<String> {
     say(d.annots_removed, format!("{} removed (sound, video, 3D, or never shown)", plural(d.annots_removed, "annotation", "annotations")));
     say(d.annots_printed, format!("{} set to print", plural(d.annots_printed, "comment or field", "comments or fields")));
     say(d.appearances, format!("{} drawn", plural(d.appearances, "comment or field", "comments or fields")));
-    say(d.attachments, if part == 2 { format!("{} removed (not PDFs)", plural(d.attachments, "attached file", "attached files")) } else { format!("{} described as PDF/A-3 asks", plural(d.attachments, "attached file", "attached files")) });
+    say(d.attachments, if part == 2 { format!("{} removed (not PDF/A files)", plural(d.attachments, "attached file", "attached files")) } else { format!("{} described as PDF/A-3 asks", plural(d.attachments, "attached file", "attached files")) });
     say(d.xfa as usize, "XFA form data removed".into());
     say(d.lzw, format!("LZW data recompressed ({})", d.lzw));
     say(d.external + d.reference, "Links to content in other files removed".into());
@@ -349,7 +351,10 @@ impl Engine {
             Some(copy) => found(&copy, part)?,
             None => found(&d.inner.lock().doc, part)?,
         };
-        Ok(report(f))
+        let mut r = report(f);
+        let sigs: Vec<serde_json::Value> = serde_json::from_str(&self.sigs_json(id)?).map_err(|e| e.to_string())?;
+        r.signed = sigs.iter().filter(|s| s["signed"] == true).count();
+        Ok(r)
     }
 
     /// Checks a PDF on disk (a copy just saved, say).
@@ -367,6 +372,9 @@ impl Engine {
     pub fn save_pdfa(&self, id: DocId, order: Vec<usize>, rot: Vec<i32>, out: &str, part: i32, find: FindFont) -> Result<Saved, String> {
         check_part(part)?;
         let d = self.doc(id)?;
+        if super::same_file(out, &d.path()) {
+            return Err("Choose another name: the PDF/A copy is a new file, and this one stays as it is.".into());
+        }
         if !self.security(id)?.owner {
             return Err("Enter the permissions password first (Properties, Protection): a PDF/A file can't keep this file's protection, and only its owner can take it off.".into());
         }
@@ -394,7 +402,13 @@ impl Engine {
             }
             // A damaged file (repaired when opened) gets a sound page tree first, as Repair does.
             let lost = doc.fix_page_tree()?;
-            let (spec, substitutes) = choose_fonts(&found(&doc, part)?.fonts, find);
+            // The fonts from the objects alone: reading every page's content here too would double the work.
+            #[derive(Deserialize)]
+            struct Fonts {
+                fonts: Vec<FontNeed>,
+            }
+            let needs: Fonts = serde_json::from_str(&doc.pdfa_fonts()?).map_err(|e| e.to_string())?;
+            let (spec, substitutes) = choose_fonts(&needs.fonts, find);
             let mut done: Done = serde_json::from_str(&doc.pdfa_fix(part, &spec, &now_dates())?).map_err(|e| e.to_string())?;
             done.lost_pages = lost;
             doc.save_pdf_with(&written, Some(None), false)?;

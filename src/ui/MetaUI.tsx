@@ -5,6 +5,7 @@ import { useEffect, useState } from "preact/hooks";
 import { Plus, Trash2, X } from "lucide-preact";
 import { api, type LabelRange, type Properties } from "../api";
 import { metaChanged } from "../edits";
+import { openConvertPane } from "../office";
 import { baseName, showToast, type Tab } from "../store";
 
 export const propertiesDialog = signal<Tab | null>(null);
@@ -101,6 +102,7 @@ function PropertiesInner({ tab }: { tab: Tab }) {
     ["Made with", [props?.creator, props?.producer].filter(Boolean).join(" · ")],
     ["Created", pdfDate(props?.created)],
     ["Changed", pdfDate(props?.modified)],
+    ["PDF/A", props ? props.pdfa || (info.isPdf ? "Not marked as PDF/A" : "") : ""],
   ];
 
   return (
@@ -125,8 +127,21 @@ function PropertiesInner({ tab }: { tab: Tab }) {
           ))}
         </dl>
         {!info.isPdf && <span class="hint">Only PDFs can be changed here. Save this file as a PDF first (Save as).</span>}
+        {props?.pdfa && <span class="hint">Changing its details here makes them differ from its PDF/A metadata: save it as PDF/A again afterwards (Convert pane).</span>}
         {error && <span class="error-text">{error}</span>}
         <div class="row">
+          {info.isPdf && (
+            <button
+              class="btn ghost"
+              disabled={busy}
+              onClick={() => {
+                propertiesDialog.value = null;
+                openConvertPane("pdfa");
+              }}
+            >
+              Check for PDF/A…
+            </button>
+          )}
           <span style={{ flex: 1 }} />
           <button class="btn" onClick={close}>
             {info.isPdf ? "Cancel" : "Close"}

@@ -312,7 +312,11 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
  * document conform as far as it can (fonts: lines "num\tpath\tbase14" to embed, no path: MuPDF's copy of that
  * base 14 font; now: "D:...\tISO"); JSON of what was done. The caller saves it unencrypted. */
 char *fo_pdfa_check(fo_ctx *c, fo_doc *d, int part);
+/* The fonts not in the file, from its objects alone: JSON {"fonts":[...]}. */
+char *fo_pdfa_fonts(fo_ctx *c, fo_doc *d);
 char *fo_pdfa_fix(fo_ctx *c, fo_doc *d, int part, const char *fonts, const char *now);
+/* What the XMP claims ("2B"), or "". */
+int fo_pdfa_claim(fo_ctx *c, fo_doc *d, char *out, int size);
 
 void fo_free(fo_ctx *c, void *p);
 

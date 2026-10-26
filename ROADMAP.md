@@ -689,28 +689,39 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       first); source made public first (AGPL); 1.0 for the store release
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 
-## PDF/A: archival PDFs (planned)
+## PDF/A: archival PDFs (-2b and -3b done; -1b and the rest planned)
 PDF/A (ISO 19005) is the PDF that still opens and looks the same decades later: what courts, government portals and
 archives ask for. First PDF/A-2b (looks preserved; allows transparency, JPEG 2000 and layers), then -1b (older
 portals) and -3b (any attachment, as e-invoices need). The "a" levels need tags, so they wait for tagging (below);
-"u" (every letter maps to Unicode) comes with -2b's checks. MuPDF has no PDF/A support: checks and fixes are ours.
-- [ ] Check: whether a file claims PDF/A (XMP pdfaid) and which rules it breaks, in plain words and grouped: fonts not
-      embedded or letters without Unicode, device colours without an output intent, JavaScript or launch actions,
-      encryption, annotations and fields without appearances or the print flag, metadata where the document info and
-      XMP disagree, attachments, and for -1b transparency and LZW. Own checker over MuPDF's objects (Rust); veraPDF
-      (the reference validator, Java) only checks the checker on a test set (veraPDF's test corpus), not shipped
-- [ ] Save as PDF/A (new file, "… (PDF-A).pdf"): embed missing fonts from the system's (by name; a substitute is
-      flagged, as it changes the look), sRGB output intent (lcms), XMP metadata written from the document info with the
-      pdfaid part and level, JavaScript, encryption and forbidden actions removed (Sanitize does most of it),
-      appearances made for annotations and fields, LZW recompressed; for -1b, transparency flattened (a page
-      rendered to a picture as the last resort, said so). Checked again after saving; what still fails is listed
-- [ ] In the app: PDF/A in the Convert pane's targets; Properties (Ctrl+D) shows a file's PDF/A claim and a Check
-      button; saving changes to a PDF/A file warns that they may break it (or re-applies the fixes)
+"u" (every letter maps to Unicode) comes with -2b's checks. MuPDF has no PDF/A support: checks and fixes are ours
+(paginaut.c fo_pdfa_*, engine/pdfa.rs).
+- [x] Check (-2b, -3b): what a file claims (XMP pdfaid) and which rules it breaks, in plain words and grouped, with
+      pages: fonts not in the file, device colours no output intent or default colour space covers, JavaScript and
+      forbidden actions, encryption, annotations and fields that don't print or have no (or extra) appearances, XFA,
+      NeedAppearances, attachments (-2: PDF/A files only; -3: described), layers, LZW, external and PostScript content,
+      picture alternates, transfer functions, PDF 2.0, missing XMP or details that disagree with it. Objects are walked
+      from the catalog; fonts and colours come from a content processor over every page and appearance (what's used).
+      Done in C over MuPDF's objects (a Rust walk would have needed a large FFI), worded in Rust
+- [ ] Check: letters without Unicode ("u"), glyph widths against font programs, non-symbolic TrueType encodings,
+      CIDSet, transparency groups' colour spaces; for -1b transparency
+- [x] Save as PDF/A-2b or -3b (new file, "… (PDF-A).pdf"): fonts embedded from the system's (Windows registry,
+      fontconfig; licences that forbid embedding respected; stand-ins named), MuPDF's copies for the base 14, widths
+      taken from the program; sRGB output intent (MuPDF's built-in profile) and default colour spaces where device CMYK
+      is used; XMP written from the document info; JavaScript, encryption (needs the permissions password) and forbidden
+      actions removed; appearances drawn; hidden annotations and fields removed; LZW recompressed; damaged page trees
+      rebuilt as Repair does. Checked again after saving; what still fails is listed
+- [ ] Save as PDF/A-1b: transparency flattened (a page rendered to a picture as the last resort, said so)
+- [x] In the app: PDF/A in the Convert pane's targets (checked as soon as it's chosen, with a warning for signed
+      files); Properties (Ctrl+D) shows a file's PDF/A claim, a Check button, and a note that changing details there
+      makes them differ from the PDF/A metadata
+- [ ] Saving other changes to a PDF/A file warns that they may break it (or re-applies the fixes)
 - [ ] Office files to PDF/A: Word's and LibreOffice's own PDF/A export in Convert › Files to PDF (an option that's
       already there in both)
-- [ ] Signed files: converting rewrites the file, so its signatures stop being valid; said before converting (sign the
-      PDF/A copy). Signing a PDF/A file keeps it PDF/A (the signature's appearance and the incremental save follow the rules)
-- [ ] Tests: veraPDF's corpus for the checker; the user's portal files for Save as PDF/A
+- [ ] Signing a PDF/A file keeps it PDF/A (the signature's appearance and the incremental save follow the rules)
+- [x] Tests: examples/pdfa_test.rs (every testfiles PDF conforms after saving, looks the same, keeps its pages;
+      attachments for -2 and -3; protection; unsaved changes)
+- [ ] Tests: veraPDF (the reference validator, Java; not shipped) over the saved files and its own test corpus;
+      the user's portal files
 
 ## PDF/UA: checking accessible PDFs (planned, after PDF/A)
 PDF/UA (ISO 14289) is the accessible PDF: tagged, so a screen reader reads it in order, with pictures described and

@@ -733,6 +733,18 @@ impl Document {
         with_kind(self.1, |c| take_string(c, unsafe { fo_pdfa_check(c, self.0, part) }).ok_or_else(|| last_error(c)))
     }
 
+    /// PDF/A: the fonts not in the file, from its objects alone (see fo_pdfa_fonts).
+    pub fn pdfa_fonts(&self) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_pdfa_fonts(c, self.0) }).ok_or_else(|| last_error(c)))
+    }
+
+    /// PDF/A: what the file's XMP says it is ("2B"), or "".
+    pub fn pdfa_claim(&self) -> String {
+        let mut buf = vec![0u8; 16];
+        with_kind(self.1, |c| unsafe { fo_pdfa_claim(c, self.0, buf.as_mut_ptr().cast(), buf.len() as c_int) });
+        unsafe { CStr::from_ptr(buf.as_ptr().cast()) }.to_string_lossy().into_owned()
+    }
+
     /// PDF/A: makes the document conform as far as it can; JSON of what was done (see fo_pdfa_fix).
     pub fn pdfa_fix(&self, part: i32, fonts: &str, now: &str) -> Result<String> {
         let (f, n) = (CString::new(fonts).map_err(|e| e.to_string())?, CString::new(now).map_err(|e| e.to_string())?);

@@ -237,6 +237,26 @@ export interface Properties {
   producer?: string;
   created?: string;
   modified?: string;
+  /** The PDF/A part and level the file says it meets ("PDF/A-2b"), or "". */
+  pdfa?: string;
+}
+
+/** A PDF/A check (engine/pdfa.rs): what the file claims, and each rule it breaks. */
+export interface PdfaReport {
+  claim: { part: number; conformance: string } | null;
+  part: number;
+  /** pages: page numbers from 1 (empty: the document's); fix: Save as PDF/A puts it right. */
+  issues: { id: string; text: string; pages: number[]; fix: boolean }[];
+  /** Signatures in the document: a PDF/A copy is a new file, so they won't be valid in it. */
+  signed: number;
+}
+
+export interface PdfaSaved {
+  path: string;
+  done: string[];
+  /** Fonts not on this computer and what was put in instead. */
+  substitutes: string[];
+  left: PdfaReport;
 }
 
 export interface OutlineItem {
@@ -470,6 +490,10 @@ export const api = {
     invoke<{ pages: number; marks: number; left: number }>("redact_apply", { doc, cover, rgb, label }),
   /** Takes out metadata (1), scripts (2), attached files (4), comments (8), hidden text (16); one undo step. */
   sanitize: (doc: number, what: number) => invoke<{ meta: number; scripts: number; files: number; comments: number; hidden: number }>("sanitize", { doc, what }),
+  /** Checks the document against PDF/A-`part` (2 or 3) level b. */
+  pdfaCheck: (doc: number, part: number) => invoke<PdfaReport>("pdfa_check", { doc, part }),
+  /** Saves the pages in `order` (turned by `rot`) as a new PDF/A file at `out`, fixing what can be fixed, and checks it. */
+  pdfaSave: (doc: number, order: number[], rot: number[], out: string, part: number) => invoke<PdfaSaved>("pdfa_save", { doc, order, rot, out, part }),
   /** Attaches the file at `path` to the document (one undo step in the engine). */
   attachmentAdd: (doc: number, path: string) => invoke<void>("attachment_add", { doc, path }),
   /** Removes attachment `i`: off the document's list, or its pin off its page (one undo step). */
