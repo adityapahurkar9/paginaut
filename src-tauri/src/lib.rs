@@ -44,7 +44,7 @@ mod docx;
 #[cfg(desktop)]
 mod flow;
 #[cfg(desktop)]
-mod fonts;
+pub mod fonts;
 #[cfg(desktop)]
 mod markdown;
 #[cfg(desktop)]
