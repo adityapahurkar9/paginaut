@@ -118,9 +118,24 @@ fn pdf_font_key(name: &str, bold: bool, italic: bool) -> (String, String) {
     (family, style)
 }
 
-fn is_truetype(p: &Path) -> bool {
-    let mut head = [0u8; 4];
-    std::fs::File::open(p).and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head)).is_ok() && (head == [0, 1, 0, 0] || &head == b"true")
+/// A TrueType file its licence lets be embedded in documents: OS/2 fsType not "restricted" (0x0002) and not
+/// "bitmaps only" (0x0200). Fonts without an OS/2 table are taken as installable.
+fn embeddable_truetype(p: &Path) -> bool {
+    let Ok(data) = std::fs::read(p) else { return false };
+    if data.len() < 12 || !(data[..4] == [0, 1, 0, 0] || &data[..4] == b"true") {
+        return false;
+    }
+    let u16_at = |at: usize| data.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
+    let u32_at = |at: usize| data.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    let tables = u16_at(4).unwrap_or(0) as usize;
+    for i in 0..tables {
+        let entry = 12 + i * 16;
+        if data.get(entry..entry + 4) == Some(b"OS/2") {
+            let fs_type = u32_at(entry + 8).and_then(|offset| u16_at(offset + 8)).unwrap_or(0);
+            return fs_type & 0x000f != 0x0002 && fs_type & 0x0200 == 0;
+        }
+    }
+    true
 }
 
 #[cfg(windows)]
@@ -138,7 +153,7 @@ pub fn find(name: &str, bold: bool, italic: bool) -> Option<Found> {
                 continue;
             }
             let path = if data.contains(['\\', '/']) { PathBuf::from(&data) } else { fonts_dir.join(&data) };
-            if is_truetype(&path) {
+            if embeddable_truetype(&path) {
                 return Some(Found { path, family: full.to_string(), exact: true });
             }
         }
@@ -166,7 +181,7 @@ pub fn find(name: &str, bold: bool, italic: bool) -> Option<Found> {
     let path = PathBuf::from(lines.next()?);
     let got = lines.next()?.split(',').next()?.to_string();
     let norm = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
-    is_truetype(&path).then(|| Found { exact: norm(&got) == family, path, family: got })
+    embeddable_truetype(&path).then(|| Found { exact: norm(&got) == family, path, family: got })
 }
 
 #[cfg(windows)]

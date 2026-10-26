@@ -281,6 +281,9 @@ pub struct Properties {
     pub created: String,
     #[serde(default)]
     pub modified: String,
+    /// The PDF/A part and level the file says it meets ("PDF/A-2b"), or "".
+    #[serde(default)]
+    pub pdfa: String,
 }
 
 /// A picture on a page: where (relative to the page origin), its size in pixels, how it's
@@ -1176,6 +1179,11 @@ impl Doc {
             producer: m("info:Producer"),
             created: m("info:CreationDate"),
             modified: m("info:ModDate"),
+            pdfa: {
+                let claim = inner.doc.pdfa_claim();
+                let (part, level) = claim.split_at(claim.find(|c: char| !c.is_ascii_digit()).unwrap_or(claim.len()));
+                if part.is_empty() { String::new() } else { format!("PDF/A-{part}{}", level.to_lowercase()) }
+            },
         }
     }
 

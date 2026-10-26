@@ -175,7 +175,7 @@ export interface ConvertItem {
 export const convertDialog = signal<{ items: ConvertItem[]; folder: string | null; running: boolean } | null>(null);
 
 /** The conversion of the document the Convert pane (right side) shows. */
-export type ExportTarget = "docx" | "xlsx" | "pptx" | "md" | "images" | "txt";
+export type ExportTarget = "docx" | "xlsx" | "pptx" | "md" | "images" | "txt" | "pdfa";
 export const convertTarget = signal<ExportTarget>("docx");
 
 export function openConvertPane(target?: ExportTarget) {
