@@ -705,6 +705,12 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       - worth considering: reading on with the screen off or from the notification (a media session; a
         foreground service adds permissions, so the manifest check in build.gradle.kts and
         MainActivity.extraPermissions() must allow them), and stopping after a set time
+- [ ] Next Android release: native debug symbols for Play, so its crash reports name functions and lines instead
+      of addresses (Play warns on 6005 that none were uploaded). Android release builds keep them
+      (CARGO_PROFILE_RELEASE_STRIP=false in tools/android.sh; the desktop stays stripped), the app still ships
+      the stripped library (llvm-strip as now), and the unstripped one per ABI goes into
+      native-debug-symbols.zip beside the .aab, uploaded on the bundle's Downloads tab. Symbols only match the
+      build they came from, so every release needs its own zip
 - [ ] README.md: the Play app signing certificate's SHA-256 (App integrity › App signing) in place of
       PLAY_APP_SIGNING_FINGERPRINT
 - [ ] LICENSE file (the AGPL 3.0 text) at the repo root before the repo goes public; package.json already says
