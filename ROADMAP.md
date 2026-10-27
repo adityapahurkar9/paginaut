@@ -688,6 +688,14 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       with it when the file is there. `bash tools/android.sh all --release` makes the Play bundle (.aab, all ABIs)
 - [ ] Store listing, AAB upload (a personal Play account must run a closed test with 12 testers for 14 days
       first); source made public first (AGPL); 1.0 for the store release
+- [ ] 0.6.5 (6005) uploaded to Play (2026-10-27), internal testing draft. Before publishing it: automatic protection
+      (App integrity) turned off and the bundle's permissions back to three. Its installer check adds
+      com.android.vending.CHECK_LICENSE, which MainActivity.extraPermissions() doesn't allow, so every Play copy
+      would show "Paginaut stopped". If the permission stays listed, build 0.6.6 and upload that
+- [ ] README.md: the Play app signing certificate's SHA-256 (App integrity › App signing) in place of
+      PLAY_APP_SIGNING_FINGERPRINT
+- [ ] LICENSE file (the AGPL 3.0 text) at the repo root before the repo goes public; package.json already says
+      AGPL-3.0-or-later
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 - [x] 0.3.1, 0.4.0 (2026-10-13): Paginaut's Standard theme, then the desktop's 16 colour themes (src/themedata.ts shared by
       both apps; Settings: theme previews, light or dark); Read and Book's plain paper takes the theme's; the shelf's
