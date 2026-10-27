@@ -688,10 +688,23 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       with it when the file is there. `bash tools/android.sh all --release` makes the Play bundle (.aab, all ABIs)
 - [ ] Store listing, AAB upload (a personal Play account must run a closed test with 12 testers for 14 days
       first); source made public first (AGPL); 1.0 for the store release
-- [ ] 0.6.5 (6005) uploaded to Play (2026-10-27), internal testing draft. Before publishing it: automatic protection
-      (App integrity) turned off and the bundle's permissions back to three. Its installer check adds
+- [x] 0.6.5 (6005) uploaded to Play (2026-10-27), internal testing draft. Automatic protection (App integrity) is
+      turned off and the bundle lists three permissions again: its installer check added
       com.android.vending.CHECK_LICENSE, which MainActivity.extraPermissions() doesn't allow, so every Play copy
-      would show "Paginaut stopped". If the permission stays listed, build 0.6.6 and upload that
+      would have shown "Paginaut stopped". Keep it off (it also clashes with the AGPL's right to share copies)
+- [ ] Read aloud, as far as the desktop's (0.8.2) and further. Today: Android's installed voices picked by the
+      paragraph's script, pause and speed. Wanted, and not only these:
+      - the word being read marked (and its paragraph tinted) in Read and Book modes, kept in view; the page view
+        follows the pages. UtteranceProgressListener.onRangeStart gives word ranges from Android 8 (API 26);
+        Android 7 has none, so time words by length there, as the desktop does with Piper
+      - choosing the voice: every installed voice for the language, a sample before picking, the script match
+        kept for paragraphs in other scripts; a way to Android's own settings to install more (no Piper
+        download: the app has no internet)
+      - faster and slower in finer steps, and pitch; changes while paused stay paused
+      - back and forward by sentence and by paragraph; a tap on a paragraph carries on from there
+      - worth considering: reading on with the screen off or from the notification (a media session; a
+        foreground service adds permissions, so the manifest check in build.gradle.kts and
+        MainActivity.extraPermissions() must allow them), and stopping after a set time
 - [ ] README.md: the Play app signing certificate's SHA-256 (App integrity › App signing) in place of
       PLAY_APP_SIGNING_FINGERPRINT
 - [ ] LICENSE file (the AGPL 3.0 text) at the repo root before the repo goes public; package.json already says
