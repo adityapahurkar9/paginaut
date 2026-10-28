@@ -865,6 +865,32 @@ app's feature names).
 - [ ] Tests: untagged documents of rising difficulty (letter, report, two columns, tables, forms, a scanned book):
       add tags, then the checker; compared with Acrobat's results on the same files (installed on the user's PC)
 
+## Error logs (planned; Windows, Linux and Android)
+Today a failure is only what the app shows at the moment: the engine's eprintln! output goes nowhere in a release
+build (no console on Windows, none on Android), and nothing is kept for a bug report. Every version writes a log of
+its own on the device and lets the user export it. Nothing is ever sent anywhere by the app: the log leaves the device
+only when the user exports it and passes it on themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
+- [ ] Backend error logging (src-tauri, shared by all three): one logger for the engine and the app (the log crate
+      with a small file writer, or tauri-plugin-log), errors and warnings always, more detail when turned on in
+      Settings. Each command that fails logs what it was asked and why it failed; the eprintln! calls become log
+      calls. A panic hook writes the panic, its thread and a backtrace before the process ends, so a crash leaves
+      a trace; MuPDF's own warnings and errors (fz_set_warning_callback / fz_set_error_callback) go into the same log
+- [ ] Front-end errors in the same log: window.onerror and unhandled promise rejections in the page, and the errors
+      the UI already shows the user, sent to the backend's logger with the window they came from
+- [ ] Where it lives: the app's log folder (Windows %LOCALAPPDATA%\app.paginaut.reader\logs, Linux ~/.local/share/app.paginaut.reader/logs,
+      Android the app's private files). Rolled over at a few MB, the last few files kept, so it never grows without end
+- [ ] What it never holds: the text of documents, passwords, signature certificates or their PINs, saved
+      signatures, form entries. File paths shortened to the file's name; the user's home folder never written out
+- [ ] Each log starts with the version, the platform (Windows build, Linux distribution and desktop, Android version
+      and device model), the engine's MuPDF and Tesseract versions, and the date the session began
+- [ ] Export error logs: Help › Export error logs… and Settings › About (desktop: saved as a .zip where the user picks,
+      with "Open log folder" beside it; Android: the share sheet, or saved through the system's file picker). The
+      dialog says what the logs hold and what they don't before saving; Clear logs beside it
+- [ ] After a crash: the next start says the app closed unexpectedly last time and offers to export the logs
+- [ ] Tests: a forced command error, a forced panic and a front-end exception each found in the exported logs on
+      Windows, Linux (the .deb and the AppImage) and Android; a document's text and a password typed in the session
+      checked to be absent
+
 ## 0.9.10 (Windows, Linux): PDF/A-1b, Office files to PDF/A, signing and saving PDF/A files
 - [x] PDF/A-1b; Office files straight to PDF/A; signing keeps a PDF/A file PDF/A; saving changes to one warns and can
       keep it PDF/A; the check and Save as PDF/A held to veraPDF's test corpus (see the PDF/A section)
