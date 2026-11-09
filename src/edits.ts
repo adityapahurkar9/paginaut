@@ -116,6 +116,10 @@ export class History {
     this.undoStack = [];
     this.redoStack = [];
   }
+  /** Forgets what could be redone (a failed save starts a step of its own in the engine, which ends its redo). */
+  dropRedo() {
+    this.redoStack = [];
+  }
   get canUndo() {
     return this.undoStack.length > 0;
   }

@@ -3,12 +3,15 @@
 // actual size, where the content sits, what fills the new space) and which
 // pages it applies to.
 import { useState } from "preact/hooks";
-import { Pipette, RectangleHorizontal, RectangleVertical, ScanLine, Maximize2, X } from "lucide-preact";
+import { Pipette, RectangleHorizontal, RectangleVertical, ScanLine, Maximize2 } from "lucide-preact";
 import {
   applyPageSize, cropRatio, endPageSize, fitRatio, fitToContent, pageGeom, pageSizeEdit, PRESETS, presetOf, psSettings, scopeViews, setMargins, setPs,
   targetSize, UNIT, type Scope, type Unit,
 } from "../pagesize";
-import type { Tab } from "../store";
+import { toolPane } from "../toolpanes";
+import { ToolFrame } from "./ToolFrame";
+
+toolPane("pagesize", pageSizeEdit, { tabOf: (v) => v.tab, close: endPageSize });
 
 const GROUPS = ["Paper", "Photo", "Screen"];
 
@@ -50,11 +53,12 @@ function Num({ pt, unit, onPt, label }: { pt: number; unit: Unit; onPt: (v: numb
   );
 }
 
-export function PageSizePanel({ tab }: { tab: Tab }) {
+export function PageSizePanel() {
   const st = pageSizeEdit.value;
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  if (!st || st.tab !== tab) return null;
+  if (!st) return null;
+  const tab = st.tab;
   const s = psSettings();
   const view = tab.page.value;
   const g = pageGeom(tab, view);
@@ -101,14 +105,8 @@ export function PageSizePanel({ tab }: { tab: Tab }) {
   const fmt = (v: number) => (v / UNIT[u]).toFixed(u === "in" ? 2 : 0);
 
   return (
-    <div class="layout-panel ps-panel" onKeyDown={(e) => e.stopPropagation()}>
-      <div class="lp-title">
-        <strong>Page size</strong>
-        <span>page {view + 1}</span>
-        <button class="ib sm" aria-label="Close" onClick={endPageSize}>
-          <X size={15} />
-        </button>
-      </div>
+    <ToolFrame id="pagesize" title="Crop and resize pages" class="ps-panel">
+      <span class="hint">Drag the box's edges on page {view + 1}, or set the sizes here.</span>
 
       <div class="lp-row">
         <label>Crop</label>
@@ -274,7 +272,7 @@ export function PageSizePanel({ tab }: { tab: Tab }) {
       </div>
 
       {error && <span class="error-text">{error}</span>}
-      <div class="lp-actions">
+      <div class="row">
         <button class="btn" onClick={endPageSize}>
           Cancel
         </button>
@@ -282,6 +280,6 @@ export function PageSizePanel({ tab }: { tab: Tab }) {
           {busy ? "Working…" : scopeCount > 1 ? `Apply to ${scopeCount} pages` : "Apply"}
         </button>
       </div>
-    </div>
+    </ToolFrame>
   );
 }

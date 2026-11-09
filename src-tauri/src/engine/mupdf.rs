@@ -573,6 +573,12 @@ impl Document {
         with_kind(self.1, |c| unsafe { fo_pdf_has_changes(c, self.0) } != 0)
     }
 
+    /// Steps the undo journal can go back, or None when the document keeps no journal.
+    pub fn journal_pos(&self) -> Option<usize> {
+        let n = with_kind(self.1, |c| unsafe { fo_pdf_journal_pos(c, self.0) });
+        (n >= 0).then_some(n as usize)
+    }
+
     pub fn reset_form(&self) -> Result<()> {
         with_kind(self.1, |c| if unsafe { fo_pdf_reset_form(c, self.0) } < 0 { Err(last_error(c)) } else { Ok(()) })
     }

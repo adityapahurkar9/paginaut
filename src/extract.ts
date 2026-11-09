@@ -12,7 +12,7 @@ import type { MenuItem } from "./ui/Overlays";
 import { testHook } from "./ui/PagesUI";
 import type { Block } from "./reflow/model";
 import type { ReflowView } from "./reflow/ReadView";
-import { readAloud } from "./speech";
+import { readAloud, readAloudFrom, speaking, stopReading } from "./speech";
 
 const stemOf = (tab: Tab) => baseName(tab.path).replace(/\.[^.]+$/, "");
 const srcOf = (tab: Tab, view: number) => tab.edits.value?.order[view] ?? view;
@@ -225,6 +225,10 @@ async function pageMenu(tab: Tab, view: number, pt: [number, number], x: number,
     // The page and point clicked (the menu is still over that spot while its item runs).
     { label: "Select paragraph", run: () => void tab.viewer?.selectParagraph({ view, p: pt }) },
     { label: "Select page", hint: "Ctrl+A", run: () => tab.viewer?.selectAllOnPage(view) },
+    { sep: true },
+    speaking.value?.tab === tab
+      ? { label: "Stop reading aloud", hint: "Ctrl+Shift+U", run: stopReading }
+      : { label: "Read aloud from here", run: () => void readAloudFrom(tab, view, pt) },
     { sep: true },
   ];
   if (table) items.push(...tableItems(tab, view, table), { sep: true });

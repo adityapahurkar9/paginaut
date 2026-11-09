@@ -188,6 +188,7 @@ extern "C" {
     pub fn fo_widget_toggle(c: *mut fo_ctx, p: *mut fo_page, num: c_int) -> c_int;
     pub fn fo_pdf_undo(c: *mut fo_ctx, d: *mut fo_doc, redo: c_int) -> c_int;
     pub fn fo_pdf_has_changes(c: *mut fo_ctx, d: *mut fo_doc) -> c_int;
+    pub fn fo_pdf_journal_pos(c: *mut fo_ctx, d: *mut fo_doc) -> c_int;
     pub fn fo_pdf_reset_form(c: *mut fo_ctx, d: *mut fo_doc) -> c_int;
     pub fn fo_pdf_bake(c: *mut fo_ctx, d: *mut fo_doc, annots: c_int) -> c_int;
 

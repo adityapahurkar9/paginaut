@@ -1,9 +1,12 @@
-// The table dialog: a table over its picture, with column and row lines to move, add and remove.
+// The table tool (in the pane on the right): a table over its picture, with column and row lines to move, add and remove.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { X } from "lucide-preact";
 import { api, type Table } from "../api";
 import { copyTable, joinHeading, saveTable, spansOf, tableDialog } from "../extract";
 import type { Tab } from "../store";
+import { toolPane } from "../toolpanes";
+import { ToolFrame } from "./ToolFrame";
+
+toolPane("table", tableDialog, { tabOf: (v) => v.tab });
 
 type Area = [number, number, number, number];
 
@@ -123,102 +126,96 @@ function TableInner({ tab, view, area, initial }: { tab: Tab; view: number; area
   const grid = out ? spansOf(out) : [];
   const h = (area[3] - area[1]) * scale;
   return (
-    <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div class="dialog tool-dialog table-dialog" role="dialog" aria-label="Table">
-        <button class="ib sm close" aria-label="Close" onClick={close}>
-          <X size={16} />
-        </button>
-        <h2>Table</h2>
-        <span class="hint">
-          Drag the blue lines to where the columns split, and the orange ones to where the rows do. Click the picture to add a
-          column line, Shift+click to add a row line; double-click a line to remove it.
-        </span>
-        <div class="table-pic-wrap">
-          <div
-            ref={pic}
-            class="table-pic"
-            style={{ width: WIDTH, height: h }}
-            onClick={(e) => {
-              if ((e.target as HTMLElement).closest(".col-line, .row-line")) return;
-              if (e.shiftKey) changeRows([...shownRows, toPageY(e.clientY)]);
-              else change([...cols, toPage(e.clientX)]);
-            }}
-          >
-            {img && <img src={img} width={WIDTH} height={h} alt="" draggable={false} />}
-            {shownRows.map((y, i) => {
-              const edge = i === 0 || i === shownRows.length - 1;
-              return (
-                <div
-                  key={`r${i}`}
-                  class={`row-line ${edge ? "edge" : ""}`}
-                  style={{ top: (y - area[1]) * scale }}
-                  onPointerDown={(e) => drag(i, e, true)}
-                  onDblClick={(e) => {
-                    e.stopPropagation();
-                    if (!edge && shownRows.length > 2) changeRows(shownRows.filter((_, k) => k !== i));
-                  }}
-                  title={edge ? "Top or bottom of the table" : "Drag to move · double-click to remove (joins the rows)"}
-                />
-              );
-            })}
-            {cols.map((x, i) => (
+    <ToolFrame id="table" title="Table" class="table-dialog">
+      <span class="hint">
+        Drag the blue lines to where the columns split, and the orange ones to where the rows do. Click the picture to add a
+        column line, Shift+click to add a row line; double-click a line to remove it.
+      </span>
+      <div class="table-pic-wrap">
+        <div
+          ref={pic}
+          class="table-pic"
+          style={{ width: WIDTH, height: h }}
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest(".col-line, .row-line")) return;
+            if (e.shiftKey) changeRows([...shownRows, toPageY(e.clientY)]);
+            else change([...cols, toPage(e.clientX)]);
+          }}
+        >
+          {img && <img src={img} width={WIDTH} height={h} alt="" draggable={false} />}
+          {shownRows.map((y, i) => {
+            const edge = i === 0 || i === shownRows.length - 1;
+            return (
               <div
-                key={i}
-                class={`col-line ${i === 0 || i === cols.length - 1 ? "edge" : ""}`}
-                style={{ left: (x - area[0]) * scale }}
-                onPointerDown={(e) => drag(i, e)}
+                key={`r${i}`}
+                class={`row-line ${edge ? "edge" : ""}`}
+                style={{ top: (y - area[1]) * scale }}
+                onPointerDown={(e) => drag(i, e, true)}
                 onDblClick={(e) => {
                   e.stopPropagation();
-                  if (cols.length > 2 && i > 0 && i < cols.length - 1) change(cols.filter((_, k) => k !== i));
+                  if (!edge && shownRows.length > 2) changeRows(shownRows.filter((_, k) => k !== i));
                 }}
-                title={i === 0 || i === cols.length - 1 ? "Edge of the table" : "Drag to move · double-click to remove"}
+                title={edge ? "Top or bottom of the table" : "Drag to move · double-click to remove (joins the rows)"}
               />
-            ))}
-          </div>
-        </div>
-        <div class="table-preview">
-          {busy && !table ? (
-            <span class="hint">Reading the table…</span>
-          ) : !grid.length ? (
-            <span class="hint">No table text found here. Scans need text recognition first (OCR).</span>
-          ) : (
-            <table>
-              <tbody>
-                {grid.slice(0, 60).map((row, r) => (
-                  <tr key={r}>
-                    {row.map((cell, c) => (
-                      <td key={c} title={cell.s} colSpan={cell.cs > 1 ? cell.cs : undefined} class={cell.cs > 1 ? "span" : undefined}>
-                        {cell.s}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-        <span class="hint">
-          {grid.length ? `${grid.length} rows × ${(table?.xs.length ?? 1) - 1} columns${grid.length > 60 ? " (first 60 shown)" : ""}` : ""}
-        </span>
-        <label class="check-row">
-          <input type="checkbox" checked={join} onChange={(e) => setJoin((e.target as HTMLInputElement).checked)} /> Join heading lines into one row
-        </label>
-        <div class="row">
-          <button class="btn ghost" disabled={!initial && !edited.current} onClick={() => { edited.current = false; setRows(null); setTable(initial); setCols(initial?.xs ?? []); if (!initial) { setBusy(true); api.tableIn(docId, src, area, []).then((t) => { setTable(t); setCols(t?.xs ?? [area[0], area[2]]); }).finally(() => setBusy(false)); } }}>
-            Reset
-          </button>
-          <span style={{ flex: 1 }} />
-          <button class="btn" disabled={!grid.length} onClick={() => out && copyTable(out)}>
-            Copy table
-          </button>
-          <button class="btn" disabled={!grid.length} onClick={() => out && void saveTable(tab, view, out, "csv")}>
-            Save as CSV…
-          </button>
-          <button class="btn pri" disabled={!grid.length} onClick={() => out && void saveTable(tab, view, out, "xlsx")}>
-            Save as Excel…
-          </button>
+            );
+          })}
+          {cols.map((x, i) => (
+            <div
+              key={i}
+              class={`col-line ${i === 0 || i === cols.length - 1 ? "edge" : ""}`}
+              style={{ left: (x - area[0]) * scale }}
+              onPointerDown={(e) => drag(i, e)}
+              onDblClick={(e) => {
+                e.stopPropagation();
+                if (cols.length > 2 && i > 0 && i < cols.length - 1) change(cols.filter((_, k) => k !== i));
+              }}
+              title={i === 0 || i === cols.length - 1 ? "Edge of the table" : "Drag to move · double-click to remove"}
+            />
+          ))}
         </div>
       </div>
-    </div>
+      <div class="table-preview">
+        {busy && !table ? (
+          <span class="hint">Reading the table…</span>
+        ) : !grid.length ? (
+          <span class="hint">No table text found here. Scans need text recognition first (OCR).</span>
+        ) : (
+          <table>
+            <tbody>
+              {grid.slice(0, 60).map((row, r) => (
+                <tr key={r}>
+                  {row.map((cell, c) => (
+                    <td key={c} title={cell.s} colSpan={cell.cs > 1 ? cell.cs : undefined} class={cell.cs > 1 ? "span" : undefined}>
+                      {cell.s}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <span class="hint">
+        {grid.length ? `${grid.length} rows × ${(table?.xs.length ?? 1) - 1} columns${grid.length > 60 ? " (first 60 shown)" : ""}` : ""}
+      </span>
+      <label class="check-row">
+        <input type="checkbox" checked={join} onChange={(e) => setJoin((e.target as HTMLInputElement).checked)} /> Join heading lines into one row
+      </label>
+      <div class="row">
+        <button class="btn ghost" disabled={!initial && !edited.current} onClick={() => { edited.current = false; setRows(null); setTable(initial); setCols(initial?.xs ?? []); if (!initial) { setBusy(true); api.tableIn(docId, src, area, []).then((t) => { setTable(t); setCols(t?.xs ?? [area[0], area[2]]); }).finally(() => setBusy(false)); } }}>
+          Reset
+        </button>
+        <span style={{ flex: 1 }} />
+        <button class="btn" disabled={!grid.length} onClick={() => out && copyTable(out)}>
+          Copy table
+        </button>
+        <button class="btn" disabled={!grid.length} onClick={() => out && void saveTable(tab, view, out, "csv")}>
+          Save as CSV…
+        </button>
+        <button class="btn pri" disabled={!grid.length} onClick={() => out && void saveTable(tab, view, out, "xlsx")}>
+          Save as Excel…
+        </button>
+      </div>
+    </ToolFrame>
   );
 }

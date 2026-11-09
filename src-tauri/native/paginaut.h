@@ -241,6 +241,7 @@ int fo_widget_set(fo_ctx *c, fo_page *p, int num, const char *value);
 int fo_widget_toggle(fo_ctx *c, fo_page *p, int num);
 int fo_pdf_undo(fo_ctx *c, fo_doc *d, int redo);
 int fo_pdf_has_changes(fo_ctx *c, fo_doc *d);
+int fo_pdf_journal_pos(fo_ctx *c, fo_doc *d);
 int fo_pdf_reset_form(fo_ctx *c, fo_doc *d);
 int fo_pdf_bake(fo_ctx *c, fo_doc *d, int annots);
 

@@ -660,7 +660,7 @@ impl Engine {
                 if inner.doc.has_changes() {
                     inner.doc.save_copy(&tmp)?;
                 } else {
-                    std::fs::copy(d.path(), &tmp).map_err(|e| e.to_string())?;
+                    std::fs::copy(d.file(), &tmp).map_err(|e| e.to_string())?;
                 }
             } else {
                 self.save_parts(id, vec![Part { pages: order, path: tmp.clone() }], rot)?;

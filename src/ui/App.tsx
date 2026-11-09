@@ -73,8 +73,6 @@ export function App() {
             {compare.value && <CompareView active={activeKey.value === COMPARE} />}
             {!tab && activeKey.value !== COMPARE && <Home />}
             {tab && findOpen.value && <FindBar tab={tab} />}
-            {tab && <LayoutPanel tab={tab} />}
-            {tab && <PageSizePanel tab={tab} />}
             {tab && tab.mode.value === "pages" && selectedAnnot.value?.tab !== tab && (
               <div class="topbars">
                 <SigBar tab={tab} />
@@ -100,24 +98,27 @@ export function App() {
         <ConvertPane />
         <MarkdownPane />
         <ReadingPane />
+        {/* Tools in the pane on the right (toolpanes.ts): one at a time. */}
+        <PageSizePanel />
+        <LayoutPanel />
+        <InsertDialog />
+        <MergeDialog />
+        <SplitDialog />
+        <HeaderDialog />
+        <WatermarkDialog />
+        <LabelsDialog />
+        <OcrDialog />
+        <TableDialog />
         <Rail />
       </div>
       <StatusBar />
       <Palette />
       <AskDialog />
-      <OcrDialog />
       <CompareDialog />
       <SettingsDialog />
-      <InsertDialog />
-      <MergeDialog />
-      <SplitDialog />
-      <HeaderDialog />
-      <WatermarkDialog />
       <PropertiesDialog />
-      <LabelsDialog />
       <SecureDialog />
       <PicturesDialog />
-      <TableDialog />
       <PageDragGhost />
       <TabDragGhost />
       <TabSwitcher />

@@ -125,6 +125,9 @@ pub struct Doc {
     file_pages: AtomicUsize,
     /// Office file this PDF was made from, until it's saved as a PDF of its own.
     converted: RwLock<Option<Converted>>,
+    /// The file the open document reads when it isn't `path`: a save wrote everything into a copy beside the file
+    /// but couldn't put it in the file's place, and that copy is kept (with the changes) until a save succeeds.
+    backing: Mutex<Option<String>>,
 }
 
 /// Where a background job reads pages from: a private copy of the file (fast,
@@ -217,6 +220,10 @@ pub struct DocInfo {
     /// An EPUB made from a PDF, shown as the PDF it was made from (pdfhtml.rs; `converted` says from
     /// which file); `save_repaired` makes a flowing EPUB of it.
     pub repaired: bool,
+    /// Set by a save that wrote everything but couldn't put it in the file's place: why. The document shown is the
+    /// saved copy (page edits applied, nothing to undo), and its changes still have to be saved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_saved: Option<String>,
 }
 
 /// For the shelf's cover: an EPUB made from a PDF (pdfhtml.rs) as a PDF of its first page alone, with its title,
@@ -568,7 +575,7 @@ impl Doc {
         PRIVATE_DOCS.with(|m| {
             let mut m = m.borrow_mut();
             if !m.contains_key(&self.id) {
-                let d = Document::open_private(&self.path())?;
+                let d = Document::open_private(&self.file())?;
                 if d.needs_password() {
                     if let Some(pw) = self.password.lock().as_deref() {
                         d.authenticate(pw);
@@ -585,13 +592,18 @@ impl Doc {
         self.path.read().clone()
     }
 
+    /// The file the open document reads: its path, or the copy a failed save kept (see `backing`).
+    pub fn file(&self) -> String {
+        self.backing.lock().clone().unwrap_or_else(|| self.path())
+    }
+
     /// A copy of the document for the calling thread alone (its private MuPDF context: nothing shared with other
     /// threads), or None when its pages were changed in memory and only this document has them.
     pub fn private_copy(&self) -> Result<Option<Document>, String> {
         if self.content_edited.load(Ordering::Acquire) {
             return Ok(None);
         }
-        let d = Document::open_private(&self.path())?;
+        let d = Document::open_private(&self.file())?;
         if d.needs_password() {
             if let Some(pw) = self.password.lock().as_deref() {
                 d.authenticate(pw);
@@ -725,6 +737,40 @@ impl Doc {
             self.edited();
         }
         Ok(FormChange { accepted: step.is_some(), changed: inner.doc.has_changes() })
+    }
+
+    /// After a save that failed: the save's own changes (page order, rotations…) are taken back, so the document is
+    /// as it was before (`start`: where its journal stood). Without a journal, the file is opened again (the app
+    /// keeps page order and rotations itself, and there were no other changes).
+    fn after_failed_save(&self, start: Option<usize>) -> Result<(), String> {
+        let mut inner = self.inner.lock();
+        inner.pages.clear();
+        match start {
+            Some(start) => {
+                while inner.doc.journal_pos().is_some_and(|p| p > start) {
+                    if inner.doc.undo(false)?.is_none() {
+                        break;
+                    }
+                }
+                self.resync_pages(&mut inner)?;
+                inner.pages.clear();
+                drop(inner);
+                self.bounds.write().iter_mut().for_each(|b| *b = None);
+                self.edited();
+                Ok(())
+            }
+            None => {
+                let fresh = Document::open(&self.file())?;
+                if fresh.needs_password() {
+                    if let Some(pw) = self.password.lock().as_deref() {
+                        fresh.authenticate(pw);
+                    }
+                }
+                inner.doc = fresh;
+                drop(inner);
+                self.prepare()
+            }
+        }
     }
 
     /// Picks up a changed page count (pages inserted, or that undone).
@@ -951,6 +997,14 @@ impl Doc {
     pub fn area_text(&self, index: usize, area: [f32; 4]) -> Result<String, String> {
         let b = self.bounds(index)?;
         self.list(index, 1)?.area_text(&b, &area)
+    }
+
+    /// The words on page `index` in reading order, with their boxes (JSON, see fo_text_words_json).
+    pub fn words_json(&self, index: usize) -> Result<String, String> {
+        let b = self.bounds(index)?;
+        let t = self.text(index)?;
+        let json = t.lock().words(&b)?;
+        Ok(json)
     }
 
     /// The text in each of several areas of page `index`.
@@ -1458,6 +1512,7 @@ impl Doc {
             first_size: [612.0, 792.0],
             converted: self.converted.read().clone(),
             repaired,
+            not_saved: None,
         };
         if needs_password {
             return info;
@@ -1603,6 +1658,7 @@ impl Engine {
             content_edited: AtomicBool::new(true),
             file_pages: AtomicUsize::new(0),
             converted: RwLock::new(None),
+            backing: Mutex::new(None),
         });
         d.prepare()?;
         self.docs.write().insert(id, d.clone());
@@ -1628,6 +1684,7 @@ impl Engine {
             content_edited: AtomicBool::new(false),
             file_pages: AtomicUsize::new(0),
             converted: RwLock::new(converted),
+            backing: Mutex::new(None),
         });
         let locked = d.inner.lock().doc.needs_password();
         if !locked {
@@ -1664,6 +1721,13 @@ impl Engine {
             d.lists.lock().clear();
             d.texts.lock().clear();
             d.inner.lock().pages.clear();
+            // A copy a failed save kept: its changes weren't wanted (closed without saving).
+            if let Some(kept) = d.backing.lock().take() {
+                if let Ok(doc) = Document::new_pdf() {
+                    d.inner.lock().doc = doc;
+                }
+                let _ = std::fs::remove_file(kept);
+            }
         }
         PRIVATE_ALLOWED.write().remove(&id);
         self.pool.maintain();
@@ -1738,75 +1802,141 @@ impl Engine {
         if in_place && d.converted.read().is_some() {
             return Err("This PDF was made from an Office file. Use Save as to keep it.".into());
         }
-        let tmp = format!("{cur}.paginaut-tmp");
-        {
-            let mut inner = d.inner.lock();
-            inner.pages.clear();
-            d.lists.lock().clear();
-            d.texts.lock().clear();
-            let res = (|| -> Result<(), String> {
-                if inner.doc.is_pdf() {
-                    // Pages added in memory and then removed again would still be
-                    // appended to the file; a full rewrite leaves them out.
-                    let unused = (d.file_pages.load(Ordering::Relaxed)..d.page_count()).any(|i| !order.contains(&i));
-                    inner.doc.apply_page_edits(&rot, &order, d.file_pages.load(Ordering::Relaxed))?;
-                    // A damaged file's page tree is rebuilt, or the saved file can't be opened again.
-                    inner.doc.fix_page_tree()?;
-                    if opts.any() {
-                        match opts.compress {
-                            Some(1) => inner.doc.rewrite_images(150, 70, false)?,
-                            Some(2) => inner.doc.rewrite_images(100, 55, true)?,
-                            _ => {}
-                        }
-                        let encrypt = opts.protect.as_ref().map(|p| if p.remove { None } else { Some((p.owner.as_str(), p.user.as_str(), p.perms)) });
-                        let compact = opts.compress.is_some();
-                        return if in_place {
-                            inner.doc.save_pdf_with(&tmp, encrypt, compact)?;
-                            inner.doc = Document::open(&tmp)?;
-                            copy_with_retry(&tmp, &cur)
-                        } else {
-                            inner.doc.save_pdf_with(&out, encrypt, compact)
-                        };
-                    }
-                    if in_place && inner.doc.can_save_incrementally() && !unused {
-                        inner.doc.save_pdf(&cur, true)
-                    } else if in_place {
-                        inner.doc.save_pdf(&tmp, false)?;
-                        // Switch to the new file so ours no longer holds the original open.
-                        inner.doc = Document::open(&tmp)?;
-                        copy_with_retry(&tmp, &cur)
-                    } else {
-                        inner.doc.save_pdf(&out, false)
-                    }
-                } else if in_place {
-                    Err("This kind of file can't be saved in place. Use Save as to make a PDF.".into())
-                } else {
-                    inner.doc.convert_to_pdf(&out, &order, &rot)
+        let backing = d.backing.lock().clone();
+        // Never the file a kept copy is (the open document reads it).
+        let tmp = [format!("{cur}.paginaut-tmp"), format!("{cur}.paginaut-tmp2")].into_iter().find(|t| backing.as_deref() != Some(t.as_str())).unwrap_or_default();
+        // The passwords that open the saved file (new ones when the protection changes; the owner's keeps it changeable).
+        let new_pw = match &opts.protect {
+            Some(p) if p.remove => None,
+            Some(p) => Some(if !p.owner.is_empty() { p.owner.clone() } else { p.user.clone() }).filter(|pw| !pw.is_empty()),
+            None => d.password.lock().clone(),
+        };
+        let open_saved = |path: &str| -> Result<Document, String> {
+            let doc = Document::open(path)?;
+            if doc.needs_password() {
+                if let Some(pw) = new_pw.as_deref() {
+                    doc.authenticate(pw);
+                }
+            }
+            Ok(doc)
+        };
+        let mut inner = d.inner.lock();
+        inner.pages.clear();
+        d.lists.lock().clear();
+        d.texts.lock().clear();
+        if !inner.doc.is_pdf() {
+            if in_place {
+                return Err("This kind of file can't be saved in place. Use Save as to make a PDF.".into());
+            }
+            // Drawn into a new PDF: the document in memory isn't changed, so a failure leaves it as it was.
+            write_beside(&out, |t| inner.doc.convert_to_pdf(t, &order, &rot))?;
+        } else {
+            // Page order and rotations, a rebuilt page tree and smaller pictures are put into the document itself before
+            // it's written: as one step of the undo journal, which is taken back if writing fails, so the document is
+            // as it was before Save (unsaved changes and their undo steps kept). Without a journal (no edits but page
+            // order and rotations, which the app keeps) the file is simply opened again.
+            let start = inner.doc.journal_pos();
+            let file_pages = d.file_pages.load(Ordering::Relaxed);
+            // Pages added in memory and then removed again would still be appended to the file; a full rewrite leaves them out.
+            let unused = (file_pages..d.page_count()).any(|i| !order.contains(&i));
+            inner.doc.begin_op("Save");
+            let prep = (|| -> Result<(), String> {
+                inner.doc.apply_page_edits(&rot, &order, file_pages)?;
+                // A damaged file's page tree is rebuilt, or the saved file can't be opened again.
+                inner.doc.fix_page_tree()?;
+                match opts.compress {
+                    Some(1) => inner.doc.rewrite_images(150, 70, false),
+                    Some(2) => inner.doc.rewrite_images(100, 55, true),
+                    _ => Ok(()),
                 }
             })();
-            // Reopen from disk: on success the saved file, on failure the untouched original.
-            let reopen = if res.is_ok() { out.clone() } else { cur.clone() };
-            if res.is_ok() {
-                if let Some(p) = &opts.protect {
-                    // The new passwords open it from now on (the owner's keeps it changeable).
-                    let pw = if p.remove { "" } else if !p.owner.is_empty() { &p.owner } else { &p.user };
-                    *d.password.lock() = (!pw.is_empty()).then(|| pw.to_string());
-                }
-            }
-            let fresh = Document::open(&reopen)?;
-            if fresh.needs_password() {
-                if let Some(pw) = d.password.lock().as_deref() {
-                    fresh.authenticate(pw);
-                }
-            }
-            inner.doc = fresh;
-            drop(inner);
-            // The temporary copy (repaired files only) is closed now and can go.
-            let _ = std::fs::remove_file(&tmp);
-            if let Err(e) = res {
-                d.prepare()?;
+            if let Err(e) = prep {
+                inner.doc.abandon_op();
+                drop(inner);
+                d.after_failed_save(start)?;
                 return Err(e);
             }
+            inner.doc.end_op();
+            let encrypt = opts.protect.as_ref().map(|p| if p.remove { None } else { Some((p.owner.as_str(), p.user.as_str(), p.perms)) });
+            let compact = opts.compress.is_some();
+            // A full write is never made from the open document itself: MuPDF tidies the document it writes (drops unused
+            // objects, renumbers them when compacting, marks everything saved), which a failed save couldn't take back. A
+            // plain copy goes to a temporary file first, and the full write is made from that, opened on its own.
+            let pw = d.password.lock().clone();
+            let write = |doc: &Document, path: &str| -> Result<(), String> {
+                let stage = temp_path(id, "save");
+                let res = doc.save_copy(&stage).and_then(|_| {
+                    let s = Document::open(&stage)?;
+                    if s.needs_password() {
+                        if let Some(pw) = pw.as_deref() {
+                            s.authenticate(pw);
+                        }
+                    }
+                    if opts.any() { s.save_pdf_with(path, encrypt, compact) } else { s.save_pdf(path, false) }
+                });
+                let _ = std::fs::remove_file(&stage);
+                res
+            };
+            let res = if !in_place {
+                write_beside(&out, |t| write(&inner.doc, t))
+            } else if !opts.any() && backing.is_none() && !unused && inner.doc.can_save_incrementally() {
+                // Checked first (another program can hold the file): MuPDF's own attempt, once started, leaves the
+                // document in a state the undo journal doesn't fully take back.
+                writable(&cur).and_then(|_| inner.doc.save_pdf(&cur, true))
+            } else {
+                // Written beside the file, then copied over it. The file must be writable first (another program can hold
+                // it), since the copy is made after the open document has moved over to the new file.
+                let ready = writable(&cur)
+                    .and_then(|_| write(&inner.doc, &tmp))
+                    .and_then(|_| open_saved(&tmp));
+                match ready {
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&tmp);
+                        Err(e)
+                    }
+                    Ok(saved) => {
+                        // From here the open document is the saved copy (and the original is no longer held open).
+                        inner.doc = saved;
+                        if let Err(e) = copy_with_retry(&tmp, &cur) {
+                            // Everything is in the copy beside the file: kept, and the document goes on from it.
+                            drop(inner);
+                            let old = d.backing.lock().replace(tmp.clone());
+                            if let Some(old) = old.filter(|o| *o != tmp) {
+                                let _ = std::fs::remove_file(old);
+                            }
+                            if opts.protect.is_some() {
+                                *d.password.lock() = new_pw.clone();
+                            }
+                            d.content_edited.store(true, Ordering::Release);
+                            d.prepare()?;
+                            let mut info = d.info();
+                            info.not_saved = Some(format!(
+                                "{} couldn't be replaced ({e}). Your changes are kept, in a copy beside it ({}) until a save works: save again.",
+                                file_name(&cur),
+                                file_name(&tmp)
+                            ));
+                            return Ok(info);
+                        }
+                        Ok(())
+                    }
+                }
+            };
+            if let Err(e) = res {
+                drop(inner);
+                d.after_failed_save(start)?;
+                return Err(e);
+            }
+        }
+        // Saved: the document is opened again from the saved file, so what's shown is what was saved.
+        if opts.protect.is_some() {
+            *d.password.lock() = new_pw.clone();
+        }
+        inner.doc = open_saved(&out)?;
+        drop(inner);
+        // The temporary copy and a kept one are closed now and can go.
+        let _ = std::fs::remove_file(&tmp);
+        if let Some(old) = d.backing.lock().take() {
+            let _ = std::fs::remove_file(old);
         }
         *d.path.write() = out;
         *d.converted.write() = None;
@@ -1841,7 +1971,7 @@ impl Engine {
             if !inner.doc.is_pdf() {
                 return Err("Only PDFs can be signed. Save this file as a PDF first (Save as).".into());
             }
-            if inner.doc.has_changes() {
+            if inner.doc.has_changes() || d.backing.lock().is_some() {
                 return Err("Save your changes first: a signature covers the document as it is saved.".into());
             }
             if !inner.doc.can_save_incrementally() {
@@ -1958,7 +2088,7 @@ impl Engine {
                 None
             }
         };
-        let path = copy.clone().unwrap_or_else(|| s.path());
+        let path = copy.clone().unwrap_or_else(|| s.file());
         let res = self.insert_pages(id, vec![InsertSource { path, pages: Some(pages), password }], None);
         if let Some(tmp) = copy {
             let _ = std::fs::remove_file(tmp);
@@ -1990,7 +2120,7 @@ impl Engine {
                 None
             }
         };
-        let copy = temp.clone().unwrap_or_else(|| d.path());
+        let copy = temp.clone().unwrap_or_else(|| d.file());
         let file_pages = d.file_pages.load(Ordering::Relaxed);
         let res = parts
             .iter()
@@ -2435,6 +2565,11 @@ fn same_file(a: &str, b: &str) -> bool {
             norm(a) == norm(b)
         }
     }
+}
+
+/// The file can be written now (no other program holds it).
+fn writable(path: &str) -> Result<(), String> {
+    std::fs::OpenOptions::new().write(true).open(path).map(drop).map_err(|e| format!("Couldn't write {}: {e}", file_name(path)))
 }
 
 /// Writes a file with `write` into a temporary file beside `target`, then puts it in its place, so a failure never

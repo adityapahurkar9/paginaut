@@ -253,6 +253,10 @@ svg { display: block; flex-shrink: 0; }
 .mark-hit { position: absolute; background: var(--hit); mix-blend-mode: multiply; border-radius: 2px; }
 .mark-hit.active { background: var(--hit-active); box-shadow: 0 0 0 2px rgba(255, 128, 0, 0.6); }
 .mark-sel { position: absolute; background: var(--sel); mix-blend-mode: multiply; }
+/* Read aloud on the pages: the paragraph being read, and the word being said. */
+.mark-read-para { position: absolute; background: color-mix(in srgb, var(--hit) 30%, transparent); mix-blend-mode: multiply; border-radius: 2px; }
+.mark-read-word { position: absolute; background: var(--hit-active); mix-blend-mode: multiply; border-radius: 2px; box-shadow: 0 0 0 1.5px var(--hit-active); }
+.night .mark-read-para, .night .mark-read-word { mix-blend-mode: screen; }
 .pg-link { position: absolute; pointer-events: auto; cursor: pointer; border-radius: 2px; }
 
 /* Rotate / delete buttons that appear when hovering a page. */
@@ -742,7 +746,7 @@ select.fw { appearance: none; -webkit-appearance: none; padding-right: 12px; bac
 .sidebar-inner .seg .segb { padding: 0 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------------------------------------------------------------- Sign pane */
-.signpane { flex: 0 0 320px; width: 320px; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--bd); min-height: 0; animation: fade 0.12s; }
+.signpane { flex: 0 0 360px; width: 360px; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--bd); min-height: 0; animation: fade 0.12s; }
 .signpane-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--bd2); }
 .signpane-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 14px 16px; }
 .pane-sec { padding: 10px 0 12px; border-bottom: 1px solid var(--bd2); display: flex; flex-direction: column; gap: 8px; }
@@ -856,7 +860,8 @@ select.fw { appearance: none; -webkit-appearance: none; padding-right: 12px; bac
 .crop-r { left: 100%; top: 50%; cursor: ew-resize; } .crop-br { left: 100%; top: 100%; cursor: nwse-resize; } .crop-b { left: 50%; top: 100%; cursor: ns-resize; }
 .crop-bl { left: 0; top: 100%; cursor: nesw-resize; } .crop-l { left: 0; top: 50%; cursor: ew-resize; }
 .stamp-dialog { width: 560px; }
-.stamp-boxes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.stamp-boxes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.stamp-box .inp { min-width: 0; width: 100%; box-sizing: border-box; }
 .stamp-box { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--tx3); }
 .stamp-dialog .check-row { font-size: 12.5px; gap: 6px; }
 .stamp-dialog .row { align-items: center; }
@@ -876,6 +881,7 @@ select.fw { appearance: none; -webkit-appearance: none; padding-right: 12px; bac
 .labels-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
 .labels-head, .labels-row { display: grid; grid-template-columns: 76px 1fr 90px 76px 28px; gap: 6px; align-items: center; }
 .labels-head { font-size: 12px; color: var(--tx3); }
+.toolpane .labels-head, .toolpane .labels-row { grid-template-columns: 52px 1fr 64px 52px 24px; }
 .labels-row .inp { min-width: 0; }
 
 /* Protect, reduce size, repair */
@@ -946,6 +952,25 @@ body.text-edit .pg { cursor: default; }
 .te-bar button:hover { background: var(--hover); }
 
 /* Redact */
+/* Tools in the pane on the right (toolpanes.ts, ui/ToolFrame.tsx): what were dialogs over the page. */
+/* Every pane on the right is one width (.signpane): a tool opened from Organize takes its place without the page moving. */
+.toolpane .signpane-head { gap: 6px; }
+.toolpane .signpane-head strong { flex: 1; min-width: 0; }
+.toolpane-back { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 0 8px 0 4px; border: 0; border-radius: 6px; background: none; color: var(--acc); font: inherit; font-size: 12.5px; cursor: pointer; flex: none; }
+.toolpane-back:hover { background: var(--acc-soft); }
+.toolpane .toolpane-body { width: auto; max-width: none; display: flex; flex-direction: column; gap: 14px; padding: 12px 14px 0; }
+.toolpane .toolpane-body > .row { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: 8px; margin: auto -14px 0; padding: 10px 14px; background: var(--surface); border-top: 1px solid var(--bd2); }
+.toolpane .muted { color: var(--tx2); }
+/* Nothing in a tool is wider than the pane: fields shrink, rows wrap. */
+.toolpane .toolpane-body { overflow-x: hidden; }
+.toolpane .inp { min-width: 0; }
+.toolpane .ps-line { flex-wrap: wrap; }
+/* A file in Insert and Merge: its name gets the row, the pages to take go on a line of their own. */
+.toolpane .ins-file-row { flex-wrap: wrap; row-gap: 6px; }
+.toolpane .ins-file-row .ins-range { order: 10; flex: 1 0 100% !important; width: auto; }
+.toolpane .ps-panel { max-height: none; overflow: visible; gap: 12px; }
+.toolpane .lp-tools .tb { flex: 1 0 auto; }
+.toolpane .seg.nowrap { flex-wrap: wrap; }
 .redactpane .hint { font-size: 12px; color: var(--tx3); line-height: 1.35; }
 .redactpane .check-row { font-size: 13px; font-weight: 600; }
 .redactpane .ps-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

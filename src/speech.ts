@@ -199,6 +199,116 @@ function piecesOf(flow: Flow): Piece[] {
   return out;
 }
 
+// ---------------------------------------------------------------- where the text is on the page
+
+/** A page's word: text, box (relative to the page origin), flags. */
+type PageWord = [string, number, number, number, number, number];
+const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+interface Tok {
+  n: string;
+  start: number;
+  end: number;
+}
+/** A block's words (whitespace-separated, as the page's are), with where they are in its text. */
+function tokens(text: string): Tok[] {
+  const out: Tok[] = [];
+  for (const m of text.matchAll(/\S+/g)) {
+    const n = norm(m[0]);
+    if (n) out.push({ n, start: m.index!, end: m.index! + m[0].length });
+  }
+  return out;
+}
+interface PageLayout {
+  src: number;
+  words: PageWord[];
+  norm: string[];
+  /** Each block of the page: where its words start among the page's, and its words. */
+  spans: Map<number, { start: number; toks: Tok[] }>;
+}
+const layouts = new WeakMap<Flow, Map<number, Promise<PageLayout>>>();
+
+/** Where each of displayed page `view`'s blocks is among the page's words (found by their first words, in order). */
+function pageLayout(tab: Tab, flow: Flow, view: number): Promise<PageLayout> {
+  let byView = layouts.get(flow);
+  if (!byView) layouts.set(flow, (byView = new Map()));
+  let p = byView.get(view);
+  if (!p) {
+    const src = tab.edits.value?.order[view] ?? view;
+    p = api.pageWords(tab.info.value!.docId, src).then((json) => {
+      const words = (JSON.parse(json) as PageWord[]).filter((w) => norm(w[0]));
+      const nw = words.map((w) => norm(w[0]));
+      const spans = new Map<number, { start: number; toks: Tok[] }>();
+      let from = 0;
+      const end = flow.pageStart[view + 1] ?? flow.blocks.length;
+      for (let b = flow.pageStart[view] ?? flow.blocks.length; b < end; b++) {
+        const blk = flow.blocks[b];
+        if (blk.k === "img") continue;
+        const toks = tokens(textOf(blk));
+        if (!toks.length) continue;
+        const at = (j: number) => toks.slice(0, 3).every((t, i) => nw[j + i] === t.n);
+        let start = -1;
+        for (let j = from; j < nw.length && start < 0; j++) if (at(j)) start = j;
+        for (let j = 0; j < from && start < 0; j++) if (at(j)) start = j;
+        if (start < 0) continue;
+        spans.set(b, { start, toks });
+        from = start + toks.length;
+      }
+      return { src, words, norm: nw, spans };
+    });
+    byView.set(view, p);
+  }
+  return p;
+}
+
+/** The page word for the block's word expected at `i` (lines broken with hyphens can shift it a little). */
+function wordAt(nw: string[], i: number, n: string): number {
+  for (let d = 0; d <= 8; d++) {
+    if (nw[i + d] === n) return i + d;
+    if (d && nw[i - d] === n) return i - d;
+  }
+  return -1;
+}
+
+const quadOf = (w: PageWord) => [w[1], w[2], w[3], w[2], w[1], w[4], w[3], w[4]];
+
+/** Words joined into one box per line. */
+function lines(words: PageWord[]): number[][] {
+  const out: [number, number, number, number][] = [];
+  for (const w of words) {
+    const last = out[out.length - 1];
+    const h = w[4] - w[2];
+    if (last && Math.abs(last[1] - w[2]) < h * 0.5 && w[1] >= last[0] - h) {
+      last[0] = Math.min(last[0], w[1]);
+      last[1] = Math.min(last[1], w[2]);
+      last[2] = Math.max(last[2], w[3]);
+      last[3] = Math.max(last[3], w[4]);
+    } else out.push([w[1], w[2], w[3], w[4]]);
+  }
+  return out.map(([x0, y0, x1, y1]) => [x0, y0, x1, y0, x0, y1, x1, y1]);
+}
+
+/** The block and the place in its text of the word at point `pt` of displayed page `view` (null with no word there). */
+async function wordAtPoint(tab: Tab, flow: Flow, view: number, pt: [number, number]): Promise<{ b: number; off: number } | null> {
+  const lay = await pageLayout(tab, flow, view);
+  // The word under the point, else the nearest on its line, else the nearest.
+  let best = -1, bestD = Infinity;
+  lay.words.forEach((w, i) => {
+    const dx = pt[0] < w[1] ? w[1] - pt[0] : pt[0] > w[3] ? pt[0] - w[3] : 0;
+    const dy = pt[1] < w[2] ? w[2] - pt[1] : pt[1] > w[4] ? pt[1] - w[4] : 0;
+    const d = dy * 4 + dx;
+    if (d < bestD) (bestD = d), (best = i);
+  });
+  if (best < 0) return null;
+  let found: { b: number; off: number } | null = null;
+  for (const [b, s] of lay.spans) {
+    if (best < s.start || best >= s.start + s.toks.length + 8) continue;
+    const k = Math.max(0, Math.min(s.toks.length - 1, best - s.start));
+    found = { b, off: s.toks[k].start };
+    if (best < s.start + s.toks.length) break;
+  }
+  return found;
+}
+
 // ---------------------------------------------------------------- playing
 
 interface Word {
@@ -316,6 +426,7 @@ class Reader {
 
   /** Marks the word (and its paragraph) and keeps it in view, unless you've just moved the view yourself. */
   private mark(b: number, from: number, to: number) {
+    this.markGen++;
     const tab = this.tab;
     const view = tab.reflowView;
     const idle = performance.now() - lastUserMove > 4000;
@@ -325,16 +436,34 @@ class Reader {
       this.marked = [...view.el.querySelectorAll<HTMLElement>(`[data-b="${b}"]`)];
       for (const el of this.marked) el.classList.add("rf-reading");
       paintRange("rf-speak", to > from ? rangeOf(view.el, b, from, to) : null);
-    } else if (idle && tab.viewer && activeTab.value === tab) {
+    } else if (tab.viewer) {
+      // On the pages: the paragraph and the word marked where they are on the page.
       const page = this.flow.blocks[b].page;
-      if (page !== tab.page.value) tab.viewer.goToPage(page);
+      if (idle && activeTab.value === tab && page !== tab.page.value) tab.viewer.goToPage(page);
+      void this.markOnPage(b, from, to);
     }
+  }
+
+  private markGen = 0;
+  private async markOnPage(b: number, from: number, to: number) {
+    const gen = this.markGen;
+    const viewer = this.tab.viewer;
+    const lay = await pageLayout(this.tab, this.flow, this.flow.blocks[b].page).catch(() => null);
+    if (gen !== this.markGen || !viewer || viewer !== this.tab.viewer) return;
+    const span = lay?.spans.get(b);
+    if (!lay || !span) return viewer.setSpeechMark(null);
+    const k = to > from ? span.toks.findIndex((t) => t.end > from) : -1;
+    const w = k >= 0 ? wordAt(lay.norm, span.start + k, span.toks[k].n) : -1;
+    const para = lines(lay.words.slice(span.start, span.start + span.toks.length));
+    viewer.setSpeechMark({ src: lay.src, word: w >= 0 ? quadOf(lay.words[w]) : null, para });
   }
 
   private unmark() {
     for (const el of this.marked) el.classList.remove("rf-reading");
     this.marked = [];
     paintRange("rf-speak", null);
+    this.markGen++;
+    this.tab.viewer?.setSpeechMark(null);
   }
 
   private fail(msg: string) {
@@ -397,8 +526,16 @@ class Reader {
     void clip.then((x) => again(c.from + x.words[this.word].start), () => again(c.from));
   }
 
+  /** Reads from character `off` of block `b`: a piece starting before it is cut there, so reading starts at that word. */
   from(b: number, off = 0) {
-    void this.play(this.indexOf(b, off));
+    const i = this.indexOf(b, off);
+    const p = this.pieces[i];
+    if (p && p.b === b && off > p.from && off < p.to) {
+      this.drop();
+      this.pieces.splice(i, 1, { ...p, to: off }, { ...p, from: off });
+      return void this.play(i + 1);
+    }
+    void this.play(i);
   }
 
   destroy() {
@@ -431,8 +568,8 @@ function startOf(tab: Tab, flow: Flow): { b: number; off: number } {
   return { b: flow.pageStart[tab.page.value] ?? 0, off: 0 };
 }
 
-/** Starts reading the tab aloud (from `b` if given). */
-export async function readAloud(tab: Tab, b?: number) {
+/** Starts reading the tab aloud (from block `b`, at character `off` of it, if given). */
+export async function readAloud(tab: Tab, b?: number, off = 0, at?: { view: number; pt: [number, number] }) {
   if (tab.status.value !== "ready" || !tab.info.value) return;
   stopReading();
   speaking.value = { tab, block: -1, paused: false, loading: true };
@@ -453,9 +590,14 @@ export async function readAloud(tab: Tab, b?: number) {
     return;
   }
   reader = new Reader(tab, flow, pieces);
-  const at = b !== undefined ? { b, off: 0 } : startOf(tab, flow);
-  reader.from(at.b, at.off);
+  const point = at ? await wordAtPoint(tab, flow, at.view, at.pt).catch(() => null) : null;
+  if (reader?.tab !== tab || speaking.value?.tab !== tab) return;
+  const start = point ?? (b !== undefined ? { b, off } : startOf(tab, flow));
+  reader.from(start.b, start.off);
 }
+
+/** Read aloud from the word at a point on a page (the page's right-click menu). */
+export const readAloudFrom = (tab: Tab, view: number, pt: [number, number]) => readAloud(tab, undefined, 0, { view, pt });
 
 export function stopReading() {
   reader?.destroy();

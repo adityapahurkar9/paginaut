@@ -909,7 +909,16 @@ Every bug from the 2026-11-05 code review and the three Redact reports, fixed 20
       dragged; dragging over text that's part of the picture says why a box was marked
 - [x] Android: a file sent from another app while Paginaut is closed is read as soon as Android hands it over, and
       a "not found" from the sending app is asked again once (to check on a phone with Gmail and WhatsApp)
-- [ ] Open: a save that fails half-way drops the unsaved changes from the engine (BUGS.md)
+- [x] A save that fails keeps every unsaved change and its undo steps (it used to go back to the file on disk)
+- [x] Tools that were dialogs over the page open in the pane on the right, the page in view beside them: crop and
+      resize, page numbers / headers / footers, watermark, page labels, insert pages, merge, split, recognize text,
+      tables, and Read mode's Fix layout (src/toolpanes.ts, ui/ToolFrame.tsx). One tool at a time; opened from
+      Organize (or Reading) it has a "‹ Organize" link back and returns there when done; Esc does the same, ✕ closes
+      the pane. Every right pane is one width (360 px), so nothing moves when a tool opens. Still dialogs: Document
+      properties, Protect / Reduce size / Repair, Save all pictures, Compare's file choice, Settings
+- [x] Read aloud: on the pages (not only in Read mode) the paragraph being read is tinted and the word being said
+      marked (the page's words from the engine, page_words, matched to the text being read); "Read aloud from
+      here" on a page's right-click menu starts at the word clicked; the button moved from View to Home
 
 ## 0.9.10 (Windows, Linux): PDF/A-1b, Office files to PDF/A, signing and saving PDF/A files
 - [x] PDF/A-1b; Office files straight to PDF/A; signing keeps a PDF/A file PDF/A; saving changes to one warns and can

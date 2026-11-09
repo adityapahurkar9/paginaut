@@ -1677,6 +1677,15 @@ export class Viewer {
     pv.photos = layer;
   }
 
+  /** Read aloud on the pages: the paragraph being read (line boxes) and the word being said, on file page `src`. */
+  private speech: { src: number; word: number[] | null; para: number[][] } | null = null;
+
+  setSpeechMark(mark: { src: number; word: number[] | null; para: number[][] } | null) {
+    const before = this.speech?.src;
+    this.speech = mark;
+    for (const pv of this.mounted.values()) if (pv.spec.src === before || pv.spec.src === mark?.src) this.drawMarks(pv);
+  }
+
   private drawMarks(pv: PageView) {
     const spec = pv.spec;
     const boxes: HTMLElement[] = [];
@@ -1690,6 +1699,10 @@ export class Viewer {
       d.style.height = `${((y1 - y0) / spec.h) * 100}%`;
       boxes.push(d);
     };
+    if (this.speech?.src === spec.src) {
+      for (const q of this.speech.para) box(q, "mark-read-para");
+      if (this.speech.word) box(this.speech.word, "mark-read-word");
+    }
     const hits = this.search.get(spec.src);
     if (hits) {
       hits.forEach((hit, hi) => {

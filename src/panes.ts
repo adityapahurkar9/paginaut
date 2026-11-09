@@ -8,8 +8,8 @@ export type PaneId = "organize" | "sign" | "redact" | "convert" | "markdown" | "
 /** Every pane, in the side bar's default order. */
 export const PANE_IDS: PaneId[] = ["organize", "sign", "redact", "convert", "markdown", "reading"];
 
-/** The pane open on the right, if any. */
-export const pane = signal<PaneId | null>(null);
+/** The pane open on the right, if any: one of the side bar's, or "tool" (a tool that used to be a dialog: toolpanes.ts). */
+export const pane = signal<PaneId | "tool" | null>(null);
 
 export function openPane(id: PaneId) {
   pane.value = id;

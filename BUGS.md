@@ -5,15 +5,26 @@ the release that carries it in ROADMAP.md.
 
 ## Open
 
-### Found while fixing the code review (2026-11-09, Windows and Linux)
+(none)
 
-- [ ] A save that fails after it started writing (disk full, the target locked by another program) throws away every
+## Fixed
+
+### Found while fixing the code review (2026-11-09, Windows and Linux; fixed the same day, next release 0.9.11)
+
+- [x] A save that fails after it started writing (disk full, the target locked by another program) throws away every
       unsaved change in the engine: save_with reopens the file from disk on failure, because the page order and
       rotations were already applied to the document in memory. The tab still says it has changes and its Undo
       steps point at nothing; what's shown is the file as it was last saved. Needs the document kept as it was
       (apply page edits to a copy, or only when the save can't fail any more). (src-tauri/src/engine/mod.rs, save_with)
-
-## Fixed
+      Fixed: what the save changes in the document (page order and rotations, the page tree, smaller pictures) is one
+      step of the undo journal, taken back when writing fails, so the document and its undo steps are as before.
+      Full writes are made from a copy of the document opened on its own (MuPDF's full write tidies the document it
+      writes, which couldn't be taken back), Save as writes beside the target first, and an in-place save checks
+      the file can be written before starting. If the file can't be replaced at the very end, the saved copy beside
+      it is kept and the document goes on from it ("your changes are kept… save again"). After a failed save the
+      tab may still count as changed after undoing everything (an extra "Save changes?" at worst), and Redo is
+      cleared. save_test: Save as into a folder, in-place saves on a file another program holds, then a save that
+      works
 
 ### Code review, Windows and Linux (found 2026-11-05; fixed 2026-11-09, next release 0.9.11)
 

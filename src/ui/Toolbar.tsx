@@ -287,6 +287,15 @@ function HomeTools({ tab }: { tab: Tab | null }) {
       />
       <TB icon={I(FileOutput, 17)} label="Save a copy" title="Save a copy as (Ctrl+Shift+S): this tab stays on this file" disabled={!tab || saving} onClick={() => tab && void P.save(tab, true)} />
       <TB icon={I(Printer, 17)} label="Print" title="Print (Ctrl+P)" disabled={tab?.status.value !== "ready" || !!printing.value} onClick={() => tab && void printTab(tab)} />
+      {/* Something you start, like printing (it was under View, among the buttons that change how pages look). */}
+      <TB
+        icon={I(AudioLines, 17)}
+        label={speaking.value ? "Stop reading" : "Read aloud"}
+        title={`Read the text aloud with a ${onLinux ? "" : "Windows or "}downloaded voice, from where you are or the text you selected (Ctrl+Shift+U). Or right-click a word: Read aloud from here`}
+        on={!!speaking.value}
+        disabled={!tab && !speaking.value}
+        onClick={() => toggleReadAloud(tab)}
+      />
       <div class="sep" />
       <IB icon={I(MousePointer2)} label="Select text" title="Select text (V)" on={tool.value === "select"} onClick={() => (tool.value = "select")} />
       <IB icon={I(Hand)} label="Hand tool" title="Hand (H) · or hold the middle button" on={tool.value === "hand"} onClick={() => (tool.value = "hand")} />
@@ -342,14 +351,6 @@ function ViewTools({ tab }: { tab: Tab | null }) {
         title="Read and Book modes' text: size, font, spacing, margins, paper (the Reading pane)"
         on={vm === "book" ? typeOpen.value : pane.value === "reading"}
         onClick={() => (vm === "book" ? (typeOpen.value = !typeOpen.value) : togglePane("reading"))}
-      />
-      <TB
-        icon={I(AudioLines, 17)}
-        label={speaking.value ? "Stop reading" : "Read aloud"}
-        title={`Read the text aloud with a ${onLinux ? "" : "Windows or "}downloaded voice, from where you are or the text you selected (Ctrl+Shift+U)`}
-        on={!!speaking.value}
-        disabled={!tab && !speaking.value}
-        onClick={() => toggleReadAloud(tab)}
       />
       {(vm === "read" || vm === "book") && (
         <TB icon={I(Wrench, 17)} label="Fix layout" title="See how the page is read, and correct columns, order, pictures and text" onClick={() => tab && void startLayoutEdit(tab)} />

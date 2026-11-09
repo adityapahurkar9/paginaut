@@ -1,15 +1,18 @@
-// Dialogs for page numbers / headers / footers / Bates numbers, and watermarks.
+// Page numbers / headers / footers / Bates numbers, and watermarks: tools in the pane on the right (toolpanes.ts).
 import { signal } from "@preact/signals";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "preact/hooks";
-import { X } from "lucide-preact";
 import {
   applyHeaders, applyWatermark, fill, headerSettings, pagesOf, removeStamps, setHeaders, setWatermark, watermarkSettings, type Font, type HeaderSettings,
 } from "../stamps";
 import { baseName, showToast, type Tab } from "../store";
+import { toolPane } from "../toolpanes";
+import { ToolFrame } from "./ToolFrame";
 
 export const headerDialog = signal<Tab | null>(null);
 export const watermarkDialog = signal<Tab | null>(null);
+toolPane("headers", headerDialog, { tabOf: (v) => v });
+toolPane("watermark", watermarkDialog, { tabOf: (v) => v });
 
 const NOT_PDF = "Only PDFs can have page numbers or watermarks added. Save this file as a PDF first (Save as).";
 
@@ -119,103 +122,96 @@ function HeaderDialogInner({ tab }: { tab: Tab }) {
   };
 
   return (
-    <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div class="dialog tool-dialog stamp-dialog" role="dialog" aria-label="Page numbers, headers and footers">
-        <button class="ib sm close" aria-label="Close" onClick={close}>
-          <X size={16} />
-        </button>
-        <h2>Page numbers, headers and footers</h2>
-
-        <div class="tool-field">
-          <label>Page numbers</label>
-          <div class="ps-line">
-            {PRESETS.map(([name, box, tpl]) => (
-              <button key={name} class="btn ghost sm" onClick={() => setHeaders({ boxes: s.boxes.map((b, k) => (k === box ? tpl : k >= 3 && b.includes("{") ? "" : b)) as HeaderSettings["boxes"] })}>
-                {name}
-              </button>
-            ))}
-          </div>
+    <ToolFrame id="headers" title="Page numbers, headers and footers" class="stamp-dialog">
+      <div class="tool-field">
+        <label>Page numbers</label>
+        <div class="ps-line">
+          {PRESETS.map(([name, box, tpl]) => (
+            <button key={name} class="btn ghost sm" onClick={() => setHeaders({ boxes: s.boxes.map((b, k) => (k === box ? tpl : k >= 3 && b.includes("{") ? "" : b)) as HeaderSettings["boxes"] })}>
+              {name}
+            </button>
+          ))}
         </div>
+      </div>
 
-        <div class="stamp-boxes">
-          {BOX_LABELS.map((label, i) => (
-            <label key={label} class="stamp-box">
-              <span>{label}</span>
-              <input class="inp sm" value={s.boxes[i]} onInput={(e) => setBox(i, (e.target as HTMLInputElement).value)} />
+      <div class="stamp-boxes">
+        {BOX_LABELS.map((label, i) => (
+          <label key={label} class="stamp-box">
+            <span>{label}</span>
+            <input class="inp sm" value={s.boxes[i]} onInput={(e) => setBox(i, (e.target as HTMLInputElement).value)} />
+          </label>
+        ))}
+      </div>
+      <span class="hint">
+        Fill-ins: {"{page}"} number, {"{pages}"} last number, {"{label}"} the page's own label, {"{date}"}, {"{file}"} file name, {"{bates}"} Bates number.
+        {example && ` First page: ${example.filter(Boolean).join(" · ")}`}
+      </span>
+
+      <div class="tool-field">
+        <label>Text</label>
+        <FontRow font={s.font} size={s.size} color={s.color} bold={s.bold} set={setHeaders} />
+      </div>
+
+      <div class="tool-field">
+        <label>Margins (mm)</label>
+        <div class="ps-line">
+          {(["Top", "Bottom", "Sides"] as const).map((name, i) => (
+            <label key={name} class="check-row">
+              {name}
+              <input
+                class="inp sm num"
+                type="number"
+                min="0"
+                step="1"
+                value={s.margins[i]}
+                onChange={(e) => setHeaders({ margins: s.margins.map((m, k) => (k === i ? Math.max(0, +(e.target as HTMLInputElement).value || 0) : m)) as [number, number, number] })}
+              />
             </label>
           ))}
         </div>
-        <span class="hint">
-          Fill-ins: {"{page}"} number, {"{pages}"} last number, {"{label}"} the page's own label, {"{date}"}, {"{file}"} file name, {"{bates}"} Bates number.
-          {example && ` First page: ${example.filter(Boolean).join(" · ")}`}
-        </span>
-
-        <div class="tool-field">
-          <label>Text</label>
-          <FontRow font={s.font} size={s.size} color={s.color} bold={s.bold} set={setHeaders} />
-        </div>
-
-        <div class="tool-field">
-          <label>Margins (mm)</label>
-          <div class="ps-line">
-            {(["Top", "Bottom", "Sides"] as const).map((name, i) => (
-              <label key={name} class="check-row">
-                {name}
-                <input
-                  class="inp sm num"
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={s.margins[i]}
-                  onChange={(e) => setHeaders({ margins: s.margins.map((m, k) => (k === i ? Math.max(0, +(e.target as HTMLInputElement).value || 0) : m)) as [number, number, number] })}
-                />
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <PagesRow all={all} setAll={setAll} range={range} setRange={setRange} count={count} />
-        <div class="ps-line">
-          <label class="check-row">
-            Start numbering at
-            <input class="inp sm num" type="number" min="0" value={s.start} onChange={(e) => setHeaders({ start: Math.max(0, Math.round(+(e.target as HTMLInputElement).value || 1)) })} />
-          </label>
-        </div>
-
-        {usesBates && (
-          <div class="tool-field">
-            <label>Bates number</label>
-            <div class="ps-line">
-              <input class="inp sm" placeholder="Prefix" value={s.bates.prefix} onInput={(e) => setHeaders({ bates: { ...s.bates, prefix: (e.target as HTMLInputElement).value } })} />
-              <label class="check-row">
-                Digits
-                <input class="inp sm num" type="number" min="1" max="12" value={s.bates.digits} onChange={(e) => setHeaders({ bates: { ...s.bates, digits: Math.max(1, Math.min(12, +(e.target as HTMLInputElement).value || 6)) } })} />
-              </label>
-              <label class="check-row">
-                From
-                <input class="inp sm num" type="number" min="0" value={s.bates.start} onChange={(e) => setHeaders({ bates: { ...s.bates, start: Math.max(0, Math.round(+(e.target as HTMLInputElement).value || 1)) } })} />
-              </label>
-              <input class="inp sm" placeholder="Suffix" value={s.bates.suffix} onInput={(e) => setHeaders({ bates: { ...s.bates, suffix: (e.target as HTMLInputElement).value } })} />
-            </div>
-          </div>
-        )}
-
-        <span class="hint">Headers and footers added earlier by Paginaut are replaced. They can be taken off again with Remove.</span>
-        {error && <span class="error-text">{error}</span>}
-        <div class="row">
-          <button class="btn ghost" onClick={() => { headerDialog.value = null; void removeStamps(tab, "Header"); }}>
-            Remove all
-          </button>
-          <span style={{ flex: 1 }} />
-          <button class="btn" onClick={close}>
-            Cancel
-          </button>
-          <button class="btn pri" disabled={busy} onClick={() => void apply()}>
-            {busy ? "Adding…" : "Add"}
-          </button>
-        </div>
       </div>
-    </div>
+
+      <PagesRow all={all} setAll={setAll} range={range} setRange={setRange} count={count} />
+      <div class="ps-line">
+        <label class="check-row">
+          Start numbering at
+          <input class="inp sm num" type="number" min="0" value={s.start} onChange={(e) => setHeaders({ start: Math.max(0, Math.round(+(e.target as HTMLInputElement).value || 1)) })} />
+        </label>
+      </div>
+
+      {usesBates && (
+        <div class="tool-field">
+          <label>Bates number</label>
+          <div class="ps-line">
+            <input class="inp sm" placeholder="Prefix" value={s.bates.prefix} onInput={(e) => setHeaders({ bates: { ...s.bates, prefix: (e.target as HTMLInputElement).value } })} />
+            <label class="check-row">
+              Digits
+              <input class="inp sm num" type="number" min="1" max="12" value={s.bates.digits} onChange={(e) => setHeaders({ bates: { ...s.bates, digits: Math.max(1, Math.min(12, +(e.target as HTMLInputElement).value || 6)) } })} />
+            </label>
+            <label class="check-row">
+              From
+              <input class="inp sm num" type="number" min="0" value={s.bates.start} onChange={(e) => setHeaders({ bates: { ...s.bates, start: Math.max(0, Math.round(+(e.target as HTMLInputElement).value || 1)) } })} />
+            </label>
+            <input class="inp sm" placeholder="Suffix" value={s.bates.suffix} onInput={(e) => setHeaders({ bates: { ...s.bates, suffix: (e.target as HTMLInputElement).value } })} />
+          </div>
+        </div>
+      )}
+
+      <span class="hint">Headers and footers added earlier by Paginaut are replaced. They can be taken off again with Remove.</span>
+      {error && <span class="error-text">{error}</span>}
+      <div class="row">
+        <button class="btn ghost" onClick={() => { headerDialog.value = null; void removeStamps(tab, "Header"); }}>
+          Remove all
+        </button>
+        <span style={{ flex: 1 }} />
+        <button class="btn" onClick={close}>
+          Cancel
+        </button>
+        <button class="btn pri" disabled={busy} onClick={() => void apply()}>
+          {busy ? "Adding…" : "Add"}
+        </button>
+      </div>
+    </ToolFrame>
   );
 }
 
@@ -259,97 +255,91 @@ function WatermarkDialogInner({ tab }: { tab: Tab }) {
   };
 
   return (
-    <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div class="dialog tool-dialog stamp-dialog" role="dialog" aria-label="Watermark">
-        <button class="ib sm close" aria-label="Close" onClick={close}>
-          <X size={16} />
+    <ToolFrame id="watermark" title="Watermark" class="stamp-dialog">
+      <div class="seg nowrap">
+        <button class={`segb ${s.kind === "text" ? "on" : ""}`} onClick={() => setWatermark({ kind: "text" })}>
+          Text
         </button>
-        <h2>Watermark</h2>
+        <button class={`segb ${s.kind === "picture" ? "on" : ""}`} onClick={() => setWatermark({ kind: "picture" })}>
+          Picture
+        </button>
+      </div>
+
+      {s.kind === "text" ? (
+        <>
+          <input class="inp" value={s.text} placeholder="CONFIDENTIAL, DRAFT, COPY…" onInput={(e) => setWatermark({ text: (e.target as HTMLInputElement).value })} />
+          <FontRow font={s.font} size={s.size} color={s.color} bold={s.bold} set={setWatermark} />
+        </>
+      ) : (
+        <div class="ps-line">
+          <span class="ins-name" title={s.picture}>
+            {s.picture ? baseName(s.picture) : "No picture chosen"}
+          </span>
+          <button class="btn ghost sm" onClick={() => void pick()}>
+            Choose…
+          </button>
+          <label class="check-row">
+            Width
+            <input class="inp sm num" type="number" min="5" max="100" value={s.scale} onChange={(e) => setWatermark({ scale: Math.max(5, Math.min(100, +(e.target as HTMLInputElement).value || 50)) })} />
+            % of the page
+          </label>
+        </div>
+      )}
+
+      <div class="tool-field">
+        <label>Angle</label>
         <div class="seg nowrap">
-          <button class={`segb ${s.kind === "text" ? "on" : ""}`} onClick={() => setWatermark({ kind: "text" })}>
-            Text
-          </button>
-          <button class={`segb ${s.kind === "picture" ? "on" : ""}`} onClick={() => setWatermark({ kind: "picture" })}>
-            Picture
-          </button>
-        </div>
-
-        {s.kind === "text" ? (
-          <>
-            <input class="inp" value={s.text} placeholder="CONFIDENTIAL, DRAFT, COPY…" onInput={(e) => setWatermark({ text: (e.target as HTMLInputElement).value })} />
-            <FontRow font={s.font} size={s.size} color={s.color} bold={s.bold} set={setWatermark} />
-          </>
-        ) : (
-          <div class="ps-line">
-            <span class="ins-name" title={s.picture}>
-              {s.picture ? baseName(s.picture) : "No picture chosen"}
-            </span>
-            <button class="btn ghost sm" onClick={() => void pick()}>
-              Choose…
+          {[0, 45, -45, 90].map((a) => (
+            <button key={a} class={`segb ${s.angle === a ? "on" : ""}`} onClick={() => setWatermark({ angle: a })}>
+              {a}°
             </button>
-            <label class="check-row">
-              Width
-              <input class="inp sm num" type="number" min="5" max="100" value={s.scale} onChange={(e) => setWatermark({ scale: Math.max(5, Math.min(100, +(e.target as HTMLInputElement).value || 50)) })} />
-              % of the page
-            </label>
-          </div>
-        )}
-
-        <div class="tool-field">
-          <label>Angle</label>
-          <div class="seg nowrap">
-            {[0, 45, -45, 90].map((a) => (
-              <button key={a} class={`segb ${s.angle === a ? "on" : ""}`} onClick={() => setWatermark({ angle: a })}>
-                {a}°
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div class="tool-field">
-          <label>Place</label>
-          <div class="seg nowrap">
-            {(["top", "center", "bottom"] as const).map((p) => (
-              <button key={p} class={`segb ${s.position === p ? "on" : ""}`} onClick={() => setWatermark({ position: p })}>
-                {p === "center" ? "Middle" : p === "top" ? "Top" : "Bottom"}
-              </button>
-            ))}
-          </div>
-          <div class="seg nowrap">
-            <button class={`segb ${!s.behind ? "on" : ""}`} onClick={() => setWatermark({ behind: false })}>
-              In front of the content
-            </button>
-            <button class={`segb ${s.behind ? "on" : ""}`} onClick={() => setWatermark({ behind: true })}>
-              Behind it
-            </button>
-          </div>
-          <span class="hint">{s.behind ? "Hidden where the page has pictures or a background." : "Faint over everything; text under it can still be read and selected."}</span>
-        </div>
-
-        <div class="tool-field">
-          <label>Opacity</label>
-          <div class="ps-line">
-            <input type="range" min="5" max="100" value={s.opacity} onInput={(e) => setWatermark({ opacity: +(e.target as HTMLInputElement).value })} aria-label="Opacity" />
-            <span>{s.opacity}%</span>
-          </div>
-        </div>
-
-        <PagesRow all={all} setAll={setAll} range={range} setRange={setRange} count={count} />
-        <span class="hint">A watermark added earlier by Paginaut is replaced. It sits in its own "Watermark" layer, and Remove takes it off again.</span>
-        {error && <span class="error-text">{error}</span>}
-        <div class="row">
-          <button class="btn ghost" onClick={() => { watermarkDialog.value = null; void removeStamps(tab, "Watermark"); }}>
-            Remove all
-          </button>
-          <span style={{ flex: 1 }} />
-          <button class="btn" onClick={close}>
-            Cancel
-          </button>
-          <button class="btn pri" disabled={busy} onClick={() => void apply()}>
-            {busy ? "Adding…" : "Add"}
-          </button>
+          ))}
         </div>
       </div>
-    </div>
+
+      <div class="tool-field">
+        <label>Place</label>
+        <div class="seg nowrap">
+          {(["top", "center", "bottom"] as const).map((p) => (
+            <button key={p} class={`segb ${s.position === p ? "on" : ""}`} onClick={() => setWatermark({ position: p })}>
+              {p === "center" ? "Middle" : p === "top" ? "Top" : "Bottom"}
+            </button>
+          ))}
+        </div>
+        <div class="seg nowrap">
+          <button class={`segb ${!s.behind ? "on" : ""}`} onClick={() => setWatermark({ behind: false })}>
+            In front of the content
+          </button>
+          <button class={`segb ${s.behind ? "on" : ""}`} onClick={() => setWatermark({ behind: true })}>
+            Behind it
+          </button>
+        </div>
+        <span class="hint">{s.behind ? "Hidden where the page has pictures or a background." : "Faint over everything; text under it can still be read and selected."}</span>
+      </div>
+
+      <div class="tool-field">
+        <label>Opacity</label>
+        <div class="ps-line">
+          <input type="range" min="5" max="100" value={s.opacity} onInput={(e) => setWatermark({ opacity: +(e.target as HTMLInputElement).value })} aria-label="Opacity" />
+          <span>{s.opacity}%</span>
+        </div>
+      </div>
+
+      <PagesRow all={all} setAll={setAll} range={range} setRange={setRange} count={count} />
+      <span class="hint">A watermark added earlier by Paginaut is replaced. It sits in its own "Watermark" layer, and Remove takes it off again.</span>
+      {error && <span class="error-text">{error}</span>}
+      <div class="row">
+        <button class="btn ghost" onClick={() => { watermarkDialog.value = null; void removeStamps(tab, "Watermark"); }}>
+          Remove all
+        </button>
+        <span style={{ flex: 1 }} />
+        <button class="btn" onClick={close}>
+          Cancel
+        </button>
+        <button class="btn pri" disabled={busy} onClick={() => void apply()}>
+          {busy ? "Adding…" : "Add"}
+        </button>
+      </div>
+    </ToolFrame>
   );
 }

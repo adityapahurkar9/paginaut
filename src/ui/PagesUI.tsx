@@ -11,6 +11,8 @@ import { docSigs } from "../dsc";
 import { parsePages } from "../ocr";
 import * as P from "../pages";
 import { baseName, openFiles, samePath, showToast, tabs, type Tab } from "../store";
+import { toolPane } from "../toolpanes";
+import { ToolFrame } from "./ToolFrame";
 
 const PICTURES = new Set(["png", "jpg", "jpeg", "jfif", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "pnm", "pbm", "pgm", "ppm", "pam", "jxr"]);
 const isPicture = (path: string) => PICTURES.has(path.split(".").pop()?.toLowerCase() ?? "");
@@ -278,6 +280,7 @@ const fitSize = (fit: Fit, docSize: [number, number] | null): [number, number] |
 // ---------------------------------------------------------------- insert
 
 export const insertDialog = signal<{ tab: Tab; files: FileEntry[] } | null>(null);
+toolPane("insert", insertDialog, { tabOf: (v) => v.tab });
 
 /** Insert pages from files: pick them, then choose pages and where they go. */
 export async function startInsert(tab: Tab) {
@@ -346,51 +349,44 @@ function InsertDialogInner({ tab, initial }: { tab: Tab; initial: FileEntry[] })
   const total = files.reduce((n, f) => n + rowCount(f), 0);
 
   return (
-    <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div class="dialog tool-dialog" role="dialog" aria-label="Insert pages">
-        <button class="ib sm close" aria-label="Close" onClick={close}>
-          <X size={16} />
-        </button>
-        <h2>Insert pages</h2>
+    <ToolFrame id="insert" title="Insert pages">
+      <div class="tool-field">
+        <label>From</label>
+        <FileList files={files} setFiles={setFiles} ranges reorder={files.length > 1} title="Insert pages from" />
+      </div>
 
-        <div class="tool-field">
-          <label>From</label>
-          <FileList files={files} setFiles={setFiles} ranges reorder={files.length > 1} title="Insert pages from" />
-        </div>
-
-        <div class="tool-field">
-          <label>Where</label>
-          <div class="seg nowrap">
-            <button class={`segb ${where === "after" ? "on" : ""}`} onClick={() => setWhere("after")}>
-              After page {current + 1}
-            </button>
-            <button class={`segb ${where === "before" ? "on" : ""}`} onClick={() => setWhere("before")}>
-              Before page {current + 1}
-            </button>
-            <button class={`segb ${where === "start" ? "on" : ""}`} onClick={() => setWhere("start")}>
-              At the start
-            </button>
-            <button class={`segb ${where === "end" ? "on" : ""}`} onClick={() => setWhere("end")}>
-              At the end
-            </button>
-          </div>
-        </div>
-
-        {files.some((f) => !f.isPdf) && <FitChoice fit={fit} setFit={setFit} docSize={docSize} />}
-
-        {signed && <div class="tool-note">This document is digitally signed. After saving, its signatures will show that the document changed since it was signed.</div>}
-        {error && <span class="error-text">{error}</span>}
-
-        <div class="row">
-          <button class="btn" onClick={close}>
-            Cancel
+      <div class="tool-field">
+        <label>Where</label>
+        <div class="seg nowrap">
+          <button class={`segb ${where === "after" ? "on" : ""}`} onClick={() => setWhere("after")}>
+            After page {current + 1}
           </button>
-          <button class="btn pri" disabled={busy || !files.length} onClick={() => void run()}>
-            {busy ? "Inserting…" : total ? `Insert ${plural(total, "page")}` : "Insert"}
+          <button class={`segb ${where === "before" ? "on" : ""}`} onClick={() => setWhere("before")}>
+            Before page {current + 1}
+          </button>
+          <button class={`segb ${where === "start" ? "on" : ""}`} onClick={() => setWhere("start")}>
+            At the start
+          </button>
+          <button class={`segb ${where === "end" ? "on" : ""}`} onClick={() => setWhere("end")}>
+            At the end
           </button>
         </div>
       </div>
-    </div>
+
+      {files.some((f) => !f.isPdf) && <FitChoice fit={fit} setFit={setFit} docSize={docSize} />}
+
+      {signed && <div class="tool-note">This document is digitally signed. After saving, its signatures will show that the document changed since it was signed.</div>}
+      {error && <span class="error-text">{error}</span>}
+
+      <div class="row">
+        <button class="btn" onClick={close}>
+          Cancel
+        </button>
+        <button class="btn pri" disabled={busy || !files.length} onClick={() => void run()}>
+          {busy ? "Inserting…" : total ? `Insert ${plural(total, "page")}` : "Insert"}
+        </button>
+      </div>
+    </ToolFrame>
   );
 }
 
@@ -398,6 +394,7 @@ function InsertDialogInner({ tab, initial }: { tab: Tab; initial: FileEntry[] })
 
 /** Merge: files (starting with this document, if one is open) into a new PDF. */
 export const mergeDialog = signal<{ from: Tab | null; files: FileEntry[] } | null>(null);
+toolPane("merge", mergeDialog);
 
 /** Pictures into one PDF (Convert › To PDF › Images): the Merge dialog, starting with pictures picked. */
 export async function startMergePictures() {
@@ -460,46 +457,40 @@ function MergeDialogInner({ from, initial }: { from: Tab | null; initial: FileEn
   };
 
   return (
-    <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div class="dialog tool-dialog" role="dialog" aria-label="Merge files">
-        <button class="ib sm close" aria-label="Close" onClick={close}>
-          <X size={16} />
-        </button>
-        <h2>Merge files</h2>
-        <span class="muted">Combines files into one new PDF, in this order. Drag or use the arrows to change it; type pages to take only some.</span>
+    <ToolFrame id="merge" title="Merge files">
+      <span class="muted">Combines files into one new PDF, in this order. Drag or use the arrows to change it; type pages to take only some.</span>
 
-        <div class="tool-field">
-          <label>Files</label>
-          <FileList files={files} setFiles={setFiles} ranges reorder title="Merge files" />
-        </div>
-
-        <label class="check-row">
-          <input type="checkbox" checked={bookmarks} onChange={(e) => setBookmarks((e.target as HTMLInputElement).checked)} />
-          A bookmark for each file, with its own bookmarks inside
-        </label>
-
-        {files.some((f) => !f.isPdf) && <FitChoice fit={fit} setFit={setFit} docSize={null} />}
-
-        {unsaved && (
-          <div class="tool-note warn">
-            {baseName(unsaved.path)} has unsaved changes, which won't be included.{" "}
-            <button class="btn ghost sm" onClick={() => void P.save(unsaved)}>
-              Save it now
-            </button>
-          </div>
-        )}
-        {error && <span class="error-text">{error}</span>}
-
-        <div class="row">
-          <button class="btn" onClick={close}>
-            Cancel
-          </button>
-          <button class="btn pri" disabled={busy || files.length === 0} onClick={() => void run()}>
-            {busy ? "Merging…" : total ? `Merge ${plural(total, "page")}…` : "Merge…"}
-          </button>
-        </div>
+      <div class="tool-field">
+        <label>Files</label>
+        <FileList files={files} setFiles={setFiles} ranges reorder title="Merge files" />
       </div>
-    </div>
+
+      <label class="check-row">
+        <input type="checkbox" checked={bookmarks} onChange={(e) => setBookmarks((e.target as HTMLInputElement).checked)} />
+        A bookmark for each file, with its own bookmarks inside
+      </label>
+
+      {files.some((f) => !f.isPdf) && <FitChoice fit={fit} setFit={setFit} docSize={null} />}
+
+      {unsaved && (
+        <div class="tool-note warn">
+          {baseName(unsaved.path)} has unsaved changes, which won't be included.{" "}
+          <button class="btn ghost sm" onClick={() => void P.save(unsaved)}>
+            Save it now
+          </button>
+        </div>
+      )}
+      {error && <span class="error-text">{error}</span>}
+
+      <div class="row">
+        <button class="btn" onClick={close}>
+          Cancel
+        </button>
+        <button class="btn pri" disabled={busy || files.length === 0} onClick={() => void run()}>
+          {busy ? "Merging…" : total ? `Merge ${plural(total, "page")}…` : "Merge…"}
+        </button>
+      </div>
+    </ToolFrame>
   );
 }
 
@@ -549,6 +540,7 @@ export async function extractPages(tab: Tab) {
 // ---------------------------------------------------------------- split
 
 export const splitDialog = signal<Tab | null>(null);
+toolPane("split", splitDialog, { tabOf: (v) => v });
 
 export function startSplit(tab: Tab) {
   if (tab.edits.value && tab.edits.value.order.length < 2) return showToast("There's only one page.");
@@ -683,103 +675,97 @@ function SplitDialogInner({ tab }: { tab: Tab }) {
 
   const shown = typeof plan === "string" ? [] : plan.slice(0, 6);
   return (
-    <div class="overlay" onPointerDown={(ev) => ev.target === ev.currentTarget && close()}>
-      <div class="dialog tool-dialog" role="dialog" aria-label="Split into files">
-        <button class="ib sm close" aria-label="Close" onClick={close}>
-          <X size={16} />
-        </button>
-        <h2>Split into files</h2>
-        <span class="muted">Saves parts of this document as separate PDFs. The document itself stays as it is.</span>
+    <ToolFrame id="split" title="Split into files">
+      <span class="muted">Saves parts of this document as separate PDFs. The document itself stays as it is.</span>
 
-        <div class="tool-field">
-          <label>Split</label>
-          <div class="seg nowrap">
-            <button class={`segb ${by === "every" ? "on" : ""}`} onClick={() => change(() => setBy("every"))}>
-              Every few pages
-            </button>
-            <button class={`segb ${by === "ranges" ? "on" : ""}`} onClick={() => change(() => setBy("ranges"))}>
-              By page ranges
-            </button>
-            <button
-              class={`segb ${by === "bookmarks" ? "on" : ""}`}
-              disabled={!marks.length}
-              title={marks.length ? undefined : "This document has no bookmarks"}
-              onClick={() => change(() => setBy("bookmarks"))}
-            >
-              By bookmarks
-            </button>
-            <button class={`segb ${by === "size" ? "on" : ""}`} disabled={!isPdf} onClick={() => change(() => setBy("size"))}>
-              By file size
-            </button>
-          </div>
-          {by === "every" && (
-            <div class="ins-file-row">
-              <span>A new file every</span>
-              <input class="inp sm num" type="number" min="1" max={count} value={every} onInput={(ev) => change(() => setEvery((ev.target as HTMLInputElement).value))} />
-              <span>{parseInt(every, 10) === 1 ? "page" : "pages"}</span>
-            </div>
-          )}
-          {by === "ranges" && (
-            <input
-              class="inp sm"
-              placeholder={`One range per file, like 1-3, 4-10, 11- (of ${count})`}
-              value={ranges}
-              autoFocus
-              onInput={(ev) => change(() => setRanges((ev.target as HTMLInputElement).value))}
-            />
-          )}
-          {by === "bookmarks" && <span class="hint">A file for each of the {marks.length} top-level bookmarks, named after it.</span>}
-          {by === "size" && (
-            <div class="ins-file-row">
-              <span>Files of at most about</span>
-              <input class="inp sm num" type="number" min="0.1" step="0.5" value={mb} onInput={(ev) => change(() => setMb((ev.target as HTMLInputElement).value))} />
-              <span>MB</span>
-            </div>
-          )}
-        </div>
-
-        <div class="tool-field">
-          <label>Save in</label>
-          <div class="ins-file-row">
-            <span class="ins-name" title={folder}>
-              {folder}
-            </span>
-            <button class="btn ghost sm" onClick={() => void chooseFolder()}>
-              Change…
-            </button>
-          </div>
-        </div>
-
-        {typeof plan === "string" ? (
-          <span class="hint">{plan}</span>
-        ) : (
-          <div class="split-plan">
-            {shown.map((p) => (
-              <div key={p.name} class="split-row">
-                <span class="ins-name">{p.name}.pdf</span>
-                <span class="muted">{p.views.length === 1 ? `page ${p.views[0] + 1}` : `pages ${rangesText(p.views)}`}</span>
-              </div>
-            ))}
-            {plan.length > shown.length && <span class="muted">… and {plural(plan.length - shown.length, "more file")}</span>}
-          </div>
-        )}
-        {replace && (
-          <div class="tool-note warn">
-            {replace.length === 1 ? `${baseName(replace[0])} already exists.` : `${replace.length} of these files already exist.`} Split again to replace{" "}
-            {replace.length === 1 ? "it" : "them"}.
-          </div>
-        )}
-        {error && <span class="error-text">{error}</span>}
-
-        <div class="row">
-          <button class="btn" onClick={close}>
-            Cancel
+      <div class="tool-field">
+        <label>Split</label>
+        <div class="seg nowrap">
+          <button class={`segb ${by === "every" ? "on" : ""}`} onClick={() => change(() => setBy("every"))}>
+            Every few pages
           </button>
-          <button class="btn pri" disabled={busy || typeof plan === "string"} onClick={() => void run()}>
-            {busy ? "Splitting…" : typeof plan === "string" ? "Split" : `${replace ? "Replace and split" : "Split"} into ${plural(plan.length, "file")}`}
+          <button class={`segb ${by === "ranges" ? "on" : ""}`} onClick={() => change(() => setBy("ranges"))}>
+            By page ranges
+          </button>
+          <button
+            class={`segb ${by === "bookmarks" ? "on" : ""}`}
+            disabled={!marks.length}
+            title={marks.length ? undefined : "This document has no bookmarks"}
+            onClick={() => change(() => setBy("bookmarks"))}
+          >
+            By bookmarks
+          </button>
+          <button class={`segb ${by === "size" ? "on" : ""}`} disabled={!isPdf} onClick={() => change(() => setBy("size"))}>
+            By file size
+          </button>
+        </div>
+        {by === "every" && (
+          <div class="ins-file-row">
+            <span>A new file every</span>
+            <input class="inp sm num" type="number" min="1" max={count} value={every} onInput={(ev) => change(() => setEvery((ev.target as HTMLInputElement).value))} />
+            <span>{parseInt(every, 10) === 1 ? "page" : "pages"}</span>
+          </div>
+        )}
+        {by === "ranges" && (
+          <input
+            class="inp sm"
+            placeholder={`One range per file, like 1-3, 4-10, 11- (of ${count})`}
+            value={ranges}
+            autoFocus
+            onInput={(ev) => change(() => setRanges((ev.target as HTMLInputElement).value))}
+          />
+        )}
+        {by === "bookmarks" && <span class="hint">A file for each of the {marks.length} top-level bookmarks, named after it.</span>}
+        {by === "size" && (
+          <div class="ins-file-row">
+            <span>Files of at most about</span>
+            <input class="inp sm num" type="number" min="0.1" step="0.5" value={mb} onInput={(ev) => change(() => setMb((ev.target as HTMLInputElement).value))} />
+            <span>MB</span>
+          </div>
+        )}
+      </div>
+
+      <div class="tool-field">
+        <label>Save in</label>
+        <div class="ins-file-row">
+          <span class="ins-name" title={folder}>
+            {folder}
+          </span>
+          <button class="btn ghost sm" onClick={() => void chooseFolder()}>
+            Change…
           </button>
         </div>
       </div>
-    </div>
+
+      {typeof plan === "string" ? (
+        <span class="hint">{plan}</span>
+      ) : (
+        <div class="split-plan">
+          {shown.map((p) => (
+            <div key={p.name} class="split-row">
+              <span class="ins-name">{p.name}.pdf</span>
+              <span class="muted">{p.views.length === 1 ? `page ${p.views[0] + 1}` : `pages ${rangesText(p.views)}`}</span>
+            </div>
+          ))}
+          {plan.length > shown.length && <span class="muted">… and {plural(plan.length - shown.length, "more file")}</span>}
+        </div>
+      )}
+      {replace && (
+        <div class="tool-note warn">
+          {replace.length === 1 ? `${baseName(replace[0])} already exists.` : `${replace.length} of these files already exist.`} Split again to replace{" "}
+          {replace.length === 1 ? "it" : "them"}.
+        </div>
+      )}
+      {error && <span class="error-text">{error}</span>}
+
+      <div class="row">
+        <button class="btn" onClick={close}>
+          Cancel
+        </button>
+        <button class="btn pri" disabled={busy || typeof plan === "string"} onClick={() => void run()}>
+          {busy ? "Splitting…" : typeof plan === "string" ? "Split" : `${replace ? "Replace and split" : "Split"} into ${plural(plan.length, "file")}`}
+        </button>
+      </div>
+    </ToolFrame>
   );
 }

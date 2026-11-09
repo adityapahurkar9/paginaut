@@ -10,6 +10,10 @@ import {
   offerDismissed, parsePages, recognize, rememberChoice, startOcr, stopDownload, stopOcr, type OcrLang, type OcrQuality,
 } from "../ocr";
 import { openSettings, settings, type Tab } from "../store";
+import { toolPane } from "../toolpanes";
+import { ToolFrame } from "./ToolFrame";
+
+toolPane("ocr", ocrDialog, { tabOf: (v) => v });
 
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0)} MB`;
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -164,155 +168,149 @@ function OcrDialogInner({ tab }: { tab: Tab }) {
   const others = all.filter((l) => !hasModel(l, quality) && !chosen.includes(l.code));
 
   return (
-    <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && !preparing && close()}>
-      <div class="dialog ocr-dialog" role="dialog" aria-label="Recognize text">
-        <button class="ib sm close" aria-label="Close" onClick={close}>
-          <X size={16} />
-        </button>
-        <h2>Recognize text</h2>
-        <span class="muted">
-          Finds the text in scanned pages, so you can search, select and copy it and read them in Read mode. Text already on the pages stays as it is
-          {layers > 0 && replace ? ", except text recognized before, which is read again" : ""}.
-        </span>
-        {layers > 0 && (
-          <label class="chk">
-            <input type="checkbox" checked={replace} onChange={(e) => setReplace(e.currentTarget.checked)} />
-            <span>
-              Read the text recognized before again, and replace it ({plural(layers, "page")}). Useful when words were misread: try other languages or Best accuracy.
-            </span>
-          </label>
-        )}
+    <ToolFrame id="ocr" title="Recognize text" class="ocr-dialog">
+      <span class="muted">
+        Finds the text in scanned pages, so you can search, select and copy it and read them in Read mode. Text already on the pages stays as it is
+        {layers > 0 && replace ? ", except text recognized before, which is read again" : ""}.
+      </span>
+      {layers > 0 && (
+        <label class="chk">
+          <input type="checkbox" checked={replace} onChange={(e) => setReplace(e.currentTarget.checked)} />
+          <span>
+            Read the text recognized before again, and replace it ({plural(layers, "page")}). Useful when words were misread: try other languages or Best accuracy.
+          </span>
+        </label>
+      )}
 
-        <div class="ocr-field">
-          <label>Pages</label>
-          <div class="seg">
-            <button class={`segb ${scope === "all" ? "on" : ""}`} onClick={() => setScope("all")}>
-              All ({count})
-            </button>
-            <button class={`segb ${scope === "page" ? "on" : ""}`} onClick={() => setScope("page")}>
-              This page ({current + 1})
-            </button>
-            <button class={`segb ${scope === "range" ? "on" : ""}`} onClick={() => setScope("range")}>
-              Pages…
-            </button>
-          </div>
-          {scope === "range" && (
-            <input
-              class="inp sm"
-              placeholder={`e.g. 1-5, 8 (of ${count})`}
-              value={range}
-              autoFocus
-              onInput={(e) => setRange((e.target as HTMLInputElement).value)}
-              onKeyDown={(e) => e.key === "Enter" && void start()}
-            />
-          )}
+      <div class="ocr-field">
+        <label>Pages</label>
+        <div class="seg">
+          <button class={`segb ${scope === "all" ? "on" : ""}`} onClick={() => setScope("all")}>
+            All ({count})
+          </button>
+          <button class={`segb ${scope === "page" ? "on" : ""}`} onClick={() => setScope("page")}>
+            This page ({current + 1})
+          </button>
+          <button class={`segb ${scope === "range" ? "on" : ""}`} onClick={() => setScope("range")}>
+            Pages…
+          </button>
         </div>
+        {scope === "range" && (
+          <input
+            class="inp sm"
+            placeholder={`e.g. 1-5, 8 (of ${count})`}
+            value={range}
+            autoFocus
+            onInput={(e) => setRange((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => e.key === "Enter" && void start()}
+          />
+        )}
+      </div>
 
-        <div class="ocr-field">
-          <label>Languages in the document</label>
-          <div class="chips">
-            {chosen.map((c) => {
-              const l = byCode.get(c);
-              return (
-                <span key={c} class={`chip ${l && !hasModel(l, quality) ? "dl" : ""}`} title={l && !hasModel(l, quality) ? "Will be downloaded" : undefined}>
-                  {l?.name ?? c}
-                  <button class="chip-x" aria-label={`Remove ${l?.name ?? c}`} onClick={() => setLangs(chosen.filter((x) => x !== c))}>
-                    <X size={12} />
-                  </button>
-                </span>
-              );
-            })}
-            <select class="inp sm chip-add" value="" onChange={(e) => add((e.target as HTMLSelectElement).value)} aria-label="Add a language">
-              <option value="">Add a language…</option>
-              {ready.length > 0 && (
-                <optgroup label="Ready to use">
-                  {ready.map((l) => (
-                    <option key={l.code} value={l.code}>{l.name}</option>
-                  ))}
-                </optgroup>
-              )}
-              <optgroup label="Download">
-                {others.map((l) => (
-                  <option key={l.code} value={l.code}>
-                    {l.name} ({mb(quality === "best" ? l.bestSize : l.fastSize)})
-                  </option>
+      <div class="ocr-field">
+        <label>Languages in the document</label>
+        <div class="chips">
+          {chosen.map((c) => {
+            const l = byCode.get(c);
+            return (
+              <span key={c} class={`chip ${l && !hasModel(l, quality) ? "dl" : ""}`} title={l && !hasModel(l, quality) ? "Will be downloaded" : undefined}>
+                {l?.name ?? c}
+                <button class="chip-x" aria-label={`Remove ${l?.name ?? c}`} onClick={() => setLangs(chosen.filter((x) => x !== c))}>
+                  <X size={12} />
+                </button>
+              </span>
+            );
+          })}
+          <select class="inp sm chip-add" value="" onChange={(e) => add((e.target as HTMLSelectElement).value)} aria-label="Add a language">
+            <option value="">Add a language…</option>
+            {ready.length > 0 && (
+              <optgroup label="Ready to use">
+                {ready.map((l) => (
+                  <option key={l.code} value={l.code}>{l.name}</option>
                 ))}
               </optgroup>
-            </select>
-          </div>
-          {chosen.length > 1 && <span class="hint">Each extra language makes recognition slower; pick only the ones the document uses.</span>}
+            )}
+            <optgroup label="Download">
+              {others.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.name} ({mb(quality === "best" ? l.bestSize : l.fastSize)})
+                </option>
+              ))}
+            </optgroup>
+          </select>
         </div>
-
-        <div class="ocr-field">
-          <label>Accuracy</label>
-          <div class="seg">
-            <button class={`segb ${quality === "fast" ? "on" : ""}`} onClick={() => setQuality("fast")}>
-              Standard
-            </button>
-            <button class={`segb ${quality === "best" ? "on" : ""}`} onClick={() => setQuality("best")}>
-              Best
-            </button>
-          </div>
-          <span class="hint">
-            {quality === "fast"
-              ? "Quick and good for clear scans."
-              : "Best for faint or low-quality scans; about 3× slower. Uses larger models, downloaded once."}
-          </span>
-        </div>
-
-        {missing.length > 0 && (
-          <div class="ocr-note">
-            Downloads {missing.map((l) => l.name).join(", ")} ({mb(missingSize)}) from Tesseract's official models first.
-          </div>
-        )}
-        {signed && (
-          <div class="ocr-note warn">
-            This document is digitally signed. Adding text changes its pages, so after saving the signatures will show that the document changed since it was signed.
-          </div>
-        )}
-        {active.length > 0 && (
-          <div class="ocr-downloads">
-            {active.map(([key, frac]) => {
-              const [code, q] = key.split("/") as [string, OcrQuality];
-              return (
-                <div key={key} class="ocr-dl">
-                  <span>Downloading {byCode.get(code)?.name ?? code}{q === "best" ? " (best)" : ""}…</span>
-                  <div class="rf-bar">
-                    <div style={{ width: `${Math.round(frac * 100)}%` }} />
-                  </div>
-                  <button class="btn ghost sm" onClick={() => stopDownload(code, q)}>
-                    Stop
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {error && <span class="error-text">{error}</span>}
-
-        <span class="hint">
-          Downloaded languages are kept for next time; remove them or get others in{" "}
-          <button
-            class="linkish"
-            onClick={() => {
-              close();
-              openSettings("ocr");
-            }}
-          >
-            Settings › Text recognition
-          </button>
-          .
-        </span>
-
-        <div class="row">
-          <button class="btn" onClick={close}>
-            Cancel
-          </button>
-          <button class="btn pri" disabled={preparing || !chosen.length} onClick={() => void start()}>
-            {preparing ? "Downloading…" : missing.length ? "Download and recognize" : "Recognize"}
-          </button>
-        </div>
+        {chosen.length > 1 && <span class="hint">Each extra language makes recognition slower; pick only the ones the document uses.</span>}
       </div>
-    </div>
+
+      <div class="ocr-field">
+        <label>Accuracy</label>
+        <div class="seg">
+          <button class={`segb ${quality === "fast" ? "on" : ""}`} onClick={() => setQuality("fast")}>
+            Standard
+          </button>
+          <button class={`segb ${quality === "best" ? "on" : ""}`} onClick={() => setQuality("best")}>
+            Best
+          </button>
+        </div>
+        <span class="hint">
+          {quality === "fast"
+            ? "Quick and good for clear scans."
+            : "Best for faint or low-quality scans; about 3× slower. Uses larger models, downloaded once."}
+        </span>
+      </div>
+
+      {missing.length > 0 && (
+        <div class="ocr-note">
+          Downloads {missing.map((l) => l.name).join(", ")} ({mb(missingSize)}) from Tesseract's official models first.
+        </div>
+      )}
+      {signed && (
+        <div class="ocr-note warn">
+          This document is digitally signed. Adding text changes its pages, so after saving the signatures will show that the document changed since it was signed.
+        </div>
+      )}
+      {active.length > 0 && (
+        <div class="ocr-downloads">
+          {active.map(([key, frac]) => {
+            const [code, q] = key.split("/") as [string, OcrQuality];
+            return (
+              <div key={key} class="ocr-dl">
+                <span>Downloading {byCode.get(code)?.name ?? code}{q === "best" ? " (best)" : ""}…</span>
+                <div class="rf-bar">
+                  <div style={{ width: `${Math.round(frac * 100)}%` }} />
+                </div>
+                <button class="btn ghost sm" onClick={() => stopDownload(code, q)}>
+                  Stop
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {error && <span class="error-text">{error}</span>}
+
+      <span class="hint">
+        Downloaded languages are kept for next time; remove them or get others in{" "}
+        <button
+          class="linkish"
+          onClick={() => {
+            close();
+            openSettings("ocr");
+          }}
+        >
+          Settings › Text recognition
+        </button>
+        .
+      </span>
+
+      <div class="row">
+        <button class="btn" onClick={close}>
+          Cancel
+        </button>
+        <button class="btn pri" disabled={preparing || !chosen.length} onClick={() => void start()}>
+          {preparing ? "Downloading…" : missing.length ? "Download and recognize" : "Recognize"}
+        </button>
+      </div>
+    </ToolFrame>
   );
 }

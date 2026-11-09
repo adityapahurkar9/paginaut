@@ -7,8 +7,12 @@ import { overridesOf, resetPage, setDocColumns, updatePage } from "../reflow/ove
 import { setViewMode } from "../modes";
 import { activeTab, showToast, type Tab } from "../store";
 import { analysisOf } from "./Reflow";
+import { toolPane } from "../toolpanes";
+import { ToolFrame } from "./ToolFrame";
 
 let layer: LayoutLayer | null = null;
+
+toolPane("layout", layoutEdit, { tabOf: (v) => v.tab, close: endLayoutEdit });
 
 /** Opens the page view with the reading layout drawn over it. */
 export async function startLayoutEdit(tab: Tab) {
@@ -72,9 +76,10 @@ const TOOLS: [LayoutTool, string, typeof Check][] = [
   ["text", "Text", Type],
 ];
 
-export function LayoutPanel({ tab }: { tab: Tab }) {
+export function LayoutPanel() {
   const st = layoutEdit.value;
-  if (!st || st.tab !== tab) return null;
+  if (!st) return null;
+  const tab = st.tab;
   const ov = overridesOf(tab).value;
   const view = tab.page.value;
   const src = tab.edits.value?.order[view] ?? view;
@@ -94,11 +99,8 @@ export function LayoutPanel({ tab }: { tab: Tab }) {
     </div>
   );
   return (
-    <div class="layout-panel" onKeyDown={(e) => e.stopPropagation()}>
-      <div class="lp-title">
-        <strong>Fix reading layout</strong>
-        <span>page {view + 1}</span>
-      </div>
+    <ToolFrame id="layout" title="Fix reading layout" class="lp-pane">
+      <span class="hint">How Read and Book modes read page {view + 1}: boxes on the page show what's text, pictures and left out.</span>
       <div class="lp-row">
         <label>Columns, whole document</label>
         {cols(ov.columns, (n) => {
@@ -125,7 +127,7 @@ export function LayoutPanel({ tab }: { tab: Tab }) {
       <div class="lp-legend">
         <span class="sw-t" /> text <span class="sw-p" /> picture <span class="sw-x" /> left out
       </div>
-      <div class="lp-actions">
+      <div class="row">
         <button class="btn" disabled={!pageOv} onClick={() => { resetPage(tab, src); layer?.refresh(); }} title="Forget the corrections on this page">
           <RotateCcw size={14} /> Reset page
         </button>
@@ -133,6 +135,6 @@ export function LayoutPanel({ tab }: { tab: Tab }) {
           <Check size={15} /> Done
         </button>
       </div>
-    </div>
+    </ToolFrame>
   );
 }
