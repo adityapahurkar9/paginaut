@@ -1,6 +1,8 @@
 //! Redaction: cargo run --release --example redact_test -- <testfiles dir> <temp dir>
 //! Works on copies; never touches the originals.
-use paginaut_lib::engine::{Engine, RedactMark};
+use paginaut_lib::engine::{Engine, RedactMark, SearchOptions};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -21,12 +23,39 @@ fn main() {
     d.forms_init().unwrap();
     let [w, h] = engine.page_sizes(info.doc_id).unwrap()[0];
     let words = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Hits of a search on page 1 (searches run in the background, on copies of the file unless pages changed).
+    let sid = AtomicUsize::new(9000);
+    let hits_on_first = |needle: &str| -> usize {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let n = Arc::new(AtomicUsize::new(0));
+        let n2 = n.clone();
+        let opts = SearchOptions { match_case: true, ..Default::default() };
+        engine
+            .search(info.doc_id, needle.to_string(), opts, sid.fetch_add(1, Ordering::Relaxed) as u64, move |i, h| {
+                if i == 0 {
+                    n2.fetch_add(h.quads.len(), Ordering::Relaxed);
+                }
+            }, |_, _| {}, move |_| {
+                let _ = tx.send(());
+            })
+            .unwrap();
+        rx.recv().unwrap();
+        n.load(Ordering::Relaxed)
+    };
+
+    // A comment that fails half-way (its picture isn't one) leaves nothing behind: no change, no undo step.
+    let bad = paginaut_lib::engine::mupdf::AnnotEdit { rect: Some([20.0, 20.0, 120.0, 80.0]), image: Some(b"not a picture".to_vec()), ..Default::default() };
+    let failed = d.annot_edit(0, None, Some("Stamp"), bad, false, "Tester").is_err();
+    let stamps = d.annots_json(0).unwrap().matches("\"Stamp\"").count();
+    check("failed comment leaves nothing", failed && !d.has_changes() && stamps == 0, format!("failed {failed}, changed {}, stamps {stamps}", d.has_changes()));
 
     // A text mark on the first body line of page 1, an area mark on page 2, one on page 3 to cover.
     let body = d.paragraphs(0).unwrap().into_iter().max_by_key(|p| p.l.len()).unwrap();
     let l = body.l[0];
     let line = [l[0], l[1], l[2], l[3]];
     let before = words(&d.area_text(0, line).unwrap());
+    let needle: String = words(&d.paragraphs(0).unwrap().into_iter().max_by_key(|p| p.l.len()).unwrap().t).chars().take(24).collect();
+    let found_before = hits_on_first(needle.trim());
     let area = [50.0, 300.0, 400.0, 400.0];
     let area_before = words(&d.area_text(1, area).unwrap());
     let quad = vec![l[0], l[1], l[2], l[1], l[0], l[3], l[2], l[3]];
@@ -45,6 +74,9 @@ fn main() {
     let rest = words(&d.area_text(0, [0.0, 0.0, w, h]).unwrap());
     check("rest of the page kept", rest.contains("Page 1") && rest.split(' ').count() > 300, format!("{} words", rest.split(' ').count()));
     check("no marks left", d.redaction_pages().unwrap().is_empty(), String::new());
+    // Search reads the pages as they are now, not the file on disk.
+    let found_after = hits_on_first(needle.trim());
+    check("search no longer finds removed text", found_after < found_before, format!("{needle:?}: {found_before} hits before, {found_after} after"));
     d.undo(false).unwrap();
     check("undo", words(&d.area_text(0, line).unwrap()) == before && d.redaction_pages().unwrap().len() == 2, String::new());
     d.undo(true).unwrap();

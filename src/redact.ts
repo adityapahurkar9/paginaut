@@ -1,13 +1,14 @@
 // Redact: mark text or areas (by hand or by search), then remove what's under the marks,
 // or only cover it. Sanitize takes hidden things out of the whole document.
-import { signal } from "@preact/signals";
+import { effect, signal } from "@preact/signals";
 import { api, newId, type Quad } from "./api";
 import { authorName } from "./annots";
 import { DOC_STEP } from "./edits";
 import { formsChanged } from "./forms";
-import { showToast, type Tab } from "./store";
+import { closePane, openPane, pane } from "./panes";
+import { activeTab, showToast, type Tab } from "./store";
 
-/** The tab being redacted (Redact panel open), or null. */
+/** The tab being redacted (Redact pane open), or null. */
 export const redactTab = signal<Tab | null>(null);
 /** Mark areas (a box) even over text: logos, signatures, photos. */
 export const redactAreas = signal(false);
@@ -18,12 +19,30 @@ export function startRedact(tab: Tab) {
   if (!tab.info.value?.isPdf) return showToast("Only PDFs can be redacted. Save this file as a PDF first (Save as).", 4500);
   if (tab.mode.value !== "pages") return showToast("Switch to Single or Double view to redact.", 4000);
   redactTab.value = tab;
+  openPane("redact");
   void refreshMarks(tab);
 }
 
 export function stopRedact() {
   redactTab.value = null;
+  closePane("redact");
 }
+
+// Another pane taking the place (or the pane closed from the side bar) ends redacting; another tab coming forward
+// takes it over when it can be redacted.
+effect(() => {
+  const p = pane.value;
+  const t = activeTab.value;
+  const cur = redactTab.peek();
+  if (!cur) return;
+  if (p !== "redact") redactTab.value = null;
+  else if (t !== cur) {
+    if (t?.info.peek()?.isPdf && t.mode.peek() === "pages") {
+      redactTab.value = t;
+      void refreshMarks(t);
+    } else stopRedact();
+  }
+});
 
 export async function refreshMarks(tab: Tab) {
   const info = tab.info.value;
@@ -46,13 +65,23 @@ async function mark(tab: Tab, marks: { page: number; quads?: number[]; rect?: [n
   return n;
 }
 
+const toldNoText = new WeakSet<Tab>();
+
 /** A drag on the page while redacting: the text it selected, or (on scans, or with Areas on) the box dragged. */
 export async function markFromSelection(tab: Tab, src: number, quads: Quad[], a: [number, number], b: [number, number]) {
   tab.viewer?.clearSelection();
   const r: [number, number, number, number] = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
   try {
     if (quads.length && !redactAreas.value) await mark(tab, [{ page: src, quads: quads.flat() }]);
-    else if (r[2] - r[0] >= 3 && r[3] - r[1] >= 3) await mark(tab, [{ page: src, rect: r }]);
+    else if (r[2] - r[0] >= 3 && r[3] - r[1] >= 3) {
+      await mark(tab, [{ page: src, rect: r }]);
+      // Text that's part of the picture (a scan, a web page saved with its letters as shapes) can't be selected:
+      // said once, so a box where words were meant isn't a surprise.
+      if (!quads.length && !redactAreas.value && !toldNoText.has(tab)) {
+        toldNoText.add(tab);
+        showToast("There's no text to select there (it's part of the picture), so the box you dragged was marked. To mark words, recognize the text first (Tools › OCR).", 8000);
+      }
+    }
   } catch (e) {
     showToast(`Couldn't mark it: ${e}`, 5000);
   }
@@ -87,7 +116,8 @@ export const PATTERNS: { name: string; hint: string; re: string; check?: (text: 
       return digits.length === 12 && verhoeff(digits);
     },
   },
-  { name: "Phone", hint: "+91 98765 43210", re: "(?:\\+91[ -]?|\\b0)?[6-9][0-9]{4}[ -]?[0-9]{5}\\b" },
+  // A word boundary in front when there's no +91 or 0: the last ten digits of an account or card number aren't one.
+  { name: "Phone", hint: "+91 98765 43210", re: "(?:\\+91[ -]?|\\b0|\\b)[6-9][0-9]{4}[ -]?[0-9]{5}\\b" },
   // Starting on a letter keeps MuPDF's pattern engine from giving up on long pages.
   { name: "Email", hint: "name@example.com", re: "\\w[-.\\w]*@\\w[-.\\w]*\\.\\w+" },
   { name: "IFSC", hint: "SBIN0001234", re: "\\b[A-Z]{4}0[A-Z0-9]{6}\\b" },
@@ -112,17 +142,17 @@ export function findAll(tab: Tab, needle: string, regex: boolean, matchCase: boo
   });
 }
 
-/** Keeps the hits whose text passes `check` (read from under each hit). */
+/** Keeps the hits whose text passes `check` (read from under each hit, a page's hits in one call). */
 export async function checkHits(tab: Tab, hits: Map<number, number[][]>, check: (text: string) => boolean) {
   const docId = tab.info.value!.docId;
   const out = new Map<number, number[][]>();
   for (const [page, list] of hits) {
-    const keep: number[][] = [];
-    for (const q of list) {
+    const areas = list.map((q): [number, number, number, number] => {
       const xs = q.filter((_, i) => i % 2 === 0), ys = q.filter((_, i) => i % 2 === 1);
-      const text = await api.areaText(docId, page, [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]).catch(() => "");
-      if (check(text)) keep.push(q);
-    }
+      return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    });
+    const texts = await api.areaTexts(docId, page, areas).catch(() => [] as string[]);
+    const keep = list.filter((_, k) => check(texts[k] ?? ""));
     if (keep.length) out.set(page, keep);
   }
   return out;

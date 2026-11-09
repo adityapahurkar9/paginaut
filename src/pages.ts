@@ -4,8 +4,9 @@
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { api, type DocInfo, type Inserted, type InsertSource, type SaveOptions } from "./api";
 import * as E from "./edits";
+import { metaChanged } from "./edits";
 import { formsChanged, initForms } from "./forms";
-import { ask, baseName, rememberFile, setSaveHook, settings, showToast, type Tab } from "./store";
+import { ask, baseName, rememberFile, samePath, setSaveHook, settings, showToast, tabs, type Tab } from "./store";
 
 /** Pages an action applies to: the thumbnail selection if it includes `page`, else just `page`. */
 export function targets(tab: Tab, page?: number): number[] {
@@ -291,6 +292,9 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
   if (!info || !e || tab.saving.value) return false;
   let target: string | null = null;
   const inPlace = savesInPlace(tab);
+  // "Save a copy as" writes a copy and stays on this file (its edits still to save here); "Save as PDF" of a file
+  // that can't be saved in place moves the tab onto the new PDF.
+  let copy = saveAs && inPlace;
   if (saveAs || !inPlace) {
     const stem = baseName(tab.path).replace(/\.[^.]+$/, "");
     target = await saveDialog({
@@ -299,6 +303,15 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
       filters: [{ name: "PDF", extensions: ["pdf"] }],
     });
     if (!target) return false;
+    if (copy && samePath(target, tab.path)) {
+      // A copy over the file itself is an ordinary save.
+      target = null;
+      copy = false;
+      if (E.isIdentity(e) && !tab.docChanged.value) return true;
+    } else if (tabs.value.some((t) => t !== tab && samePath(t.path, target!))) {
+      showToast(`${baseName(target)} is open in Paginaut. Close it first, or choose another name.`, 5000);
+      return false;
+    }
   } else if (E.isIdentity(e) && !tab.docChanged.value) {
     return true;
   }
@@ -326,6 +339,19 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
   try {
     const view = tab.viewer?.viewState();
     const kept = keep ? await api.pdfaKeep(info.docId, keep) : null;
+    // The fixes are a step in the document's journal: one in the tab's history too, so a save that then fails
+    // leaves Undo in step (it takes the fixes back, not your last edit).
+    if (kept) metaChanged(tab);
+    if (copy) {
+      await api.saveParts(info.docId, [{ pages: e.order, path: target! }], e.rot);
+      showToast(
+        kept?.substitutes.length
+          ? `Saved a copy as ${baseName(target!)} (PDF/A-${keep}b). Fonts stood in: ${kept.substitutes.join("; ")}`
+          : `Saved a copy as ${baseName(target!)} · ${Math.round(performance.now() - t0)} ms`,
+        kept?.substitutes.length ? 9000 : undefined,
+      );
+      return true;
+    }
     const saved = await api.save(info.docId, e.order, e.rot, target);
     await adoptSaved(tab, saved, view?.page);
     const lost = e.order.length - saved.pageCount;

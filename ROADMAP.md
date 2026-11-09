@@ -891,6 +891,26 @@ only when the user exports it and passes it on themselves (docs/PLAY-DATA-SAFETY
       Windows, Linux (the .deb and the AppImage) and Android; a document's text and a password typed in the session
       checked to be absent
 
+## 0.9.11 (Windows, Linux) and Android 0.6.6: the fixes in BUGS.md (not released yet)
+Every bug from the 2026-11-05 code review and the three Redact reports, fixed 2026-11-09 (details in BUGS.md):
+- [x] Unsaved redactions, text and picture edits and Sanitize reach search, Read and Book mode and Compare
+      (Doc::content_changed, one place for every edit of page content)
+- [x] A comment that fails half-way leaves nothing behind; "Keep it PDF/A" is a step in the tab's history
+- [x] "Save a copy" stays on the original (the buttons said "Save as"; they say "Save a copy" now)
+- [x] Linux: paths compared with case (two files that differ only in case are two files); default author from USER
+- [x] Attachments that can run programs on Linux, and more Windows kinds, are refused to open
+- [x] A tab closed while its file loads closes the document; signing an Office file's PDF into a new file makes it a
+      PDF of its own; idle workers let go of closed documents at once; a fault in one page ends a search with an
+      error instead of spinning; saved signatures' ids unique; font names can't leave the fonts folder; Redact's
+      Phone pattern doesn't take the end of longer numbers
+- [x] Page labels from the catalog alone (no page loaded); Aadhaar checks read a page's text once; updates checked
+      in pieces; one "write beside, then rename" for merge, split and flattened copies
+- [x] Redact is a pane on the right (with a side bar button) that makes room for the page; the box shows as it's
+      dragged; dragging over text that's part of the picture says why a box was marked
+- [x] Android: a file sent from another app while Paginaut is closed is read as soon as Android hands it over, and
+      a "not found" from the sending app is asked again once (to check on a phone with Gmail and WhatsApp)
+- [ ] Open: a save that fails half-way drops the unsaved changes from the engine (BUGS.md)
+
 ## 0.9.10 (Windows, Linux): PDF/A-1b, Office files to PDF/A, signing and saving PDF/A files
 - [x] PDF/A-1b; Office files straight to PDF/A; signing keeps a PDF/A file PDF/A; saving changes to one warns and can
       keep it PDF/A; the check and Save as PDF/A held to veraPDF's test corpus (see the PDF/A section)

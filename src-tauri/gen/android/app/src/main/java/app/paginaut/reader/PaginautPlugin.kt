@@ -52,7 +52,9 @@ import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import org.json.JSONArray
 
 /**
@@ -68,6 +70,12 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
 
   /** A file another app sent; taken by takeIntent. */
   @Volatile private var pending: Uri? = null
+  /**
+   * The file another app sent, being read (copied, or opened in place) from the moment Android handed it over: on a
+   * cold start the page asks for it only seconds later, and by then the sending app's provider (Gmail, WhatsApp)
+   * could answer that it isn't there. Taken by takeIntent along with `pending`.
+   */
+  @Volatile private var prefetch: Future<JSObject>? = null
   private var webView: WebView? = null
 
   override fun load(webView: WebView) {
@@ -75,6 +83,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     // Big files read in place last time: their links (and any one-visit copies) go.
     File(activity.cacheDir, "direct").deleteRecursively()
     pending = docUri(activity.intent)
+    pending?.let { startReading(it) }
     // Android 15 and later always draw the app behind the status and navigation bars. The page keeps
     // clear of them, the camera cutout and the keyboard itself, from the sizes passed here as CSS
     // pixels. (Padding the WebView's parent didn't last: AppCompat resets it on rotation.)
@@ -107,6 +116,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
   override fun onNewIntent(intent: Intent) {
     val uri = docUri(intent) ?: return
     pending = uri
+    startReading(uri)
     // Tell the page (it may have asked already, as the app came to the front, and found nothing).
     activity.runOnUiThread { webView?.evaluateJavascript("window.paginautIntent && window.paginautIntent()", null) }
   }
@@ -149,13 +159,46 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     copyThenResolve(invoke, uri)
   }
 
+  /** Starts reading a file another app sent, at once (see `prefetch`). */
+  private fun startReading(uri: Uri) {
+    if (MainActivity.refused) return
+    prefetch = io.submit<JSObject> { openSent(uri).json(uri) }
+  }
+
+  /**
+   * Opens a file another app sent. A provider that has only just been asked (the sending app itself still
+   * starting, or busy as Paginaut starts) can answer "not found" for a moment: asked again once before that's
+   * believed.
+   */
+  private fun openSent(uri: Uri): Opened = try {
+    open(uri)
+  } catch (e: java.io.FileNotFoundException) {
+    Thread.sleep(700)
+    open(uri)
+  }
+
   /** The file another app sent ("Open with", Share), once; empty when there's none. */
   @Command
   fun takeIntent(invoke: Invoke) {
     if (MainActivity.refused) return invoke.reject(REFUSED)
     val uri = pending
+    val read = prefetch
     pending = null
-    if (uri == null) invoke.resolve(JSObject()) else copyThenResolve(invoke, uri)
+    prefetch = null
+    when {
+      uri == null -> invoke.resolve(JSObject())
+      read == null -> copyThenResolve(invoke, uri)
+      // On the same thread as the reading, after it: done by the time this runs.
+      else -> io.execute {
+        try {
+          invoke.resolve(read.get())
+        } catch (e: ExecutionException) {
+          rejectFor(invoke, uri, e.cause ?: e)
+        } catch (e: Exception) {
+          rejectFor(invoke, uri, e)
+        }
+      }
+    }
   }
 
   /** Opens a recent file again from where it came from (its copy is refreshed if it changed). */
@@ -171,18 +214,25 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     io.execute {
       try {
         invoke.resolve(open(uri).json(uri))
-      } catch (e: SecurityException) {
+      } catch (e: Exception) {
+        rejectFor(invoke, uri, e)
+      }
+    }
+  }
+
+  /** Answers a failed open (on the io thread). */
+  private fun rejectFor(invoke: Invoke, uri: Uri, e: Throwable) {
+    when (e) {
+      is SecurityException -> {
         // Lent by another app for one visit: the copy made then is what there is (counted as opened).
         val copy = cachedCopy(uri)
         if (copy != null) {
           copy.parentFile?.setLastModified(System.currentTimeMillis())
           invoke.resolve(Opened(copy, copy.name, inPlace = false, lasting = false, kept = true, fp = fingerprint(copy)).json(uri))
         } else invoke.reject("Paginaut can no longer open this file. Open it again from its app or Files.")
-      } catch (e: java.io.FileNotFoundException) {
-        invoke.reject("This file isn't there any more (moved or deleted).")
-      } catch (e: Exception) {
-        invoke.reject("Couldn't read the file: ${e.message ?: e.javaClass.simpleName}")
       }
+      is java.io.FileNotFoundException -> invoke.reject("This file isn't there any more (moved or deleted).")
+      else -> invoke.reject("Couldn't read the file: ${e.message ?: e.javaClass.simpleName}")
     }
   }
 

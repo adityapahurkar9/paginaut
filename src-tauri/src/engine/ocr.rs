@@ -351,8 +351,7 @@ impl Doc {
         inner.doc.end_op();
         drop(inner);
         if pages > 0 {
-            self.content_edited.store(true, Ordering::Release);
-            self.edited();
+            self.content_changed();
         }
         res.map(|_| (pages, replaced, words))
     }
@@ -384,8 +383,7 @@ impl Doc {
         inner.doc.end_op();
         drop(inner);
         if count > 0 {
-            self.content_edited.store(true, Ordering::Release);
-            self.edited();
+            self.content_changed();
         }
         res.map(|_| count)
     }
@@ -473,7 +471,7 @@ impl Engine {
                         break;
                     }
                     let i = pages[k];
-                    let res = (|| -> Result<Option<PageText>, String> {
+                    let res = super::guarded(i, || -> Result<Option<PageText>, String> {
                         let b = d.bounds(i)?;
                         let redo = replace && {
                             let mut inner = d.inner.lock();
@@ -489,7 +487,7 @@ impl Engine {
                         }
                         let (content, words) = turned_content(&page.l, &b, page.rot);
                         Ok(Some(PageText { content, words, redo, rot: page.rot }))
-                    })();
+                    });
                     match res {
                         Ok(Some(r)) => {
                             results.lock().insert(i, r);

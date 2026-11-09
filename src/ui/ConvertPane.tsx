@@ -9,7 +9,7 @@ import { bookScreen } from "../modes";
 import { parsePages } from "../ocr";
 import { convertTarget, openConvertPane, type ExportTarget } from "../office";
 import { closePane, pane } from "../panes";
-import { activeTab, baseName, openSettings, type Tab } from "../store";
+import { activeTab, baseName, openSettings, samePath, type Tab } from "../store";
 import { FilesToPdf } from "./OfficeUI";
 import { testHook } from "./PagesUI";
 
@@ -198,7 +198,7 @@ function ThisDocument({ tab }: { tab: Tab }) {
     const defaultPath = tab.path.replace(/[^\\/]+$/, `${stem} (PDF-A).pdf`);
     const out = testHook()?.save ?? (await save({ title: "Save as PDF/A", defaultPath, filters: [{ name: "PDF", extensions: ["pdf"] }] }));
     if (!out) return;
-    if (out.toLowerCase() === tab.path.toLowerCase()) return setError("Choose another name: the PDF/A copy is a new file, and this one stays as it is.");
+    if (samePath(out, tab.path)) return setError("Choose another name: the PDF/A copy is a new file, and this one stays as it is.");
     setError("");
     setPdfaDone(null);
     setBusy({ done: 0, total: 1 });

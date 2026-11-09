@@ -280,10 +280,10 @@ pub fn search(
 
 // ---------------------------------------------------------------- annotations
 
-/// The Windows user name: the default author of comments.
+/// The user's name on this PC (Windows' USERNAME, Linux's USER): the default author of comments and marks.
 #[tauri::command]
 pub fn user_name() -> String {
-    std::env::var("USERNAME").unwrap_or_default()
+    ["USERNAME", "USER", "LOGNAME"].iter().find_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty())).unwrap_or_default()
 }
 
 #[tauri::command]

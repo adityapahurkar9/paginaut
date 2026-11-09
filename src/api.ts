@@ -469,6 +469,7 @@ export const api = {
   areaSave: (doc: number, page: number, area: [number, number, number, number], rot: number, kind: "png" | "svg" | "pdf", dpi: number, path: string) =>
     invoke<void>("area_save", { doc, page, area, rot, kind, dpi, path }),
   areaText: (doc: number, page: number, area: [number, number, number, number]) => invoke<string>("area_text", { doc, page, area }),
+  areaTexts: (doc: number, page: number, areas: [number, number, number, number][]) => invoke<string[]>("area_texts", { doc, page, areas }),
   paragraphs: (doc: number, page: number) => invoke<Paragraph[]>("paragraphs", { doc, page }),
   /** Replaces a paragraph's text (one undo step in the engine). */
   /** With `runs`, the new text in runs of one style ([text, 1 bold | 2 italic]). */

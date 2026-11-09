@@ -178,6 +178,7 @@ int fo_attachment_data(fo_ctx *c, fo_doc *d, int idx, unsigned char **data, size
 /* An area of a page (coords relative to its origin), turned by rot: PNG at dpi, or SVG. */
 int fo_area_image(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4], int rot, float dpi, int kind, unsigned char **data, size_t *len);
 char *fo_area_text(fo_ctx *c, fo_list *l, const float bounds[4], const float area[4]);
+char *fo_area_texts_json(fo_ctx *c, fo_list *l, const float bounds[4], const float *areas, int n);
 /* The page as a one-page PDF showing only `area` (page coordinates, not relative). */
 int fo_pdf_area_pdf(fo_ctx *c, fo_page *p, const float area[4], int rot, unsigned char **data, size_t *len);
 /* Tables on a page: JSON [{"r","xs" (column lines),"ys" (row lines),"cells":[[row,col,rows,cols,text]]}|null],

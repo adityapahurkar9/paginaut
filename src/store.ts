@@ -11,6 +11,13 @@ import { History, identity, isIdentity, type Edits } from "./edits";
 
 // ---------------------------------------------------------------- persistence
 
+/** Windows' file names ignore case; Linux's and Android's don't (Report.pdf and report.pdf are two files there). */
+const CASELESS_PATHS = /Windows/.test(navigator.userAgent);
+/** A path as it is compared, and as it keys what's remembered per file. */
+export const pathKey = (p: string) => (CASELESS_PATHS ? p.toLowerCase() : p);
+/** The two paths name the same file. */
+export const samePath = (a: string, b: string) => pathKey(a) === pathKey(b);
+
 export function load<T>(key: string, fallback: T): T {
   try {
     const v = localStorage.getItem(key);
@@ -193,15 +200,16 @@ function saveRecent() {
 }
 
 export function rememberFile(path: string, patch: Partial<RecentFile>) {
-  const list = recent.value.filter((r) => r.path.toLowerCase() !== path.toLowerCase());
-  const prev = recent.value.find((r) => r.path.toLowerCase() === path.toLowerCase());
+  const list = recent.value.filter((r) => !samePath(r.path, path));
+  const prev = recent.value.find((r) => samePath(r.path, path));
   list.unshift({ path, name: baseName(path), opened: Date.now(), ...prev, ...patch });
   recent.value = list.slice(0, 40);
   saveRecent();
 }
 
 export function forgetFile(path: string) {
-  recent.value = recent.value.filter((r) => r.path !== path);
+  // Compared as rememberFile compares, or a file kept under another spelling of its path stayed.
+  recent.value = recent.value.filter((r) => !samePath(r.path, path));
   saveRecent();
 }
 
@@ -235,6 +243,8 @@ export class Tab {
   /** Files embedded in the PDF (null until read). */
   attachments = signal<Attachment[] | null>(null);
   viewer: Viewer | null = null;
+  /** Taken out of the window with its document closed: one still opening is closed when it arrives. */
+  closed = false;
   /** Where to open the pages instead of the reading position kept for the file (a tab moved from another window). */
   carriedView: ViewState | null = null;
   passwordTries = 0;
@@ -410,7 +420,7 @@ export function showToast(text: string, ms = 2600) {
 export async function openFiles(paths: string[], launch = false) {
   let last: Tab | null = null;
   for (const path of paths) {
-    const existing = tabs.value.find((t) => t.path.toLowerCase() === path.toLowerCase());
+    const existing = tabs.value.find((t) => samePath(t.path, path));
     if (existing) {
       last = existing;
       continue;
@@ -438,6 +448,12 @@ export async function openFiles(paths: string[], launch = false) {
 async function loadTab(tab: Tab) {
   try {
     const info = await api.open(tab.path);
+    // Closed while it was opening (an Office file converting, a big scan): the engine lets go of it now, or the
+    // document stayed open (and on Windows the file locked) until Paginaut quit.
+    if (tab.closed) {
+      api.close(info.docId).catch(() => {});
+      return;
+    }
     tab.info.value = info;
     if (info.needsPassword) {
       tab.status.value = "password";
@@ -514,6 +530,7 @@ export function closeTabNow(tab: Tab, keepDoc = false) {
     tab.viewer = null;
   }
   const info = tab.info.value;
+  if (!keepDoc) tab.closed = true;
   if (info) {
     if (!keepDoc) api.close(info.docId).catch(() => {});
     // Its pages and thumbnails can never be shown here again (document ids aren't reused; another window has

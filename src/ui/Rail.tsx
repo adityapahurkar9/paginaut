@@ -1,9 +1,10 @@
-// The side bar at the right edge of the window: a button per pane (Organize, Sign, Convert, Markdown, Reading). Which
+// The side bar at the right edge of the window: a button per pane (Organize, Sign, Redact, Convert, Markdown, Reading). Which
 // buttons it shows, and in what order, is chosen in View › Side bar, by right-clicking it, or in Settings.
-import { BookOpenText, Combine, RefreshCw, Signature, SlidersHorizontal, TextCursorInput } from "lucide-preact";
+import { BookOpenText, Combine, EyeOff, RefreshCw, Signature, SlidersHorizontal, TextCursorInput } from "lucide-preact";
 import { isMarkdown, openMdPane } from "../markdown";
 import { bookScreen } from "../modes";
 import { onRail, openPane, pane, PANE_IDS, railItems, railShown, setOnRail, setRailShown, togglePane, type PaneId } from "../panes";
+import { startRedact } from "../redact";
 import { openSignPane } from "../sign";
 import { activeTab, openSettings } from "../store";
 import type { MenuItem } from "./Overlays";
@@ -23,6 +24,16 @@ export const PANES: Record<PaneId, { label: string; title: string; icon: typeof 
     icon: Signature,
     available: () => true,
     open: () => openSignPane(),
+  },
+  redact: {
+    label: "Redact",
+    title: "Redact: mark text and areas (by hand or by search), remove or cover them; sanitize the document",
+    icon: EyeOff,
+    available: () => !!activeTab.value?.info.value?.isPdf,
+    open: () => {
+      const t = activeTab.value;
+      if (t) startRedact(t);
+    },
   },
   convert: {
     label: "Convert",

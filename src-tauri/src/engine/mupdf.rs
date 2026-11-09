@@ -1272,6 +1272,15 @@ impl List {
         with_kind(self.1, |c| take_string(c, unsafe { fo_area_text(c, self.0, bounds.as_ptr(), area.as_ptr()) }).ok_or_else(|| last_error(c)))
     }
 
+    /// The text in each of several areas (relative to the page origin), the page's text read once.
+    pub fn area_texts(&self, bounds: &[f32; 4], areas: &[[f32; 4]]) -> Result<Vec<String>> {
+        let flat: Vec<f32> = areas.iter().flatten().copied().collect();
+        let json = with_kind(self.1, |c| {
+            take_string(c, unsafe { fo_area_texts_json(c, self.0, bounds.as_ptr(), flat.as_ptr(), areas.len() as c_int) }).ok_or_else(|| last_error(c))
+        })?;
+        serde_json::from_str(&json).map_err(|e| e.to_string())
+    }
+
     /// Where images are drawn on the page: [x0, y0, x1, y1] relative to its origin.
     pub fn image_rects(&self, bounds: &[f32; 4]) -> Result<Vec<[f32; 4]>> {
         let json = with_kind(self.1, |c| {

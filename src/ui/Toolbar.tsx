@@ -73,7 +73,7 @@ function fileItems(): MenuItem[] {
   return [
     { label: "Open…", hint: "Ctrl+O", icon: <FolderOpen size={15} />, run: A.openDialog },
     { label: isPdf || !ready ? "Save" : "Save as PDF…", hint: "Ctrl+S", icon: <Save size={15} />, disabled: !ready || (isPdf && !ready.dirty.value), run: () => ready && void P.save(ready) },
-    { label: "Save as…", hint: "Ctrl+Shift+S", icon: <FileOutput size={15} />, disabled: !ready, run: () => ready && void P.save(ready, true) },
+    { label: "Save a copy as…", hint: "Ctrl+Shift+S", icon: <FileOutput size={15} />, disabled: !ready, run: () => ready && void P.save(ready, true) },
     { label: "Print…", hint: "Ctrl+P", icon: <Printer size={15} />, disabled: !ready || !!printing.value, run: () => ready && void printTab(ready) },
     { sep: true },
     { label: "Document properties…", hint: "Ctrl+D", disabled: !ready, run: () => ready && startProperties(ready) },
@@ -285,7 +285,7 @@ function HomeTools({ tab }: { tab: Tab | null }) {
         disabled={!tab || saving || (isPdf && !dirty)}
         onClick={() => tab && void P.save(tab)}
       />
-      <TB icon={I(FileOutput, 17)} label="Save as" title="Save a copy as (Ctrl+Shift+S)" disabled={!tab || saving} onClick={() => tab && void P.save(tab, true)} />
+      <TB icon={I(FileOutput, 17)} label="Save a copy" title="Save a copy as (Ctrl+Shift+S): this tab stays on this file" disabled={!tab || saving} onClick={() => tab && void P.save(tab, true)} />
       <TB icon={I(Printer, 17)} label="Print" title="Print (Ctrl+P)" disabled={tab?.status.value !== "ready" || !!printing.value} onClick={() => tab && void printTab(tab)} />
       <div class="sep" />
       <IB icon={I(MousePointer2)} label="Select text" title="Select text (V)" on={tool.value === "select"} onClick={() => (tool.value = "select")} />

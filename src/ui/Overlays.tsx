@@ -281,7 +281,7 @@ function commands(): Item[] {
     c("Undo", withTab((t) => P.undo(t)), "Ctrl+Z", () => !!activeTab.value?.history.canUndo),
     c("Redo", withTab((t) => P.redo(t)), "Ctrl+Y", () => !!activeTab.value?.history.canRedo),
     c("Save", withTab((t) => P.save(t)), "Ctrl+S", () => !!activeTab.value?.dirty.value),
-    c("Save as…", withTab((t) => P.save(t, true)), "Ctrl+Shift+S", hasDoc),
+    c("Save a copy as…", withTab((t) => P.save(t, true)), "Ctrl+Shift+S", hasDoc),
     c("Save repaired e-book as PDF…", withTab((t) => void P.saveRepaired(t, true)), "", () => !!activeTab.value?.info.value?.repaired),
     c("Save repaired e-book as EPUB (flowing text)…", withTab((t) => void P.saveRepaired(t, false)), "", () => !!activeTab.value?.info.value?.repaired),
     c("Print…", withTab((t) => printTab(t)), "Ctrl+P", hasDoc),

@@ -6,7 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import * as A from "./actions";
 import { api } from "./api";
-import { activeKey, activeTab, closeTab, dialog, showToast, findOpen, openFiles, openHome, paletteOpen, persistPositions, setMinimized, tabs, openSettings, settingsOpen } from "./store";
+import { activeKey, activeTab, closeTab, dialog, showToast, findOpen, openFiles, openHome, paletteOpen, persistPositions, samePath, setMinimized, tabs, openSettings, settingsOpen } from "./store";
 import * as P from "./pages";
 import * as C from "./compare";
 import "./themes";
@@ -79,7 +79,7 @@ void Promise.all([
   thisWindow.listen<{ tab: TabTransfer; atX: number | null }>("tab-arrive", (e) => attachTab(e.payload.tab, e.payload.atX == null ? undefined : stripIndexAt(e.payload.atX))),
   // A file asked for in another window, open here: its tab comes forward.
   thisWindow.listen<string>("focus-path", (e) => {
-    const t = tabs.value.find((x) => x.path.toLowerCase() === e.payload.toLowerCase());
+    const t = tabs.value.find((x) => samePath(x.path, e.payload));
     if (!t) return;
     activeKey.value = t.key;
     showToast(`${t.name} is open here already.`);
