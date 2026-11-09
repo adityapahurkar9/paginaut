@@ -83,6 +83,15 @@ The release binary needs at most glibc 2.35 and libstdc++ 3.4.29 (GCC 11).
 the sources over, builds MuPDF once, and makes the .deb and AppImage with Tauri's CLI from cargo (22.04's
 Node is too old for the page's tools, and the page is the same anywhere).
 
+The AppImage step downloads AppImage's runtime from GitHub while it packs. If the build machine can't reach
+GitHub (on 2026-11-09 WSL's Ubuntu 22.04 couldn't resolve github.com), the .deb is made but Tauri stops with
+"failed to run linuxdeploy". To finish by hand: download
+`https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64` on any machine and put it
+at `/root/.cache/tauri/runtime-x86_64` (a copy is kept there now), unpack the packing plugin once
+(`cd /tmp/ldai && /root/.cache/tauri/linuxdeploy-plugin-appimage.AppImage --appimage-extract`), then in
+`src-tauri/target/release/bundle/appimage/` of the build copy run
+`ARCH=x86_64 /tmp/ldai/squashfs-root/appimagetool-prefix/usr/bin/appimagetool --runtime-file /root/.cache/tauri/runtime-x86_64 Paginaut.AppDir Paginaut_<version>_amd64.AppImage`.
+
 ## Still to do
 
 - Testing on real Debian 12 / Ubuntu 22.04+ machines (GNOME, KDE, Xfce), with real printers and DSC tokens

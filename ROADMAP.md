@@ -705,8 +705,9 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       - worth considering: reading on with the screen off or from the notification (a media session; a
         foreground service adds permissions, so the manifest check in build.gradle.kts and
         MainActivity.extraPermissions() must allow them), and stopping after a set time
-- [ ] Next Android release: native debug symbols for Play, so its crash reports name functions and lines instead
-      of addresses (Play warns on 6005 that none were uploaded). Android release builds keep them
+- [ ] **Next to do** (Android 0.6.7): native debug symbols for Play, so its crash reports name functions and lines
+      instead of addresses (Play warned on 6005 and 6006 that none were uploaded; 0.6.6 went to internal testing
+      without them, as its libraries are stripped and a zip has to come from the same build). Android release builds keep them
       (CARGO_PROFILE_RELEASE_STRIP=false in tools/android.sh; the desktop stays stripped), the app still ships
       the stripped library (llvm-strip as now), and the unstripped one per ABI goes into
       native-debug-symbols.zip beside the .aab, uploaded on the bundle's Downloads tab. Symbols only match the
@@ -737,9 +738,12 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       wrong password after unlocking leaves the pages drawing; errors that aren't a wrong password say what happened;
       after an engine restart, a password that no longer opens the file closes it with a message. The engine test
       checks locked pages draw (5 checks; 25 pass with the test files in place)
-- [ ] Next Android release: desktop 0.9.10 changed native code the Android build compiles in. No Android release was
-      made for it (0.6.5 stays current); a debug x86_64 build compiles and nothing Android runs behaves differently,
-      but the next release should run tools/android-engine-test.sh and check these: paginaut.c's PDF/A code
+- [x] 0.6.6 (6006, 2026-11-10, internal testing): a file sent from another app while Paginaut is closed opens (it said
+      the file wasn't there; see BUGS.md). Checked on the Pixel 9 emulator, debug and release; still to check on a
+      phone with Gmail and WhatsApp. Carries the shared engine's fixes since 0.6.5 (desktop 0.9.10 and 0.9.11).
+      tools/android-engine-test.sh: 20 of 25 pass; the 5 that don't need businessplans.epub (a 206-page book that
+      needs repairing), which isn't on this PC, and ran on a stand-in
+- [x] Desktop 0.9.10 changed native code the Android build compiles in; built and tested in 0.6.6. What changed: paginaut.c's PDF/A code
       (fo_pdfa_*, unused on Android) now includes MuPDF's FreeType headers (build.rs adds the include path for
       Android too) and calls FreeType under fz_ft_lock; fo_sign_page took a new last argument (pdfa; signing is
       desktop-only); Document::pdfa_part and Page::sign's new argument are in the shared engine
