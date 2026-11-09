@@ -209,7 +209,7 @@ export function startSigning(tab: Tab, field?: { src: number; w: Widget }) {
 /** The Sign button: saves unsaved changes first, then signs straight away (invisible, or a form's field) or lets you draw the box. */
 export async function proceed(tab: Tab, setup: SignSetup) {
   const info = tab.info.value;
-  if (!info?.isPdf) return showToast("Only PDFs can be signed. Save this file as a PDF first (Save as).", 4000);
+  if (!info?.isPdf) return showToast("Only PDFs can be signed. Save this file as a PDF first (Save as PDF).", 4000);
   if (tab.dirty.value) {
     const r = await ask("Save before signing?", "A digital signature covers the document as it's saved, so your changes need saving first.", [
       { label: "Cancel", value: "cancel" },

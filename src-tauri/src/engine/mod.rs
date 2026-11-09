@@ -798,7 +798,7 @@ impl Doc {
     pub fn page_size(&self, ops: &[PageSizeOp], opts: &mupdf::PageSizeOptions) -> Result<Vec<[f32; 2]>, String> {
         let mut inner = self.inner.lock();
         if !inner.doc.is_pdf() {
-            return Err("Only PDF pages can be cropped or resized. Save this file as a PDF first (Save as).".into());
+            return Err("Only PDF pages can be cropped or resized. Save this file as a PDF first (Save as PDF).".into());
         }
         for op in ops {
             self.check(op.page)?;
@@ -846,7 +846,7 @@ impl Doc {
         {
             let mut inner = self.inner.lock();
             if !inner.doc.is_pdf() {
-                return Err("Only PDFs can be edited. Save this file as a PDF first (Save as).".into());
+                return Err("Only PDFs can be edited. Save this file as a PDF first (Save as PDF).".into());
             }
             let page = self.page(&mut inner, index)?;
             page.picture_edit(&target, action, &dest, data)?;
@@ -970,7 +970,7 @@ impl Doc {
         {
             let mut inner = self.inner.lock();
             if !inner.doc.is_pdf() {
-                return Err("Only PDFs can be edited. Save this file as a PDF first (Save as).".into());
+                return Err("Only PDFs can be edited. Save this file as a PDF first (Save as PDF).".into());
             }
             let page = self.page(&mut inner, index)?;
             page.edit_text(&lines, probe, &html, &css, p.r[0], first[4], width)?;
@@ -1051,7 +1051,7 @@ impl Doc {
         };
         let inner = self.inner.lock();
         if !inner.doc.is_pdf() {
-            return Err("Only PDFs can have attachments. Save this file as a PDF first (Save as).".into());
+            return Err("Only PDFs can have attachments. Save this file as a PDF first (Save as PDF).".into());
         }
         inner.doc.attachment_add(&name, mime, &data, modified)?;
         drop(inner);
@@ -1073,7 +1073,7 @@ impl Doc {
         let origins = marks.iter().map(|m| self.bounds(m.page)).collect::<Result<Vec<_>, _>>()?;
         let mut inner = self.inner.lock();
         if !inner.doc.is_pdf() {
-            return Err("Only PDFs can be redacted. Save this file as a PDF first (Save as).".into());
+            return Err("Only PDFs can be redacted. Save this file as a PDF first (Save as PDF).".into());
         }
         inner.doc.begin_op("Mark for redaction");
         let res = (|| -> Result<usize, String> {
@@ -1211,7 +1211,7 @@ impl Doc {
     fn doc_step(&self, name: &str, content: bool, f: impl FnOnce(&Document) -> Result<(), String>) -> Result<(), String> {
         let inner = self.inner.lock();
         if !inner.doc.is_pdf() {
-            return Err("Only PDFs can be changed this way. Save this file as a PDF first (Save as).".into());
+            return Err("Only PDFs can be changed this way. Save this file as a PDF first (Save as PDF).".into());
         }
         inner.doc.begin_op(name);
         if let Err(e) = f(&inner.doc) {
@@ -1289,7 +1289,7 @@ impl Doc {
         }
         let mut inner = self.inner.lock();
         if !inner.doc.is_pdf() {
-            return Err("Only PDFs can be stamped. Save this file as a PDF first (Save as).".into());
+            return Err("Only PDFs can be stamped. Save this file as a PDF first (Save as PDF).".into());
         }
         for p in pages {
             self.check(p.page)?;
@@ -1354,7 +1354,7 @@ impl Doc {
     fn insert(&self, name: &str, add: impl FnOnce(&Document) -> Result<(), String>) -> Result<Inserted, String> {
         let mut inner = self.inner.lock();
         if !inner.doc.is_pdf() {
-            return Err("Pages can only be added to a PDF. Save this file as a PDF first (Save as).".into());
+            return Err("Pages can only be added to a PDF. Save this file as a PDF first (Save as PDF).".into());
         }
         let first = self.page_count();
         inner.doc.begin_op(name);
@@ -1789,7 +1789,7 @@ impl Engine {
         let d = self.doc(id)?;
         if opts.any() {
             if !d.inner.lock().doc.is_pdf() {
-                return Err("Only PDFs can be protected, compressed or repaired. Save this file as a PDF first (Save as).".into());
+                return Err("Only PDFs can be protected, compressed or repaired. Save this file as a PDF first (Save as PDF).".into());
             }
             if opts.protect.is_some() && !self.security(id)?.owner {
                 return Err("Enter the permissions password first: only its owner can change how this file is protected.".into());
@@ -1800,7 +1800,7 @@ impl Engine {
         let out = target.unwrap_or_else(|| cur.clone());
         let in_place = same_file(&out, &cur);
         if in_place && d.converted.read().is_some() {
-            return Err("This PDF was made from an Office file. Use Save as to keep it.".into());
+            return Err("This PDF was made from an Office file. Use Save as PDF to keep it.".into());
         }
         let backing = d.backing.lock().clone();
         // Never the file a kept copy is (the open document reads it).
@@ -1826,7 +1826,7 @@ impl Engine {
         d.texts.lock().clear();
         if !inner.doc.is_pdf() {
             if in_place {
-                return Err("This kind of file can't be saved in place. Use Save as to make a PDF.".into());
+                return Err("This kind of file can't be saved in place. Use Save as PDF.".into());
             }
             // Drawn into a new PDF: the document in memory isn't changed, so a failure leaves it as it was.
             write_beside(&out, |t| inner.doc.convert_to_pdf(t, &order, &rot))?;
@@ -1964,18 +1964,18 @@ impl Engine {
         let out = target.unwrap_or_else(|| cur.clone());
         let in_place = same_file(&out, &cur);
         if in_place && d.converted.read().is_some() {
-            return Err("This PDF was made from an Office file. Use Save as to keep it.".into());
+            return Err("This PDF was made from an Office file. Use Save as PDF to keep it.".into());
         }
         {
             let inner = d.inner.lock();
             if !inner.doc.is_pdf() {
-                return Err("Only PDFs can be signed. Save this file as a PDF first (Save as).".into());
+                return Err("Only PDFs can be signed. Save this file as a PDF first (Save as PDF).".into());
             }
             if inner.doc.has_changes() || d.backing.lock().is_some() {
                 return Err("Save your changes first: a signature covers the document as it is saved.".into());
             }
             if !inner.doc.can_save_incrementally() {
-                return Err("This file was damaged and repaired when it was opened, so it can't be signed as it is. Save a copy (Save as), open the copy and sign that.".into());
+                return Err("This file was damaged and repaired when it was opened, so it can't be signed as it is. Save a copy, open the copy and sign that.".into());
             }
         }
         if req.rect != [0.0; 4] {

@@ -125,7 +125,7 @@ export type InsertWhat =
 export async function insertPages(tab: Tab, at: number, what: InsertWhat): Promise<Inserted> {
   const info = tab.info.value;
   if (!info || !tab.edits.value) throw new Error("no document");
-  if (!info.isPdf) throw new Error("Pages can only be added to a PDF. Save this file as a PDF first (Save as).");
+  if (!info.isPdf) throw new Error("Pages can only be added to a PDF. Save this file as a PDF first (Save as PDF).");
   const r =
     "blank" in what
       ? await api.insertBlank(info.docId, what.blank[0], what.blank[1], what.count ?? 1)
@@ -233,10 +233,6 @@ export function redo(tab: Tab) {
   maybeAutoSave(tab);
 }
 
-/**
- * Saves the tab. PDFs save in place (only changes are appended); other formats,
- * or "Save as", ask for a file name and write a new PDF. Resolves true on success.
- */
 /** The tab shows the file just saved (or signed): fresh pages, no undo history. */
 export async function adoptSaved(tab: Tab, saved: DocInfo, page?: number) {
   const sizes = await api.pageSizes(saved.docId);
@@ -283,6 +279,11 @@ export function setSaveOverride(fn: typeof saveOverride) {
   saveOverride = fn;
 }
 
+/**
+ * Saves the tab. PDFs save in place (only changes are appended). Other formats (and PDFs made from Office files) ask
+ * for a file name and write a new PDF, which the tab then shows ("Save as PDF"). `saveAs` on a PDF is "Save a copy":
+ * a copy is written and the tab stays on its file, edits still to save there. Resolves true on success.
+ */
 export async function save(tab: Tab, saveAs = false): Promise<boolean> {
   const own = await saveOverride(tab, saveAs);
   if (own !== null) return own;

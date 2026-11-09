@@ -86,7 +86,7 @@ async function copyPages(from: Tab, views: number[], to: Tab, at: number) {
   const e = from.edits.value;
   const info = from.info.value;
   if (!e || !info) return;
-  if (!to.info.value?.isPdf) return showToast(`Pages can only be added to a PDF. Save ${to.name} as a PDF first (Save as).`, 4500);
+  if (!to.info.value?.isPdf) return showToast(`Pages can only be added to a PDF. Save ${to.name} as a PDF first (Save as PDF).`, 4500);
   const pages = views.map((v) => e.order[v]);
   try {
     const r = await P.insertPages(to, at, { fromDoc: info.docId, pages, rot: pages.map((p) => e.rot[p] ?? 0) });

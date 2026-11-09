@@ -14,7 +14,7 @@ type Kind = "protect" | "compress" | "repair";
 export const secureDialog = signal<{ tab: Tab; kind: Kind } | null>(null);
 
 export function startSecure(tab: Tab, kind: Kind) {
-  if (!tab.info.value?.isPdf) return showToast("Only PDFs can be protected, made smaller or repaired. Save this file as a PDF first (Save as).", 4500);
+  if (!tab.info.value?.isPdf) return showToast("Only PDFs can be protected, made smaller or repaired. Save this file as a PDF first (Save as PDF).", 4500);
   secureDialog.value = { tab, kind };
 }
 

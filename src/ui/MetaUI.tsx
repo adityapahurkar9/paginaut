@@ -19,7 +19,7 @@ export function startProperties(tab: Tab) {
 }
 
 export function startLabels(tab: Tab) {
-  if (!tab.info.value?.isPdf) return showToast("Only PDFs have page labels. Save this file as a PDF first (Save as).", 4500);
+  if (!tab.info.value?.isPdf) return showToast("Only PDFs have page labels. Save this file as a PDF first (Save as PDF).", 4500);
   labelsDialog.value = tab;
 }
 
@@ -129,7 +129,7 @@ function PropertiesInner({ tab }: { tab: Tab }) {
             </Fragment>
           ))}
         </dl>
-        {!info.isPdf && <span class="hint">Only PDFs can be changed here. Save this file as a PDF first (Save as).</span>}
+        {!info.isPdf && <span class="hint">Only PDFs can be changed here. Save this file as a PDF first (Save as PDF).</span>}
         {props?.pdfa && <span class="hint">It's marked {props.pdfa}. When you save, Paginaut says if a change would break that, and can keep it PDF/A.</span>}
         {error && <span class="error-text">{error}</span>}
         <div class="row">
