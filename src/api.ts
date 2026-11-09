@@ -20,6 +20,11 @@ export interface DocInfo {
   converted: Converted | null;
   /** An EPUB made from a PDF (pinned lines, words in pieces), shown as the PDF it was made from; saveRepaired keeps it. */
   repaired: boolean;
+  /**
+   * Set by a save that wrote everything but couldn't put it in the file's place (why): the document goes on from that
+   * copy, with page edits applied and nothing to undo, and its changes still have to be saved.
+   */
+  notSaved?: string;
 }
 
 export interface Converted {
@@ -470,6 +475,8 @@ export const api = {
     invoke<void>("area_save", { doc, page, area, rot, kind, dpi, path }),
   areaText: (doc: number, page: number, area: [number, number, number, number]) => invoke<string>("area_text", { doc, page, area }),
   areaTexts: (doc: number, page: number, areas: [number, number, number, number][]) => invoke<string[]>("area_texts", { doc, page, areas }),
+  /** A page's words with their boxes (relative to the page origin): [text, x0, y0, x1, y1, flags] each, as JSON. */
+  pageWords: (doc: number, page: number) => invoke<string>("page_words", { doc, page }),
   paragraphs: (doc: number, page: number) => invoke<Paragraph[]>("paragraphs", { doc, page }),
   /** Replaces a paragraph's text (one undo step in the engine). */
   /** With `runs`, the new text in runs of one style ([text, 1 bold | 2 italic]). */

@@ -7,9 +7,12 @@ import { api, type LabelRange, type Properties } from "../api";
 import { metaChanged } from "../edits";
 import { openConvertPane } from "../office";
 import { baseName, showToast, type Tab } from "../store";
+import { toolPane } from "../toolpanes";
+import { ToolFrame } from "./ToolFrame";
 
 export const propertiesDialog = signal<Tab | null>(null);
 export const labelsDialog = signal<Tab | null>(null);
+toolPane("labels", labelsDialog, { tabOf: (v) => v });
 
 export function startProperties(tab: Tab) {
   if (tab.info.value) propertiesDialog.value = tab;
@@ -234,93 +237,87 @@ function LabelsInner({ tab }: { tab: Tab }) {
   };
 
   return (
-    <div class="overlay" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div class="dialog tool-dialog labels-dialog" role="dialog" aria-label="Page labels">
-        <button class="ib sm close" aria-label="Close" onClick={close}>
-          <X size={16} />
-        </button>
-        <h2>Page labels</h2>
-        <span class="hint">
-          Labels are the page numbers a reader shows, like i, ii for the front matter and 1, 2 from the first chapter. They don't print on the page (use Page numbers for that).
-        </span>
-        {reordered ? (
-          <span class="hint">Pages have been moved, added or deleted since the last save. Save first, then set the labels.</span>
-        ) : (
-          <>
-            <div class="labels-rows">
-              <div class="labels-head">
-                <span>From page</span>
-                <span>Style</span>
-                <span>Prefix</span>
-                <span>Start at</span>
-                <span />
-              </div>
-              {ranges?.map((r, i) => (
-                <div class="labels-row" key={i}>
-                  <input
-                    class="inp sm num"
-                    type="number"
-                    min="1"
-                    max={count}
-                    value={r.s + 1}
-                    disabled={r.s === 0 && i === 0}
-                    aria-label="From page"
-                    onChange={(e) => set(i, { s: Math.max(0, Math.min(count - 1, Math.round(+(e.target as HTMLInputElement).value || 1) - 1)) })}
-                  />
-                  <select class="inp sm" value={r.st} aria-label="Style" onChange={(e) => set(i, { st: (e.target as HTMLSelectElement).value as LabelRange["st"] })}>
-                    {STYLES.map(([v, name]) => (
-                      <option key={v} value={v}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-                  <input class="inp sm" value={r.p} placeholder="e.g. A-" aria-label="Prefix" onInput={(e) => set(i, { p: (e.target as HTMLInputElement).value })} />
-                  <input
-                    class="inp sm num"
-                    type="number"
-                    min="1"
-                    value={r.n}
-                    disabled={!r.st}
-                    aria-label="Start at"
-                    onChange={(e) => set(i, { n: Math.max(1, Math.round(+(e.target as HTMLInputElement).value || 1)) })}
-                  />
-                  <button class="ib sm" aria-label="Remove this range" disabled={ranges.length < 2} onClick={() => setRanges(ranges.filter((_, k) => k !== i))}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-              <button class="btn ghost sm" disabled={!ranges || count < 2} onClick={add} style={{ alignSelf: "flex-start" }}>
-                <Plus size={14} /> Add a range
-              </button>
+    <ToolFrame id="labels" title="Page labels" class="labels-dialog">
+      <span class="hint">
+        Labels are the page numbers a reader shows, like i, ii for the front matter and 1, 2 from the first chapter. They don't print on the page (use Page numbers for that).
+      </span>
+      {reordered ? (
+        <span class="hint">Pages have been moved, added or deleted since the last save. Save first, then set the labels.</span>
+      ) : (
+        <>
+          <div class="labels-rows">
+            <div class="labels-head">
+              <span>From page</span>
+              <span>Style</span>
+              <span>Prefix</span>
+              <span>Start at</span>
+              <span />
             </div>
-            {!!preview.length && (
-              <span class="hint">
-                {baseName(info.path)}: {preview.join(", ")}
-                {count > preview.length ? ", …" : ""}
-                {sorted.length > 1 && sorted[sorted.length - 1].s >= preview.length && ` · page ${sorted[sorted.length - 1].s + 1} is ${labelOf(sorted, sorted[sorted.length - 1].s)}`}
-              </span>
-            )}
-          </>
-        )}
-        {clash && <span class="error-text">Two ranges start on the same page.</span>}
-        {error && <span class="error-text">{error}</span>}
-        <div class="row">
-          {!reordered && tab.labels.value && (
-            <button class="btn ghost" disabled={busy} onClick={() => void save([])}>
-              Remove labels
+            {ranges?.map((r, i) => (
+              <div class="labels-row" key={i}>
+                <input
+                  class="inp sm num"
+                  type="number"
+                  min="1"
+                  max={count}
+                  value={r.s + 1}
+                  disabled={r.s === 0 && i === 0}
+                  aria-label="From page"
+                  onChange={(e) => set(i, { s: Math.max(0, Math.min(count - 1, Math.round(+(e.target as HTMLInputElement).value || 1) - 1)) })}
+                />
+                <select class="inp sm" value={r.st} aria-label="Style" onChange={(e) => set(i, { st: (e.target as HTMLSelectElement).value as LabelRange["st"] })}>
+                  {STYLES.map(([v, name]) => (
+                    <option key={v} value={v}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <input class="inp sm" value={r.p} placeholder="e.g. A-" aria-label="Prefix" onInput={(e) => set(i, { p: (e.target as HTMLInputElement).value })} />
+                <input
+                  class="inp sm num"
+                  type="number"
+                  min="1"
+                  value={r.n}
+                  disabled={!r.st}
+                  aria-label="Start at"
+                  onChange={(e) => set(i, { n: Math.max(1, Math.round(+(e.target as HTMLInputElement).value || 1)) })}
+                />
+                <button class="ib sm" aria-label="Remove this range" disabled={ranges.length < 2} onClick={() => setRanges(ranges.filter((_, k) => k !== i))}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+            <button class="btn ghost sm" disabled={!ranges || count < 2} onClick={add} style={{ alignSelf: "flex-start" }}>
+              <Plus size={14} /> Add a range
             </button>
+          </div>
+          {!!preview.length && (
+            <span class="hint">
+              {baseName(info.path)}: {preview.join(", ")}
+              {count > preview.length ? ", …" : ""}
+              {sorted.length > 1 && sorted[sorted.length - 1].s >= preview.length && ` · page ${sorted[sorted.length - 1].s + 1} is ${labelOf(sorted, sorted[sorted.length - 1].s)}`}
+            </span>
           )}
-          <span style={{ flex: 1 }} />
-          <button class="btn" onClick={close}>
-            Cancel
+        </>
+      )}
+      {clash && <span class="error-text">Two ranges start on the same page.</span>}
+      {error && <span class="error-text">{error}</span>}
+      <div class="row">
+        {!reordered && tab.labels.value && (
+          <button class="btn ghost" disabled={busy} onClick={() => void save([])}>
+            Remove labels
           </button>
-          {!reordered && (
-            <button class="btn pri" disabled={busy || !ranges || clash} onClick={() => ranges && void save(sorted)}>
-              Save
-            </button>
-          )}
-        </div>
+        )}
+        <span style={{ flex: 1 }} />
+        <button class="btn" onClick={close}>
+          Cancel
+        </button>
+        {!reordered && (
+          <button class="btn pri" disabled={busy || !ranges || clash} onClick={() => ranges && void save(sorted)}>
+            Save
+          </button>
+        )}
       </div>
-    </div>
+    </ToolFrame>
   );
 }

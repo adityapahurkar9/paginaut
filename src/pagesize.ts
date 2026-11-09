@@ -145,6 +145,7 @@ export function startPageSize(tab: Tab) {
   if (tab.mode.value !== "pages") return showToast("Switch to Single or Double view to crop or resize pages.", 4000);
   const g = pageGeom(tab, tab.page.value);
   const sel = tab.pageSel.value;
+  fitBefore = tab.fit.value;
   pageSizeEdit.value = { tab, margins: fitRatio(g.W, g.H, cropRatio(tab)), scope: sel.size > 1 ? "selected" : "page", range: "" };
   requestAnimationFrame(() => {
     if (!tab.viewer || pageSizeEdit.value?.tab !== tab) return;
@@ -160,7 +161,12 @@ export function endPageSize() {
   if (layer && st) st.tab.viewer?.removeLayer(layer);
   layer = null;
   pageSizeEdit.value = null;
+  // The whole page was put in view for the box: the view goes back to how it was.
+  if (st && fitBefore && fitBefore !== "page") st.tab.viewer?.setFit(fitBefore);
+  fitBefore = null;
 }
+
+let fitBefore: import("./render/Viewer").FitMode | null = null;
 
 export function setMargins(m: Margins) {
   const st = pageSizeEdit.value;

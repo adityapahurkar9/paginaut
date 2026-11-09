@@ -365,7 +365,7 @@ function ReadAloud() {
   return (
     <>
       <h3>Read aloud</h3>
-      <span class="hint">View › Read aloud (Ctrl+Shift+U) reads the document's text, as Read mode shows it.</span>
+      <span class="hint">Home › Read aloud (Ctrl+Shift+U), or Read aloud from here on a right-click, reads the document's text, as Read mode shows it.</span>
       <Field
         label="Voice and speed"
         hint={

@@ -306,6 +306,13 @@ pub async fn area_save(state: State<'_, AppState>, doc: DocId, page: usize, area
     .await
 }
 
+/// A page's words with their boxes, [text, x0, y0, x1, y1, flags] each (Read aloud marks the word it's saying).
+#[tauri::command]
+pub async fn page_words(state: State<'_, AppState>, doc: DocId, page: usize) -> Res<String> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.words_json(page)).await
+}
+
 /// The text in each of several areas of a page (one reading of its text for all; Redact checks its hits so).
 #[tauri::command]
 pub async fn area_texts(state: State<'_, AppState>, doc: DocId, page: usize, areas: Vec<[f32; 4]>) -> Res<Vec<String>> {

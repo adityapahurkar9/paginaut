@@ -354,6 +354,7 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
     }
     const saved = await api.save(info.docId, e.order, e.rot, target);
     await adoptSaved(tab, saved, view?.page);
+    if (keptNotSaved(tab, saved)) return false;
     const lost = e.order.length - saved.pageCount;
     // Checked again as saved: what Paginaut couldn't put right is said.
     const left = keep ? (await api.pdfaCheck(saved.docId, keep).catch(() => null))?.issues ?? [] : [];
@@ -369,11 +370,30 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
     );
     return true;
   } catch (err) {
+    failedSave(tab);
     showToast(`Couldn't save: ${err}`, 5000);
     return false;
   } finally {
     tab.saving.value = false;
   }
+}
+
+/** A save failed: the document is as it was before (the engine took the save's own changes back), but what could be
+ *  redone is gone. */
+function failedSave(tab: Tab) {
+  tab.history.dropRedo();
+  tab.historyVersion.value++;
+}
+
+/**
+ * A save that wrote everything into a copy beside the file but couldn't replace the file: the tab goes on from that
+ * copy (as after a save), still with changes to save. True when that's what happened (said to the user).
+ */
+function keptNotSaved(tab: Tab, saved: DocInfo): boolean {
+  if (!saved.notSaved) return false;
+  tab.docChanged.value = true;
+  showToast(`Couldn't save: ${saved.notSaved}`, 12000);
+  return true;
 }
 
 /** Saves a repaired e-book (an EPUB made from a PDF): as that PDF, pages exactly as made, or as a
@@ -413,8 +433,10 @@ export async function saveWithOptions(tab: Tab, opts: SaveOptions, target: strin
     const view = tab.viewer?.viewState();
     const saved = await api.saveWith(info.docId, e.order, e.rot, target, opts);
     await adoptSaved(tab, saved, view?.page);
+    if (keptNotSaved(tab, saved)) return null;
     return saved;
   } catch (err) {
+    failedSave(tab);
     showToast(`Couldn't save: ${err}`, 6000);
     return null;
   } finally {

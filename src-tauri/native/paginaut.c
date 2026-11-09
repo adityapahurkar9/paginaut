@@ -1530,6 +1530,20 @@ int fo_pdf_undo(fo_ctx *c, fo_doc *d, int redo)
 	return done;
 }
 
+/* Where the undo journal stands (steps that can be undone), or -1 when the document has no journal. */
+int fo_pdf_journal_pos(fo_ctx *c, fo_doc *d)
+{
+	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
+	int steps = 0, pos = -1;
+	if (!pdf || !pdf->journal)
+		return -1;
+	fz_try(CTX)
+		pos = pdf_undoredo_state(CTX, pdf, &steps);
+	fz_catch(CTX)
+		pos = -1;
+	return pos;
+}
+
 int fo_pdf_has_changes(fo_ctx *c, fo_doc *d)
 {
 	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);

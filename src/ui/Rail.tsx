@@ -5,6 +5,7 @@ import { isMarkdown, openMdPane } from "../markdown";
 import { bookScreen } from "../modes";
 import { onRail, openPane, pane, PANE_IDS, railItems, railShown, setOnRail, setRailShown, togglePane, type PaneId } from "../panes";
 import { startRedact } from "../redact";
+import { toolBack } from "../toolpanes";
 import { openSignPane } from "../sign";
 import { activeTab, openSettings } from "../store";
 import type { MenuItem } from "./Overlays";
@@ -93,9 +94,10 @@ export function Rail() {
       {items.map((id) => {
         const p = PANES[id];
         const Icon = p.icon;
-        const on = cur === id;
+        // A tool opened from this pane (Insert pages from Organize, say) shows it as where you are.
+        const on = cur === id || (cur === "tool" && toolBack.value === id);
         return (
-          <button key={id} class={`rail-btn ${on ? "on" : ""}`} title={p.title} aria-pressed={on} onClick={() => (on ? togglePane(id) : p.open())}>
+          <button key={id} class={`rail-btn ${on ? "on" : ""}`} title={p.title} aria-pressed={on} onClick={() => (cur === id ? togglePane(id) : p.open())}>
             <Icon size={16} strokeWidth={1.8} />
             <span>{p.label}</span>
           </button>
