@@ -17,7 +17,7 @@ import { ToolFrame } from "./ToolFrame";
 const PICTURES = new Set(["png", "jpg", "jpeg", "jfif", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "pnm", "pbm", "pgm", "ppm", "pam", "jxr"]);
 const isPicture = (path: string) => PICTURES.has(path.split(".").pop()?.toLowerCase() ?? "");
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
-const NOT_PDF = "Pages can only be added to a PDF. Save this file as a PDF first (Save as).";
+const NOT_PDF = "Pages can only be added to a PDF. Save this file as a PDF first (Save as PDF).";
 
 interface FileEntry {
   /** Tells rows apart when the same file is added twice. */
@@ -396,7 +396,7 @@ function InsertDialogInner({ tab, initial }: { tab: Tab; initial: FileEntry[] })
 export const mergeDialog = signal<{ from: Tab | null; files: FileEntry[] } | null>(null);
 toolPane("merge", mergeDialog);
 
-/** Pictures into one PDF (Convert › To PDF › Images): the Merge dialog, starting with pictures picked. */
+/** Pictures into one PDF (Convert › To PDF › Images): the Merge tool, starting with pictures picked. */
 export async function startMergePictures() {
   const res = testHook()?.pick ?? (await open({ multiple: true, title: "Pictures to put in one PDF", filters: [{ name: "Pictures", extensions: [...PICTURES] }] }));
   const files = await peekAll(Array.isArray(res) ? res : res ? [res] : []);

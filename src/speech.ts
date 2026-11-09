@@ -586,7 +586,7 @@ export async function readAloud(tab: Tab, b?: number, off = 0, at?: { view: numb
   const pieces = piecesOf(flow);
   if (!pieces.length) {
     speaking.value = null;
-    showToast(flow.scans ? "This is a scan: recognize its text first (Tools › Recognize text)." : "There's no text here to read.", 5000);
+    showToast(flow.scans ? "This is a scan: recognize its text first (Tools › OCR)." : "There's no text here to read.", 5000);
     return;
   }
   reader = new Reader(tab, flow, pieces);

@@ -16,7 +16,7 @@ export const redactAreas = signal(false);
 export const redactMarks = signal<{ pages: number; marks: number }>({ pages: 0, marks: 0 });
 
 export function startRedact(tab: Tab) {
-  if (!tab.info.value?.isPdf) return showToast("Only PDFs can be redacted. Save this file as a PDF first (Save as).", 4500);
+  if (!tab.info.value?.isPdf) return showToast("Only PDFs can be redacted. Save this file as a PDF first (Save as PDF).", 4500);
   if (tab.mode.value !== "pages") return showToast("Switch to Single or Double view to redact.", 4000);
   redactTab.value = tab;
   openPane("redact");

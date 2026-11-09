@@ -469,7 +469,7 @@ export async function refreshAttachments(tab: Tab) {
 /** Attaches files the user picks to the document (one undo step each). */
 export async function attachFiles(tab: Tab) {
   const info = tab.info.value;
-  if (!info?.isPdf) return showToast("Only PDFs can have attachments. Save this file as a PDF first (Save as).", 4500);
+  if (!info?.isPdf) return showToast("Only PDFs can have attachments. Save this file as a PDF first (Save as PDF).", 4500);
   const hook = testHook()?.pick;
   const picked = hook ?? (await open({ title: "Attach files", multiple: true }));
   const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];

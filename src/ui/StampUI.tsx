@@ -14,7 +14,7 @@ export const watermarkDialog = signal<Tab | null>(null);
 toolPane("headers", headerDialog, { tabOf: (v) => v });
 toolPane("watermark", watermarkDialog, { tabOf: (v) => v });
 
-const NOT_PDF = "Only PDFs can have page numbers or watermarks added. Save this file as a PDF first (Save as).";
+const NOT_PDF = "Only PDFs can have page numbers or watermarks added. Save this file as a PDF first (Save as PDF).";
 
 export function startHeaders(tab: Tab) {
   if (!tab.info.value?.isPdf) return showToast(NOT_PDF, 4500);

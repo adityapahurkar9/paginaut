@@ -76,7 +76,7 @@ const layers = new WeakMap<Tab, AnnotLayer>();
 export async function editAnnot(tab: Tab, src: number, req: { num?: number; kind?: string; props?: AnnotProps; delete?: boolean }): Promise<number | null> {
   const info = tab.info.value;
   if (!info?.isPdf) {
-    showToast("Comments can be added to PDFs. Save this file as a PDF first (Save as).");
+    showToast("Comments can be added to PDFs. Save this file as a PDF first (Save as PDF).");
     return null;
   }
   try {

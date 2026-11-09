@@ -427,7 +427,7 @@ export function FilesToPdf() {
         <button class="btn sm" disabled={d.running} onClick={() => void add()}>
           {d.items.length ? "Add files…" : "Choose files…"}
         </button>
-        <button class="btn ghost sm" disabled={d.running} title="Pictures into one PDF (in the Merge dialog)" onClick={() => void startMergePictures()}>
+        <button class="btn ghost sm" disabled={d.running} title="Pictures into one PDF (Merge, in the pane on the right)" onClick={() => void startMergePictures()}>
           Pictures to one PDF…
         </button>
         {done.length > 0 && !d.running && (

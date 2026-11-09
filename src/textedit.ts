@@ -60,7 +60,7 @@ function runsKey(runs: Run[]) {
 
 export function toggleTextEdit(tab: Tab) {
   if (textEdit.value === tab) return stopTextEdit();
-  if (!tab.info.value?.isPdf) return showToast("Only PDFs can be edited. Save this file as a PDF first (Save as).", 4500);
+  if (!tab.info.value?.isPdf) return showToast("Only PDFs can be edited. Save this file as a PDF first (Save as PDF).", 4500);
   if (tab.mode.value !== "pages") return showToast("Switch to Single or Double view to edit text.", 4000);
   stopTextEdit();
   textEdit.value = tab;
@@ -143,7 +143,7 @@ async function changePicture(tab: Tab, src: number, target: Box, action: 0 | 1 |
 
 /** Tools › Insert › Picture: on the page in view, as large as fits in the middle 60% of it. */
 export async function addPicture(tab: Tab) {
-  if (!tab.info.value?.isPdf) return showToast("Only PDFs can be edited. Save this file as a PDF first (Save as).", 4500);
+  if (!tab.info.value?.isPdf) return showToast("Only PDFs can be edited. Save this file as a PDF first (Save as PDF).", 4500);
   const pic = await pickPicture("Add a picture");
   if (!pic) return;
   const view = tab.page.value;

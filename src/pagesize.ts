@@ -140,7 +140,7 @@ function clampMargins(m: Margins, W: number, H: number): Margins {
 let layer: CropLayer | null = null;
 
 export function startPageSize(tab: Tab) {
-  if (!tab.info.value?.isPdf) return showToast("Only PDF pages can be cropped or resized. Save this file as a PDF first (Save as).", 4500);
+  if (!tab.info.value?.isPdf) return showToast("Only PDF pages can be cropped or resized. Save this file as a PDF first (Save as PDF).", 4500);
   tab.grid.value = false;
   if (tab.mode.value !== "pages") return showToast("Switch to Single or Double view to crop or resize pages.", 4000);
   const g = pageGeom(tab, tab.page.value);
