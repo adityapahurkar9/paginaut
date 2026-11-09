@@ -672,6 +672,14 @@ impl Doc {
         self.texts.lock().clear();
     }
 
+    /// The pages' own content changed in memory (text, pictures, redactions, stamps, pages added or resized): as
+    /// `edited`, and background jobs (search, Read and Book mode, Compare) read this document from now on, not
+    /// copies of the file on disk. Every edit of page content goes through here.
+    pub(crate) fn content_changed(&self) {
+        self.content_edited.store(true, Ordering::Release);
+        self.edited();
+    }
+
     pub fn forms_init(&self) -> Result<FormInfo, String> {
         let inner = self.inner.lock();
         if !inner.doc.is_pdf() {
@@ -774,8 +782,7 @@ impl Doc {
                 }
             }
         }
-        self.content_edited.store(true, Ordering::Release);
-        self.edited();
+        self.content_changed();
         ops.iter().map(|op| self.bounds(op.page).map(|b| [b[2] - b[0], b[3] - b[1]])).collect()
     }
 
@@ -798,7 +805,7 @@ impl Doc {
             let page = self.page(&mut inner, index)?;
             page.picture_edit(&target, action, &dest, data)?;
         }
-        self.edited();
+        self.content_changed();
         Ok(())
     }
 
@@ -922,7 +929,7 @@ impl Doc {
             let page = self.page(&mut inner, index)?;
             page.edit_text(&lines, probe, &html, &css, p.r[0], first[4], width)?;
         }
-        self.edited();
+        self.content_changed();
         Ok(())
     }
 
@@ -944,6 +951,12 @@ impl Doc {
     pub fn area_text(&self, index: usize, area: [f32; 4]) -> Result<String, String> {
         let b = self.bounds(index)?;
         self.list(index, 1)?.area_text(&b, &area)
+    }
+
+    /// The text in each of several areas of page `index`.
+    pub fn area_texts(&self, index: usize, areas: &[[f32; 4]]) -> Result<Vec<String>, String> {
+        let b = self.bounds(index)?;
+        self.list(index, 1)?.area_texts(&b, areas)
     }
 
     pub fn attachments(&self) -> Result<Vec<Attachment>, String> {
@@ -1118,14 +1131,15 @@ impl Doc {
             }
         }
         drop(inner);
-        self.edited();
+        self.content_changed();
         Ok(out)
     }
 
     /// Takes out (one undo step): what & 1 metadata, 2 scripts, 4 attached files, 8 comments, 16 hidden text.
     pub fn sanitize(&self, what: i32) -> Result<Sanitized, String> {
         let mut out = Sanitized::default();
-        self.doc_op("Sanitize", |doc| {
+        // Hidden text and scripts come out of the pages' content.
+        self.doc_step("Sanitize", true, |doc| {
             out = serde_json::from_str(&doc.sanitize(what)?).map_err(|e| e.to_string())?;
             Ok(())
         })?;
@@ -1136,6 +1150,11 @@ impl Doc {
 
     /// Runs `f` on the PDF as one undo step named `name`.
     fn doc_op(&self, name: &str, f: impl FnOnce(&Document) -> Result<(), String>) -> Result<(), String> {
+        self.doc_step(name, false, f)
+    }
+
+    /// As `doc_op`; `content`: the step changes the pages' content (see `content_changed`).
+    fn doc_step(&self, name: &str, content: bool, f: impl FnOnce(&Document) -> Result<(), String>) -> Result<(), String> {
         let inner = self.inner.lock();
         if !inner.doc.is_pdf() {
             return Err("Only PDFs can be changed this way. Save this file as a PDF first (Save as).".into());
@@ -1147,7 +1166,11 @@ impl Doc {
         }
         inner.doc.end_op();
         drop(inner);
-        self.edited();
+        if content {
+            self.content_changed();
+        } else {
+            self.edited();
+        }
         Ok(())
     }
 
@@ -1236,8 +1259,7 @@ impl Doc {
         }
         inner.doc.end_op();
         drop(inner);
-        self.content_edited.store(true, Ordering::Release);
-        self.edited();
+        self.content_changed();
         Ok(pages.len())
     }
 
@@ -1267,8 +1289,7 @@ impl Doc {
         }
         inner.doc.end_op();
         drop(inner);
-        self.content_edited.store(true, Ordering::Release);
-        self.edited();
+        self.content_changed();
         Ok(count)
     }
 
@@ -1291,8 +1312,7 @@ impl Doc {
         self.resync_pages(&mut inner)?;
         drop(inner);
         // Background jobs (search, Read mode) must read these pages from memory.
-        self.content_edited.store(true, Ordering::Release);
-        self.edited();
+        self.content_changed();
         let count = self.page_count().saturating_sub(first);
         let sizes = (first..first + count).map(|i| self.bounds(i).map(|b| [b[2] - b[0], b[3] - b[1]])).collect::<Result<_, _>>()?;
         Ok(Inserted { first, count, sizes })
@@ -1366,8 +1386,21 @@ impl Doc {
             page.annot_apply(n, &edit)?;
             Ok(n)
         })();
-        inner.doc.end_op();
-        let n = res?;
+        let n = match res {
+            Ok(n) => {
+                inner.doc.end_op();
+                n
+            }
+            Err(e) => {
+                // Nothing of a half-made comment stays, and no undo step is left that the app doesn't know of.
+                inner.doc.abandon_op();
+                drop(page);
+                inner.pages.clear();
+                drop(inner);
+                self.edited();
+                return Err(e);
+            }
+        };
         self.edited();
         Ok((n, FormChange { accepted: true, changed: inner.doc.has_changes() }))
     }
@@ -1867,6 +1900,9 @@ impl Engine {
             return Err(e);
         }
         *d.path.write() = out;
+        // Signed into a file of its own (in place is refused above for a PDF made from an Office file): from now on
+        // it's a PDF in its own right, as after Save as.
+        *d.converted.write() = None;
         d.edited();
         d.prepare()?;
         Ok(d.info())
@@ -1904,11 +1940,7 @@ impl Engine {
         if base == 0 {
             return Err("There are no pages to combine.".into());
         }
-        // Written beside the target first, so a failure never leaves half a file.
-        let tmp = format!("{target}.paginaut-tmp");
-        let res = out.save_pdf(&tmp, false).and_then(|_| std::fs::rename(&tmp, target).or_else(|_| copy_with_retry(&tmp, target)).map_err(|e| e.to_string()));
-        let _ = std::fs::remove_file(&tmp);
-        res.map(|_| base)
+        write_beside(target, |tmp| out.save_pdf(tmp, false)).map(|_| base)
     }
 
     /// Copies pages of another open document (as they are in memory, unsaved
@@ -1940,11 +1972,7 @@ impl Engine {
     pub fn save_parts(&self, id: DocId, parts: Vec<Part>, rot: Vec<i32>) -> Result<Vec<u64>, String> {
         let d = self.doc(id)?;
         let write = |path: &str, f: &dyn Fn(&str) -> Result<(), String>| -> Result<u64, String> {
-            // Beside the target first, so a failure never leaves half a file.
-            let tmp = format!("{path}.paginaut-tmp");
-            let res = f(&tmp).and_then(|_| std::fs::rename(&tmp, path).or_else(|_| copy_with_retry(&tmp, path)).map_err(|e| e.to_string()));
-            let _ = std::fs::remove_file(&tmp);
-            res?;
+            write_beside(path, f)?;
             Ok(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
         };
         if !d.inner.lock().doc.is_pdf() {
@@ -2103,10 +2131,12 @@ impl Engine {
     /// is left as it is.
     pub fn save_flattened(&self, id: DocId, target: String, order: Vec<usize>, rot: Vec<i32>, annots: bool) -> Result<(), String> {
         let d = self.doc(id)?;
-        let tmp = format!("{target}.paginaut-tmp");
-        d.inner.lock().doc.save_copy(&tmp)?;
-        let res = (|| -> Result<(), String> {
-            let copy = Document::open(&tmp)?;
+        // The document as it is in memory goes to a temporary copy, which is flattened into a second one beside the
+        // target: a failure leaves neither half a file nor a damaged target.
+        let copy_path = temp_path(id, "flatten");
+        d.inner.lock().doc.save_copy(&copy_path)?;
+        let res = write_beside(&target, |out| {
+            let copy = Document::open(&copy_path)?;
             if copy.needs_password() {
                 if let Some(pw) = d.password.lock().as_deref() {
                     copy.authenticate(pw);
@@ -2114,9 +2144,9 @@ impl Engine {
             }
             copy.apply_page_edits(&rot, &order, d.file_pages.load(Ordering::Relaxed))?;
             copy.bake(annots)?;
-            copy.save_pdf(&target, false)
-        })();
-        let _ = std::fs::remove_file(&tmp);
+            copy.save_pdf(out, false)
+        });
+        let _ = std::fs::remove_file(&copy_path);
         res
     }
 
@@ -2136,8 +2166,14 @@ impl Engine {
         if !d.inner.lock().doc.is_pdf() {
             return Ok(None);
         }
+        // From the catalog's /PageLabels alone: loading every page to ask its label was slow on long files and
+        // pushed the viewer's pages out of the cache.
+        let ranges = d.page_label_ranges()?;
+        if ranges.is_empty() {
+            return Ok(None);
+        }
         let n = d.page_count();
-        let labels: Vec<String> = (0..n).map(|i| d.label(i).unwrap_or_default()).collect();
+        let labels: Vec<String> = (0..n).map(|i| label_of(&ranges, i)).collect();
         let plain = labels.iter().enumerate().all(|(i, l)| l.is_empty() || *l == (i + 1).to_string());
         Ok((!plain).then_some(labels))
     }
@@ -2227,7 +2263,7 @@ impl Engine {
                             if halted() {
                                 break;
                             }
-                            match work(i, src) {
+                            match guarded(i, || work(i, src)) {
                                 Ok(true) => {}
                                 Ok(false) => stopped.store(true, Ordering::Release),
                                 Err(e) => {
@@ -2245,11 +2281,12 @@ impl Engine {
                 };
                 if d.content_edited.load(Ordering::Acquire) {
                     run(&PageSrc::Shared(&d));
-                } else {
-                    let _ = d.with_private(|doc| {
-                        run(&PageSrc::Private(doc));
-                        Ok(())
-                    });
+                } else if let Err(e) = d.with_private(|doc| {
+                    run(&PageSrc::Private(doc));
+                    Ok(())
+                }) {
+                    // The file couldn't be opened again (moved, or gone): said, not taken for a finished scan.
+                    error.lock().get_or_insert(e);
                 }
                 if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
                     if let Some(f) = finished.lock().take() {
@@ -2361,6 +2398,12 @@ impl Engine {
 }
 
 
+/// Runs one page's part of a background job: a fault (a panic) in it becomes that page's error, so the job still
+/// ends, says so, and lets go of its document copies instead of never reporting back.
+pub(crate) fn guarded<T>(page: usize, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err(format!("Page {} couldn't be read: Paginaut hit a fault in it.", page + 1)))
+}
+
 /// A file in the temp folder for a copy of a document.
 fn temp_path(id: DocId, what: &str) -> String {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
@@ -2371,11 +2414,66 @@ fn file_name(path: &str) -> &str {
     path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
+/// The two paths name the same file. Windows' file names ignore case; on Linux, Report.pdf and report.pdf are two
+/// files, unless they're one file (the same inode, as on a case-insensitive disk or through a link).
+#[cfg(windows)]
 fn same_file(a: &str, b: &str) -> bool {
     let norm = |p: &str| {
         std::fs::canonicalize(p).map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_else(|_| p.replace('/', "\\").to_lowercase())
     };
     norm(a) == norm(b)
+}
+
+#[cfg(not(windows))]
+fn same_file(a: &str, b: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        // One isn't there (a new file): the same only when both name it alike.
+        _ => {
+            let norm = |p: &str| std::fs::canonicalize(p).map(|x| x.to_string_lossy().into_owned()).unwrap_or_else(|_| p.to_string());
+            norm(a) == norm(b)
+        }
+    }
+}
+
+/// Writes a file with `write` into a temporary file beside `target`, then puts it in its place, so a failure never
+/// leaves half a file (or a damaged original) at `target`.
+fn write_beside(target: &str, write: impl FnOnce(&str) -> Result<(), String>) -> Result<(), String> {
+    let tmp = format!("{target}.paginaut-tmp");
+    let res = write(&tmp).and_then(|_| std::fs::rename(&tmp, target).or_else(|_| copy_with_retry(&tmp, target)).map_err(|e| e.to_string()));
+    let _ = std::fs::remove_file(&tmp);
+    res
+}
+
+/// Page `i`'s label from the document's label ranges (see fo_pdf_page_label_ranges_json): the range's prefix and
+/// its number in the range's style (D 1 2 3, R I II, r i ii, A A..Z AA.., a a..z aa..).
+fn label_of(ranges: &[mupdf::LabelRange], i: usize) -> String {
+    let Some(r) = ranges.iter().rev().find(|r| r.s <= i) else { return String::new() };
+    let n = (r.n.max(1) as usize) + (i - r.s);
+    let roman = |mut n: usize| {
+        let mut s = String::new();
+        for (v, t) in [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"), (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")] {
+            while n >= v {
+                s.push_str(t);
+                n -= v;
+            }
+        }
+        s
+    };
+    let letters = |n: usize| {
+        let c = (b'a' + ((n - 1) % 26) as u8) as char;
+        c.to_string().repeat((n - 1) / 26 + 1)
+    };
+    let num = match r.st.as_str() {
+        "D" => n.to_string(),
+        "r" => roman(n),
+        "R" => roman(n).to_uppercase(),
+        "a" => letters(n),
+        "A" => letters(n).to_uppercase(),
+        _ => String::new(),
+    };
+    format!("{}{num}", r.p)
 }
 
 /// Copies over a file that other readers may still have open for a moment.
@@ -2426,5 +2524,24 @@ fn render_now(d: &Doc, req: &RenderReq, ctl: &Ctl) -> Result<Option<Rendered>, S
     match list.render(&bounds, req.scale, req.rotate, clip, &mut bytes[8..], Some(&ctl.cookie))? {
         RenderOutcome::Done => Ok(Some(Rendered { bytes, width: cw, height: ch })),
         RenderOutcome::Aborted => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn range(s: usize, st: &str, p: &str, n: i32) -> mupdf::LabelRange {
+        mupdf::LabelRange { s, st: st.into(), p: p.into(), n }
+    }
+
+    #[test]
+    fn labels_from_ranges() {
+        let r = [range(0, "r", "", 1), range(4, "D", "", 1), range(10, "A", "App-", 1), range(40, "", "Cover", 1)];
+        let got: Vec<String> = [0, 3, 4, 9, 10, 35, 36, 40].iter().map(|&i| label_of(&r, i)).collect();
+        assert_eq!(got, ["i", "iv", "1", "6", "App-A", "App-Z", "App-AA", "Cover"]);
+        assert_eq!(label_of(&[range(0, "D", "", 5)], 2), "7");
+        assert_eq!(label_of(&[range(2, "D", "", 1)], 0), "");
+        assert_eq!(label_of(&[range(0, "R", "", 1)], 1993), "MCMXCIV");
     }
 }

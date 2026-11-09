@@ -2,9 +2,11 @@
 import { signal, type Signal } from "@preact/signals";
 import type { ItemKind, LayoutOverrides, PageOverride } from "./model";
 import type { Box } from "./model";
-import { storeItem, type Tab } from "../store";
+import { pathKey, storeItem, type Tab } from "../store";
 
-const storageKey = (path: string) => `paginaut.layout.${path.toLowerCase()}`;
+const storageKey = (path: string) => `paginaut.layout.${pathKey(path)}`;
+/** Before 0.9.11 every system's key was the lowercased path; Linux's corrections are still found under it. */
+const oldKey = (path: string) => `paginaut.layout.${path.toLowerCase()}`;
 const bySignal = new WeakMap<Tab, { path: string; ov: Signal<LayoutOverrides> }>();
 
 /** The tab's corrections (a signal: Read/Book rebuild when it changes). */
@@ -13,7 +15,7 @@ export function overridesOf(tab: Tab): Signal<LayoutOverrides> {
   if (cur && cur.path === tab.path) return cur.ov;
   let v: LayoutOverrides = {};
   try {
-    v = JSON.parse(localStorage.getItem(storageKey(tab.path)) || "{}");
+    v = JSON.parse(localStorage.getItem(storageKey(tab.path)) || localStorage.getItem(oldKey(tab.path)) || "{}");
   } catch {
     /* none */
   }
@@ -26,6 +28,7 @@ function store(tab: Tab, next: LayoutOverrides) {
   overridesOf(tab).value = next;
   const empty = !next.columns && !Object.keys(next.pages ?? {}).length;
   storeItem(storageKey(tab.path), empty ? null : JSON.stringify(next));
+  if (oldKey(tab.path) !== storageKey(tab.path)) storeItem(oldKey(tab.path), null);
 }
 
 /** Changes one page's corrections; an empty correction is removed. */

@@ -137,7 +137,13 @@ impl Pool {
 
     /// Asks every worker to run the maintenance hook as soon as it is idle.
     pub fn maintain(&self) {
-        self.shared.epoch.fetch_add(1, Ordering::AcqRel);
+        // Bumped under the queue's lock: a worker checks the epoch and starts waiting under it, so it either sees
+        // the new epoch or is already waiting when the wakeup comes (otherwise the wakeup could be lost, and idle
+        // workers kept copies of closed documents until some other job arrived).
+        {
+            let _q = self.shared.queue.lock();
+            self.shared.epoch.fetch_add(1, Ordering::AcqRel);
+        }
         self.shared.ready.notify_all();
     }
 
@@ -187,7 +193,10 @@ fn worker(s: Arc<Shared>) {
 
 impl Drop for Pool {
     fn drop(&mut self) {
-        self.shared.shutdown.store(true, Ordering::Release);
+        {
+            let _q = self.shared.queue.lock();
+            self.shared.shutdown.store(true, Ordering::Release);
+        }
         self.shared.ready.notify_all();
         for t in self.threads.drain(..) {
             let _ = t.join();

@@ -80,6 +80,11 @@ export interface ViewerCallbacks {
    * corners (for area highlights on scans).
    */
   onSelectionEnd?(src: number, quads: Quad[], a: [number, number], b: [number, number]): void;
+  /**
+   * Whether a drag shows the box it covers as it goes (Redact marks a box on scans, or with areas on), told whether
+   * the drag has selected text so far.
+   */
+  dragBox?(hasText: boolean): boolean;
   /** The view scrolled (by the user or the program). */
   onScroll?(): void;
 }
@@ -1049,11 +1054,38 @@ export class Viewer {
     if (mode !== 0) this.updateSelection({ view: pv.index, a: start, b: start, mode });
     else if (this.selection) this.clearSelection();
 
+    // The box a drag covers, drawn while it goes when asked for (in fractions of the page, so scrolling keeps it).
+    const frac = (ev: { clientX: number; clientY: number }): [number, number] => {
+      const r = pv.el.getBoundingClientRect();
+      return [Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)), Math.max(0, Math.min(1, (ev.clientY - r.top) / r.height))];
+    };
+    const f0 = frac(e);
+    let box: HTMLDivElement | null = null;
+    const drawBox = (ev: PointerEvent) => {
+      if (!this.cb.dragBox?.(this.selQuads.length > 0)) {
+        box?.remove();
+        box = null;
+        return;
+      }
+      if (!box) {
+        box = document.createElement("div");
+        box.className = "drag-box";
+        pv.el.append(box);
+      }
+      const f1 = frac(ev);
+      Object.assign(box.style, {
+        left: `${Math.min(f0[0], f1[0]) * 100}%`,
+        top: `${Math.min(f0[1], f1[1]) * 100}%`,
+        width: `${Math.abs(f1[0] - f0[0]) * 100}%`,
+        height: `${Math.abs(f1[1] - f0[1]) * 100}%`,
+      });
+    };
     const move = (ev: PointerEvent) => {
       const p = this.pointToPage(pv, ev.clientX, ev.clientY);
       if (!moved && Math.hypot(p[0] - start[0], p[1] - start[1]) < 2) return;
       moved = true;
       this.updateSelection({ view: pv.index, a: start, b: p, mode });
+      drawBox(ev);
       this.autoScroll(ev);
     };
     let last = start;
@@ -1064,6 +1096,7 @@ export class Viewer {
       window.removeEventListener("pointermove", track);
       window.removeEventListener("pointerup", up);
       this.stopAutoScroll();
+      box?.remove();
       if (moved && this.cb.onSelectionEnd) {
         const src = pv.spec.src;
         void this.selectionSettled().then(() => this.cb.onSelectionEnd?.(src, this.selQuads, start, last));

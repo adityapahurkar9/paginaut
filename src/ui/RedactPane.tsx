@@ -1,15 +1,24 @@
-// The Redact panel: mark (by hand or by search), then remove or cover; and Sanitize.
+// The Redact pane (right side, like Sign and Convert, so the page makes room for it): mark (by hand or by search),
+// then remove or cover; and Sanitize.
 import { useEffect, useState } from "preact/hooks";
 import { X } from "lucide-preact";
 import { docSigs } from "../dsc";
 import {
   applyRedactions, checkHits, clearMarks, findAll, markAll, PATTERNS, redactAreas, redactMarks, redactTab, refreshMarks, sanitize, stopRedact,
 } from "../redact";
+import { bookScreen } from "../modes";
+import { pane } from "../panes";
 import { ask, showToast, type Tab } from "../store";
 
 const rgbOf = (hex: string): [number, number, number] => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number];
 
-export function RedactPanel({ tab }: { tab: Tab }) {
+export function RedactPane() {
+  const tab = redactTab.value;
+  if (pane.value !== "redact" || !tab || bookScreen.value) return null;
+  return <RedactBody key={tab.key} tab={tab} />;
+}
+
+function RedactBody({ tab }: { tab: Tab }) {
   const [query, setQuery] = useState("");
   const [regex, setRegex] = useState(false);
   const [found, setFound] = useState<{ hits: Map<number, number[][]>; count: number; pages: number; limited: boolean; partial: boolean } | null>(null);
@@ -20,13 +29,11 @@ export function RedactPanel({ tab }: { tab: Tab }) {
   const [what, setWhat] = useState(1 | 2 | 4);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const open = redactTab.value === tab;
   // Undo and redo change the marks too.
   const version = tab.historyVersion.value;
   useEffect(() => {
-    if (open) void refreshMarks(tab);
-  }, [open, version]);
-  if (!open) return null;
+    void refreshMarks(tab);
+  }, [version]);
   const marks = redactMarks.value;
   const signed = docSigs(tab).value?.some((s) => s.signed);
 
@@ -64,7 +71,7 @@ export function RedactPanel({ tab }: { tab: Tab }) {
   const apply = async () => {
     const how = cover
       ? "The marked places get covered with boxes. The text stays in the file underneath: anyone can still copy or search it. Use this only to hide things from view."
-      : "What's under the marks — text, picture pixels, drawings — is deleted from the pages, and checked afterwards. Save to make it permanent (Save as keeps the original).";
+      : "What's under the marks — text, picture pixels, drawings — is deleted from the pages, and checked afterwards. Save to make it permanent (Save a copy keeps the original as it is).";
     const go = await ask(cover ? "Cover the marked places?" : "Remove what's under the marks?", how, [
       { label: cover ? "Cover" : "Remove", value: "go", primary: true },
       { label: "Cancel", value: "cancel" },
@@ -116,26 +123,26 @@ export function RedactPanel({ tab }: { tab: Tab }) {
   );
 
   return (
-    <div class="layout-panel ps-panel rd-panel">
-      <div class="lp-title">
-        <b>Redact</b>
-        <span />
-        <button class="ib sm" aria-label="Close" onClick={stopRedact}>
-          <X size={16} />
+    <aside class="signpane redactpane" aria-label="Redact">
+      <div class="signpane-head">
+        <strong>Redact</strong>
+        <button class="ib sm" aria-label="Close the Redact pane" title="Close" onClick={stopRedact}>
+          <X size={15} />
         </button>
       </div>
+      <div class="signpane-body">
       {signed && <span class="secure-warn">This file is digitally signed; redacting changes it, so its signatures will no longer be valid.</span>}
 
-      <div class="lp-row">
-        <label>Mark</label>
-        <span class="hint">Drag over text to mark it. On scans and pictures, drag a box.</span>
+      <section class="pane-sec">
+        <h3>Mark</h3>
+        <span class="hint">Drag over text to mark it. Where the text is part of the picture (scans, pages saved as pictures), the box you drag is marked.</span>
         <label class="check-row">
           <input type="checkbox" checked={redactAreas.value} onChange={(e) => (redactAreas.value = (e.target as HTMLInputElement).checked)} /> Mark boxes even over text
         </label>
-      </div>
+      </section>
 
-      <div class="lp-row">
-        <label>Find and mark</label>
+      <section class="pane-sec">
+        <h3>Find and mark</h3>
         <div class="ps-line">
           <input
             class="inp sm"
@@ -183,10 +190,10 @@ export function RedactPanel({ tab }: { tab: Tab }) {
             )}
           </div>
         )}
-      </div>
+      </section>
 
-      <div class="lp-row">
-        <label>Apply</label>
+      <section class="pane-sec">
+        <h3>Apply</h3>
         <span class="hint">
           {marks.marks ? `${marks.marks} ${marks.marks === 1 ? "mark" : "marks"} on ${marks.pages} ${marks.pages === 1 ? "page" : "pages"}.` : "No marks yet."}
           {marks.marks > 0 && (
@@ -214,10 +221,10 @@ export function RedactPanel({ tab }: { tab: Tab }) {
           </label>
           {labelOn && <input class="inp sm" value={label} onInput={(e) => setLabel((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.stopPropagation()} />}
         </div>
-      </div>
+      </section>
 
-      <div class="lp-row">
-        <label>Sanitize the whole document</label>
+      <section class="pane-sec">
+        <h3>Sanitize the whole document</h3>
         {opt(1, "Metadata", "title, author, dates, editing history")}
         {opt(2, "Scripts", "JavaScript; forms lose their calculations")}
         {opt(4, "Attached files")}
@@ -226,10 +233,11 @@ export function RedactPanel({ tab }: { tab: Tab }) {
         <button class="btn sm" disabled={!what || !!busy} onClick={() => void clean()} style={{ alignSelf: "flex-start" }}>
           Sanitize
         </button>
-      </div>
+      </section>
 
       {error && <span class="error-text">{error}</span>}
-      <div class="lp-actions">
+      </div>
+      <div class="lp-actions redact-foot">
         {busy && (
           <span class="secure-busy" style={{ flex: 1 }}>
             <span class="spin" /> {busy}
@@ -240,6 +248,6 @@ export function RedactPanel({ tab }: { tab: Tab }) {
           {cover ? "Cover" : "Remove"} {marks.marks || ""}
         </button>
       </div>
-    </div>
+    </aside>
   );
 }

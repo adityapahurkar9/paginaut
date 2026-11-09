@@ -44,7 +44,7 @@ function busy(tab: Tab): string | null {
   if (tab.saving.value) return `${tab.name} is being saved.`;
   if (ocrState(tab).value?.phase === "running") return `Text is being recognized in ${tab.name}: stop it or let it finish first.`;
   if (textEdit.value === tab) return "Finish editing the text first.";
-  if (redactTab.value === tab) return "Close the Redact panel first.";
+  if (redactTab.value === tab) return "Close the Redact pane first.";
   if (pageSizeEdit.value?.tab === tab) return "Finish changing the page size first.";
   if (layoutEdit.value?.tab === tab) return "Finish correcting the layout first.";
   return null;

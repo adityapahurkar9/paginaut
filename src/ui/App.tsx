@@ -12,15 +12,15 @@ import * as P from "../pages";
 import { specs } from "../edits";
 import { renderer } from "../render/RenderManager";
 import { bookScreen } from "../modes";
-import { activeKey, activeTab, closeHome, closeTab, findOpen, homes, minimized, openHome, recent, settings, tabs, type Tab } from "../store";
+import { activeKey, activeTab, closeHome, closeTab, findOpen, homes, minimized, openHome, recent, samePath, settings, tabs, type Tab } from "../store";
 import { Sidebar } from "./Sidebar";
 import { AskDialog, FindBar, Palette, PasswordDialog, Toast } from "./Overlays";
 import { Ribbon, Toolbar, ViewControls } from "./Toolbar";
 import { ReflowHost } from "./Reflow";
 import { LayoutPanel } from "./LayoutPanel";
 import { PageSizePanel } from "./PageSizePanel";
-import { RedactPanel } from "./RedactPanel";
-import { markFromSelection, redactTab } from "../redact";
+import { RedactPane } from "./RedactPane";
+import { markFromSelection, redactAreas, redactTab } from "../redact";
 import { FormBar } from "./FormBar";
 import { fieldHighlightClass, initForms } from "../forms";
 import { annotTool, attachAnnotLayer, markupFromSelection } from "../annots";
@@ -75,7 +75,6 @@ export function App() {
             {tab && findOpen.value && <FindBar tab={tab} />}
             {tab && <LayoutPanel tab={tab} />}
             {tab && <PageSizePanel tab={tab} />}
-            {tab && <RedactPanel tab={tab} />}
             {tab && tab.mode.value === "pages" && selectedAnnot.value?.tab !== tab && (
               <div class="topbars">
                 <SigBar tab={tab} />
@@ -97,6 +96,7 @@ export function App() {
         </div>
         <OrganizePane />
         <SignPane />
+        <RedactPane />
         <ConvertPane />
         <MarkdownPane />
         <ReadingPane />
@@ -309,6 +309,7 @@ function TabView({ tab, active }: { tab: Tab; active: boolean }) {
       },
       onSelection: (has) => (tab.hasSelection.value = has),
       onSelectionEnd: (src, quads, a, b) => void (redactTab.value === tab ? markFromSelection(tab, src, quads, a, b) : markupFromSelection(tab, src, quads, a, b)),
+      dragBox: (hasText) => redactTab.value === tab && (redactAreas.value || !hasText),
       onPageAction: (page, action) => {
         if (action === "delete") P.deletePages(tab, page);
         else P.rotatePages(tab, action === "rotate-left" ? -90 : 90, page);
@@ -320,7 +321,7 @@ function TabView({ tab, active }: { tab: Tab; active: boolean }) {
     void initForms(tab);
     P.runDocReady(tab);
     if (tab.info.value?.isPdf) attachAnnotLayer(tab);
-    const prev = tab.carriedView ?? recent.value.find((r) => r.path.toLowerCase() === tab.path.toLowerCase())?.view;
+    const prev = tab.carriedView ?? recent.value.find((r) => samePath(r.path, tab.path))?.view;
     tab.carriedView = null;
     v.restore(prev ?? { page: 0, frac: 0, zoom: 1, fit: "width" });
     if (tab.sizes.value && tab.edits.value) v.setPages(specs(tab.edits.value, tab.sizes.value));

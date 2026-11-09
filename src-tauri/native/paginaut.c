@@ -6663,6 +6663,51 @@ char *fo_area_text(fo_ctx *c, fo_list *l, const float b[4], const float area[4])
 	return s;
 }
 
+/* The text in each of n areas (4 floats each, relative to the page origin), as a JSON array of strings: the page's
+ * text is read once for all of them. */
+char *fo_area_texts_json(fo_ctx *c, fo_list *l, const float b[4], const float *areas, int n)
+{
+	fz_stext_page *t = NULL;
+	fz_buffer *buf = NULL;
+	char *copy = NULL, *s = NULL;
+	fz_var(t);
+	fz_var(buf);
+	fz_var(copy);
+	fz_try(CTX)
+	{
+		fz_stext_options opts;
+		fz_init_stext_options(CTX, &opts);
+		opts.flags |= FZ_STEXT_DEHYPHENATE;
+		t = fz_new_stext_page_from_display_list(CTX, (fz_display_list *)l, &opts);
+		buf = fz_new_buffer(CTX, 64 + n * 24);
+		fz_append_byte(CTX, buf, '[');
+		for (int i = 0; i < n; i++)
+		{
+			const float *a = areas + 4 * i;
+			copy = fz_copy_rectangle(CTX, t, fz_make_rect(a[0] + b[0], a[1] + b[1], a[2] + b[0], a[3] + b[1]), 1);
+			if (i)
+				fz_append_byte(CTX, buf, ',');
+			json_str(CTX, buf, copy ? copy : "");
+			fz_free(CTX, copy);
+			copy = NULL;
+		}
+		fz_append_byte(CTX, buf, ']');
+		s = buffer_to_string(CTX, buf);
+	}
+	fz_always(CTX)
+	{
+		fz_free(CTX, copy);
+		fz_drop_buffer(CTX, buf);
+		fz_drop_stext_page(CTX, t);
+	}
+	fz_catch(CTX)
+	{
+		FAIL();
+		return NULL;
+	}
+	return s;
+}
+
 int fo_pdf_area_pdf(fo_ctx *c, fo_page *p, const float area[4], int rot, unsigned char **data, size_t *len)
 {
 	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);

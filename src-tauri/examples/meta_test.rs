@@ -61,7 +61,24 @@ fn main() {
     let out = d.outline_json().unwrap();
     let labels = engine.page_labels(saved.doc_id).unwrap().unwrap_or_default();
     check("after reopening", out.contains("Chapter 2") && labels.get(2).map(String::as_str) == Some("iii") && d.properties().author == "आदित्य" && saved.title == "Test title", String::new());
+    // Labels worked out from the ranges (no page loaded) match MuPDF's own, page by page; here and in the test files.
+    let same = |id: u64| {
+        let d = engine.doc(id).unwrap();
+        let ours = engine.page_labels(id).unwrap();
+        let theirs: Vec<String> = (0..d.page_count()).map(|i| d.label(i).unwrap()).collect();
+        let plain = theirs.iter().enumerate().all(|(i, l)| l.is_empty() || *l == (i + 1).to_string());
+        match ours {
+            Some(o) => o == theirs,
+            None => plain,
+        }
+    };
+    check("labels as MuPDF gives them", same(saved.doc_id), String::new());
     engine.close(saved.doc_id);
+    for f in ["labelled.pdf", "labels.pdf", "text-1000.pdf"] {
+        let i = engine.open(&format!("{dir}/{f}")).unwrap();
+        check(&format!("labels as MuPDF gives them: {f}"), same(i.doc_id), String::new());
+        engine.close(i.doc_id);
+    }
 
     println!("{}", if failures == 0 { "ALL PASSED".to_string() } else { format!("{failures} FAILED") });
     std::process::exit(failures);

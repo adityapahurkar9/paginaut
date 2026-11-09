@@ -307,6 +307,7 @@ fn run_desktop() {
             desk::area_bytes,
             desk::area_save,
             desk::area_text,
+            desk::area_texts,
             desk::attachments,
             desk::redact_mark,
             desk::redaction_pages,

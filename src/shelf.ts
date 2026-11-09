@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { desktopDir, documentDir, downloadDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { ViewState } from "./render/Viewer";
-import { load, openFiles, recent, rememberFile, save, showToast, tabs } from "./store";
+import { load, openFiles, pathKey, recent, rememberFile, samePath, save, showToast, tabs } from "./store";
 
 export type ShelfKind = "ebook" | "comic";
 
@@ -115,7 +115,7 @@ async function fillCovers() {
   }
 }
 
-const byPath = computed(() => new Map(shelf.value.map((it) => [it.path.toLowerCase(), it])));
+const byPath = computed(() => new Map(shelf.value.map((it) => [pathKey(it.path), it])));
 
 // Recent holds where you are in an open book; kept here too, by fingerprint, for as long as the
 // book is on the shelf.
@@ -124,7 +124,7 @@ effect(() => {
   const map = byPath.value;
   let next: Record<string, Place> | null = null;
   for (const r of list) {
-    const it = map.get(r.path.toLowerCase());
+    const it = map.get(pathKey(r.path));
     if (!it?.fp || !r.view || !r.pages) continue;
     const had = (next ?? places.peek())[it.fp];
     if (had && had.at >= r.opened && had.view.page === r.view.page) continue;
@@ -147,7 +147,7 @@ export interface Shelved {
 }
 
 function placeOf(it: ShelfItem): Place | null {
-  const r = recent.value.find((r) => r.path.toLowerCase() === it.path.toLowerCase());
+  const r = recent.value.find((r) => samePath(r.path, it.path));
   const p = it.fp ? places.value[it.fp] : undefined;
   if (r?.view && r.pages && (!p || r.opened >= p.at)) return { view: r.view, pages: r.pages, at: r.opened };
   return p ?? null;
@@ -195,7 +195,7 @@ export const shelfCount = (kind: ShelfKind) => shelf.value.filter((it) => it.kin
 
 /** Opens a book where you left it, even if it has left Recent or moved since. */
 export function openBook(it: ShelfItem) {
-  const inRecent = recent.value.some((r) => r.path.toLowerCase() === it.path.toLowerCase() && r.view);
+  const inRecent = recent.value.some((r) => samePath(r.path, it.path) && r.view);
   const p = it.fp ? places.value[it.fp] : undefined;
   if (!inRecent && p) rememberFile(it.path, { view: p.view, pages: p.pages });
   void openFiles([it.path]);

@@ -298,14 +298,19 @@ pub fn window_at(window: WebviewWindow, state: State<'_, Windows>) -> Option<Dro
 pub fn window_report(window: WebviewWindow, state: State<'_, Windows>, title: String, summary: String, paths: Vec<String>, dirty: bool) {
     let full = if title.is_empty() { "Paginaut".to_owned() } else { format!("{title} - Paginaut") };
     let _ = window.set_title(&full);
-    let paths = paths.iter().map(|p| p.to_lowercase()).collect();
+    let paths = paths.iter().map(|p| path_key(p)).collect();
     state.reports.lock().insert(window.label().to_owned(), Report { summary, paths, dirty });
+}
+
+/// A path as windows compare them: Windows' file names ignore case, Linux's don't.
+fn path_key(p: &str) -> String {
+    if cfg!(windows) { p.to_lowercase() } else { p.to_owned() }
 }
 
 /// The other window that has `path` open, if one has.
 #[tauri::command]
 pub fn window_with(window: WebviewWindow, state: State<'_, Windows>, path: String) -> Option<String> {
-    let path = path.to_lowercase();
+    let path = path_key(&path);
     state.reports.lock().iter().find(|(l, r)| *l != window.label() && r.paths.contains(&path)).map(|(l, _)| l.clone())
 }
 

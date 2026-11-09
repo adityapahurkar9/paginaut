@@ -10,7 +10,7 @@ import { api, type InsertSource } from "../api";
 import { docSigs } from "../dsc";
 import { parsePages } from "../ocr";
 import * as P from "../pages";
-import { baseName, openFiles, showToast, tabs, type Tab } from "../store";
+import { baseName, openFiles, samePath, showToast, tabs, type Tab } from "../store";
 
 const PICTURES = new Set(["png", "jpg", "jpeg", "jfif", "tif", "tiff", "bmp", "gif", "jp2", "jpx", "psd", "pnm", "pbm", "pgm", "ppm", "pam", "jxr"]);
 const isPicture = (path: string) => PICTURES.has(path.split(".").pop()?.toLowerCase() ?? "");
@@ -425,7 +425,7 @@ function MergeDialogInner({ from, initial }: { from: Tab | null; initial: FileEn
   const close = () => !busy && (mergeDialog.value = null);
   useEscape(close, [busy]);
   // This document's unsaved changes aren't in its file.
-  const unsaved = from && from.dirty.value && files.some((f) => f.path.toLowerCase() === from.path.toLowerCase()) ? from : null;
+  const unsaved = from && from.dirty.value && files.some((f) => samePath(f.path, from.path)) ? from : null;
   const total = files.reduce((n, f) => n + rowCount(f), 0);
 
   const run = async () => {
@@ -442,7 +442,7 @@ function MergeDialogInner({ from, initial }: { from: Tab | null; initial: FileEn
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       }));
     if (!target) return;
-    if (tabs.value.some((t) => t.path.toLowerCase() === target.toLowerCase())) {
+    if (tabs.value.some((t) => samePath(t.path, target))) {
       return setError(`${baseName(target)} is open in Paginaut. Close it first, or choose another name.`);
     }
     setBusy(true);
@@ -517,7 +517,7 @@ function rangesText(views: number[]): string {
   return out.join(", ");
 }
 
-const isOpen = (path: string) => tabs.value.some((t) => t.path.toLowerCase() === path.toLowerCase());
+const isOpen = (path: string) => tabs.value.some((t) => samePath(t.path, path));
 
 /** Saves the selected pages (or the current page) as a new PDF and opens it. */
 export async function extractPages(tab: Tab) {

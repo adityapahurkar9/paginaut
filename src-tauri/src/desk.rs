@@ -306,6 +306,14 @@ pub async fn area_save(state: State<'_, AppState>, doc: DocId, page: usize, area
     .await
 }
 
+/// The text in each of several areas of a page (one reading of its text for all; Redact checks its hits so).
+#[tauri::command]
+pub async fn area_texts(state: State<'_, AppState>, doc: DocId, page: usize, areas: Vec<[f32; 4]>) -> Res<Vec<String>> {
+    let engine = state.engine.clone();
+    blocking(move || engine.doc(doc)?.area_texts(page, &areas)).await
+}
+
+/// The text in an area of a page (relative to its origin).
 #[tauri::command]
 pub async fn area_text(state: State<'_, AppState>, doc: DocId, page: usize, area: [f32; 4]) -> Res<String> {
     let engine = state.engine.clone();
@@ -466,11 +474,23 @@ pub async fn sanitize(state: State<'_, AppState>, doc: DocId, what: i32) -> Res<
     blocking(move || engine.doc(doc)?.sanitize(what)).await
 }
 
-/// Kinds of file that run code when opened: attachments like these are only saved, never opened.
+/// Kinds of file that run code when opened: attachments like these are only saved, never opened. One list for
+/// Windows and Linux (a file saved on one may be opened on the other).
 const RISKY: &[&str] = &[
-    "exe", "com", "bat", "cmd", "scr", "pif", "cpl", "msi", "msp", "msc", "dll", "sys", "jar", "js", "jse", "vbs", "vbe", "wsf", "wsh",
-    "ps1", "psm1", "hta", "lnk", "url", "reg", "inf", "scf", "appref-ms", "application", "gadget", "chm", "iso", "img", "vhd", "vhdx", "docm",
-    "xlsm", "pptm", "html", "htm", "svg", "xhtml", "mht",
+    // Windows programs, scripts, installers and shortcuts
+    "exe", "com", "bat", "cmd", "scr", "pif", "cpl", "msi", "msp", "mst", "msc", "dll", "sys", "ocx", "drv", "jar", "jnlp", "js", "jse",
+    "vb", "vbs", "vbe", "wsf", "wsh", "wsc", "sct", "ps1", "ps1xml", "ps2", "ps2xml", "psc1", "psc2", "psd1", "psm1", "msh", "msh1", "msh2",
+    "mshxml", "msh1xml", "msh2xml", "hta", "lnk", "url", "website", "reg", "inf", "scf", "appref-ms", "application", "xbap", "gadget",
+    "chm", "hlp", "iso", "img", "vhd", "vhdx", "msix", "msixbundle", "appx", "appxbundle", "appinstaller", "settingcontent-ms",
+    "search-ms", "searchconnector-ms", "library-ms", "diagcab", "theme", "themepack", "deskthemepack", "cab", "xll",
+    // Office files that can carry macros, and Access databases (which run them)
+    "docm", "dotm", "xlsm", "xltm", "xlsb", "xlam", "xla", "xlm", "pptm", "potm", "ppsm", "ppam", "ppa", "sldm", "mdb", "mde", "accdb",
+    "accde", "ade", "adp",
+    // Pages that run scripts in a browser
+    "html", "htm", "svg", "xhtml", "mht", "mhtml",
+    // Linux programs, scripts, launchers and packages
+    "desktop", "sh", "bash", "zsh", "ksh", "csh", "fish", "run", "bin", "out", "appimage", "so", "py", "pyw", "pyc", "pl", "pm", "rb",
+    "php", "lua", "tcl", "deb", "rpm", "snap", "flatpak", "flatpakref", "flatpakrepo", "command", "elf",
 ];
 
 /// Opens attachment `i` with its usual app (from a temporary copy). Files that could run code are refused.
@@ -527,7 +547,16 @@ pub async fn sig_add(app: tauri::AppHandle, kind: String, name: String, png: Str
     blocking(move || {
         let mut list = crate::sigstore::load(&dir)?;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let e = crate::sigstore::SigEntry { id: format!("{now:x}-{:x}", list.len()), kind, name, created: now, png };
+        // Unique among those saved: an id made from the time and the count alone repeated when one was deleted
+        // and another added within the same second, and deleting one then took both.
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let mut id = format!("{nanos:x}");
+        let mut k = 1;
+        while list.iter().any(|e| e.id == id) {
+            id = format!("{nanos:x}-{k:x}");
+            k += 1;
+        }
+        let e = crate::sigstore::SigEntry { id, kind, name, created: now, png };
         list.push(e.clone());
         crate::sigstore::save(&dir, &list)?;
         Ok(e)

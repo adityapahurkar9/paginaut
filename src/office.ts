@@ -5,7 +5,7 @@ import { signal } from "@preact/signals";
 import { api, type InstallEvent, type OfficeEngine, type OfficeEngines } from "./api";
 import { adoptSaved } from "./pages";
 import { openPane } from "./panes";
-import { ask, baseName, settings, showToast, updateSettings, type Tab } from "./store";
+import { ask, baseName, pathKey, settings, showToast, updateSettings, type Tab } from "./store";
 
 /** Office files Paginaut opens (through a PDF made from them). */
 export const OFFICE_EXT = [
@@ -189,8 +189,8 @@ export function openConvertPane(target?: ExportTarget) {
 export function startConvert(paths: string[] = []) {
   void loadEngines();
   const cur = convertDialog.value;
-  const have = new Set(cur?.items.map((i) => i.path.toLowerCase()));
-  const added: ConvertItem[] = paths.filter((p) => convertible(p) && !have.has(p.toLowerCase())).map((path) => ({ path, engine: "auto", state: "waiting" }));
+  const have = new Set(cur?.items.map((i) => pathKey(i.path)));
+  const added: ConvertItem[] = paths.filter((p) => convertible(p) && !have.has(pathKey(p))).map((path) => ({ path, engine: "auto", state: "waiting" }));
   convertDialog.value = { items: [...(cur?.items ?? []), ...added], folder: cur?.folder ?? null, running: cur?.running ?? false, pdfa: cur?.pdfa };
   openConvertPane();
 }

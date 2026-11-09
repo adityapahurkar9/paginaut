@@ -7,7 +7,7 @@ import { api, newId } from "./api";
 import { DOC_STEP } from "./edits";
 import { formsChanged } from "./forms";
 import * as P from "./pages";
-import { ask, baseName, settings, showToast, storeItem, tabs, updateSettings, type Tab } from "./store";
+import { ask, baseName, pathKey, settings, showToast, storeItem, tabs, updateSettings, type Tab } from "./store";
 
 export type OcrQuality = "fast" | "best";
 
@@ -70,11 +70,12 @@ function dismissedList(): string[] {
   }
 }
 export function offerDismissed(tab: Tab) {
-  return dismissedList().includes(tab.path.toLowerCase());
+  return dismissedList().includes(pathKey(tab.path));
 }
 /** Stops offering recognition for this file. */
 export function dismissOffer(tab: Tab) {
-  const list = [tab.path.toLowerCase(), ...dismissedList().filter((p) => p !== tab.path.toLowerCase())].slice(0, 200);
+  const key = pathKey(tab.path);
+  const list = [key, ...dismissedList().filter((p) => p !== key)].slice(0, 200);
   storeItem(DISMISSED_KEY, JSON.stringify(list));
   looksScanned(tab).value = false;
 }

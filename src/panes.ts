@@ -1,12 +1,12 @@
-// The panes on the right (Organize, Sign, Convert, Markdown, Reading): one open at a time, each with a button on the side
+// The panes on the right (Organize, Sign, Redact, Convert, Markdown, Reading): one open at a time, each with a button on the side
 // bar at the window's right edge. Which buttons the side bar shows, and in what order, is up to the user.
 import { signal } from "@preact/signals";
 import { settings, updateSettings } from "./store";
 
-export type PaneId = "organize" | "sign" | "convert" | "markdown" | "reading";
+export type PaneId = "organize" | "sign" | "redact" | "convert" | "markdown" | "reading";
 
 /** Every pane, in the side bar's default order. */
-export const PANE_IDS: PaneId[] = ["organize", "sign", "convert", "markdown", "reading"];
+export const PANE_IDS: PaneId[] = ["organize", "sign", "redact", "convert", "markdown", "reading"];
 
 /** The pane open on the right, if any. */
 export const pane = signal<PaneId | null>(null);

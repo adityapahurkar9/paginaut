@@ -290,10 +290,16 @@ pub fn add(dir: &Path, from: &str) -> Result<UserFont, String> {
     Ok(UserFont { name: to.file_stem().unwrap().to_string_lossy().into_owned(), file: to.file_name().unwrap().to_string_lossy().into_owned() })
 }
 
-/// A file of the fonts folder by its name (nothing outside it).
+/// A file of the fonts folder by its name (nothing outside it). The name must be one plain file name: no folders,
+/// no drive ("C:x.ttf" is a file in drive C's current folder on Windows), no stream ("a.ttf:b").
 pub fn file(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let plain = !name.contains(['/', '\\', ':', '\0']) && !name.contains("..") && {
+        let mut parts = Path::new(name).components();
+        matches!((parts.next(), parts.next()), (Some(Component::Normal(n)), None) if n == name)
+    };
     let p = dir.join(name);
-    if name.contains(['/', '\\']) || name.contains("..") || !is_font(&p) || !p.is_file() {
+    if !plain || p.parent() != Some(dir) || !is_font(&p) || !p.is_file() {
         return Err("No such font.".into());
     }
     Ok(p)
