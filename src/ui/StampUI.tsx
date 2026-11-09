@@ -1,9 +1,9 @@
 // Page numbers / headers / footers / Bates numbers, and watermarks: tools in the pane on the right (toolpanes.ts).
 import { signal } from "@preact/signals";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import {
-  applyHeaders, applyWatermark, fill, headerSettings, pagesOf, removeStamps, setHeaders, setWatermark, watermarkSettings, type Font, type HeaderSettings,
+  applyHeaders, applyWatermark, fill, headerSettings, pagesOf, removeStamps, setHeaders, setWatermark, StampPreview, watermarkSettings, type Font, type HeaderSettings,
 } from "../stamps";
 import { baseName, showToast, type Tab } from "../store";
 import { toolPane } from "../toolpanes";
@@ -37,6 +37,27 @@ function useEscape(close: () => void) {
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
   }, []);
+}
+
+/** What's being set up, shown on the pages it will go on (drawn again on every change). */
+function usePreview(tab: Tab, kind: "Header" | "Watermark", views: number[] | null) {
+  const layer = useRef<StampPreview | null>(null);
+  useEffect(() => {
+    const v = tab.viewer;
+    if (layer.current && layer.current.viewer !== v) {
+      layer.current.dispose();
+      layer.current = null;
+    }
+    if (!layer.current && v) layer.current = new StampPreview(v, tab, kind);
+    layer.current?.update(views);
+  });
+  useEffect(
+    () => () => {
+      layer.current?.dispose();
+      layer.current = null;
+    },
+    [],
+  );
 }
 
 function FontRow({ font, size, color, bold, set }: { font: Font; size: number; color: string; bold: boolean; set: (p: { font?: Font; size?: number; color?: string; bold?: boolean }) => void }) {
@@ -84,11 +105,12 @@ export function HeaderDialog() {
 }
 
 const BOX_LABELS = ["Header left", "Header centre", "Header right", "Footer left", "Footer centre", "Footer right"];
+/** Page number styles: name, the box they go in (BOX_LABELS), what they put there. */
 const PRESETS: [string, number, string][] = [
   ["1", 4, "{page}"],
   ["Page 1 of N", 4, "Page {page} of {pages}"],
   ["1 / N", 5, "{page} / {pages}"],
-  ["Bates number", 5, "{bates}"],
+  ["Bates", 5, "{bates}"],
 ];
 
 function HeaderDialogInner({ tab }: { tab: Tab }) {
@@ -103,6 +125,7 @@ function HeaderDialogInner({ tab }: { tab: Tab }) {
   const setBox = (i: number, v: string) => setHeaders({ boxes: s.boxes.map((b, k) => (k === i ? v : b)) as HeaderSettings["boxes"] });
   const views = pagesOf(tab, all ? null : range);
   const usesBates = s.boxes.some((b) => b.includes("{bates}"));
+  usePreview(tab, "Header", views);
   const example = views?.length ? s.boxes.map((b) => (b.trim() ? fill(b, tab, views[0], 0, views.length, s) : "")) : null;
 
   const apply = async () => {
@@ -125,9 +148,15 @@ function HeaderDialogInner({ tab }: { tab: Tab }) {
     <ToolFrame id="headers" title="Page numbers, headers and footers" class="stamp-dialog">
       <div class="tool-field">
         <label>Page numbers</label>
-        <div class="ps-line">
+        <div class="seg nowrap" role="group" aria-label="Page number style">
           {PRESETS.map(([name, box, tpl]) => (
-            <button key={name} class="btn ghost sm" onClick={() => setHeaders({ boxes: s.boxes.map((b, k) => (k === box ? tpl : k >= 3 && b.includes("{") ? "" : b)) as HeaderSettings["boxes"] })}>
+            <button
+              key={name}
+              class={`segb ${s.boxes[box] === tpl ? "on" : ""}`}
+              aria-pressed={s.boxes[box] === tpl}
+              title={`${tpl.replace("{bates}", "Bates number")} in the ${BOX_LABELS[box].toLowerCase()}`}
+              onClick={() => setHeaders({ boxes: s.boxes.map((b, k) => (k === box ? tpl : k >= 3 && b.includes("{") ? "" : b)) as HeaderSettings["boxes"] })}
+            >
               {name}
             </button>
           ))}
@@ -231,6 +260,8 @@ function WatermarkDialogInner({ tab }: { tab: Tab }) {
   const count = tab.edits.value?.order.length ?? 0;
   const close = () => !busy && (watermarkDialog.value = null);
   useEscape(close);
+  const views = pagesOf(tab, all ? null : range);
+  usePreview(tab, "Watermark", views);
 
   const pick = async () => {
     const f = await open({ title: "Watermark picture", filters: [{ name: "Pictures", extensions: ["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"] }] });
@@ -238,7 +269,6 @@ function WatermarkDialogInner({ tab }: { tab: Tab }) {
   };
 
   const apply = async () => {
-    const views = pagesOf(tab, all ? null : range);
     if (!views?.length) return setError(`Pages must be numbers from 1 to ${count}, like 2- or 1-5, 8.`);
     if (s.kind === "text" && !s.text.trim()) return setError("Type the watermark's text.");
     setError("");

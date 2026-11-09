@@ -919,6 +919,14 @@ Every bug from the 2026-11-05 code review and the three Redact reports, fixed 20
 - [x] Read aloud: on the pages (not only in Read mode) the paragraph being read is tinted and the word being said
       marked (the page's words from the engine, page_words, matched to the text being read); "Read aloud from
       here" on a page's right-click menu starts at the word clicked; the button moved from View to Home
+- [x] Page numbers, headers and footers, and watermarks show on the pages while they're set up, as Add will draw
+      them (stamps.ts StampPreview: the same boxes and matrices, drawn as a layer over the pages); the page number
+      styles are a row of buttons with the one in use marked
+- [x] Text watermarks come out as faint as set (they were drawn solid: MuPDF's PDF writer drops a group's opacity,
+      so it now goes with the text itself; stamp_test checks it)
+- [x] Split starts on a few files: by bookmarks when the document has two or more, otherwise in two halves (it was a
+      file for every page)
+- [x] Every window starts on the ribbon's Home tab, and Home on Start, whichever were in use last
 
 ## 0.9.10 (Windows, Linux): PDF/A-1b, Office files to PDF/A, signing and saving PDF/A files
 - [x] PDF/A-1b; Office files straight to PDF/A; signing keeps a PDF/A file PDF/A; saving changes to one warns and can

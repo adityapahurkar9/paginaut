@@ -3,7 +3,7 @@ import { BookImage, BookOpen, Combine, File, FileText, FolderOpen, Home as HomeI
 import * as A from "../actions";
 import { Logo } from "./Logo";
 import { startMerge } from "./PagesUI";
-import { forgetFile, openFiles, recent, storeItem } from "../store";
+import { forgetFile, openFiles, recent } from "../store";
 import { shelfCount } from "../shelf";
 import { ShelfPane } from "./Shelf";
 
@@ -37,16 +37,19 @@ type Page = "start" | "ebook" | "comic";
 const PAGE_KEY = "paginaut.home.page";
 
 export function Home() {
+  // Kept for this window only (session storage outlives a reload, not the window): a new window starts at Start.
   const [page, setPageState] = useState<Page>(() => {
     try {
-      return (localStorage.getItem(PAGE_KEY) as Page | null) ?? "start";
+      return (sessionStorage.getItem(PAGE_KEY) as Page | null) ?? "start";
     } catch {
       return "start";
     }
   });
   const setPage = (p: Page) => {
     setPageState(p);
-    storeItem(PAGE_KEY, p);
+    try {
+      sessionStorage.setItem(PAGE_KEY, p);
+    } catch {}
   };
   const pages: { id: Page; label: string; Icon: typeof FileText; n?: number }[] = [
     { id: "start", label: "Start", Icon: HomeIcon },

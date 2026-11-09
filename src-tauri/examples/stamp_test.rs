@@ -1,6 +1,6 @@
 //! Page numbers, headers and watermarks: cargo run --release --example stamp_test -- <testfiles dir> <temp dir>
 //! Works on copies; never touches the originals.
-use paginaut_lib::engine::mupdf::StampPart;
+use paginaut_lib::engine::mupdf::{render_size, StampPart};
 use paginaut_lib::engine::{Engine, StampPage};
 use std::time::Instant;
 
@@ -67,11 +67,24 @@ fn main() {
     // 4. Watermarks: text at 45° behind, a picture in front, faint.
     let (cx, cy) = (w / 2.0, h / 2.0);
     let (c, s) = (std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2);
-    let wm = StampPart { opacity: 0.2, ..text("CONFIDENTIAL", 60.0, 800.0, 1, [c, -s, s, c, cx - 400.0 * c, cy + 400.0 * s]) };
+    let wm = StampPart { opacity: 0.2, color: [1.0, 0.0, 0.0], ..text("CONFIDENTIAL", 60.0, 800.0, 1, [c, -s, s, c, cx - 400.0 * c, cy + 400.0 * s]) };
     let pic = StampPart { text: None, image: Some(format!("{dir}/photo.png")), width: 200.0, height: 300.0, opacity: 0.3, ..text("", 1.0, 200.0, 0, [1.0, 0.0, 0.0, 1.0, cx - 100.0, cy - 150.0]) };
     d.stamp_pages(&[StampPage { page: 2, parts: vec![wm.clone()] }, StampPage { page: 3, parts: vec![pic] }], "Watermark", true, true).unwrap();
     let t2 = d.text(2).unwrap().lock().all();
     check("text watermark", t2.contains("CONFIDENTIAL"), String::new());
+    // Red at 20% on white is pale pink; none of it may come out solid red (the opacity once got lost in the file).
+    let (solid, faint) = {
+        let list = d.list(2, 1).unwrap();
+        let b = d.bounds(2).unwrap();
+        let (rw, rh) = render_size(&b, 0.5, 0);
+        let mut buf = vec![0u8; (rw * rh * 4) as usize];
+        list.render(&b, 0.5, 0, [0, 0, rw as i32, rh as i32], &mut buf, None).unwrap();
+        let px = buf.chunks(4);
+        let solid = px.clone().filter(|p| p[0] > 200 && p[1] < 100 && p[2] < 100).count();
+        let faint = px.filter(|p| p[0] > 235 && (180..235).contains(&p[1]) && (180..235).contains(&p[2])).count();
+        (solid, faint)
+    };
+    check("text watermark is faint", solid == 0 && faint > 500, format!("{solid} solid red, {faint} pale red pixels"));
 
     // 5. Removing, and undo.
     let removed = d.remove_stamps("Watermark", None).unwrap();
