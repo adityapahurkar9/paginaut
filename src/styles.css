@@ -1409,3 +1409,8 @@ body.text-edit .pg { cursor: default; }
 .tabs { position: relative; }
 .tabs.drop-target { background: var(--acc-soft); border-radius: 9px 9px 0 0; }
 .tab-drop { position: absolute; bottom: 4px; width: 3px; height: 26px; border-radius: 2px; background: var(--acc); z-index: 3; pointer-events: none; }
+
+/* Headers, footers and watermarks shown on the pages while they're set up (stamps.ts StampPreview). */
+.stamp-preview { position: absolute; inset: 0; pointer-events: none; }
+.stamp-preview > * { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.stamp-preview-text { margin: 0; line-height: 1.2; white-space: pre-wrap; overflow-wrap: break-word; }

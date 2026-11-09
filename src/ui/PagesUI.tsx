@@ -563,8 +563,18 @@ function SplitDialogInner({ tab }: { tab: Tab }) {
   const isPdf = !!tab.info.value?.isPdf;
   const stem = baseName(tab.path).replace(/\.[^.]+$/, "");
   const top = tab.outline.value ?? [];
-  const [by, setBy] = useState<SplitBy>("every");
-  const [every, setEvery] = useState("1");
+  // Bookmarks: the top-level ones, by where their page is shown now.
+  const marks = (() => {
+    const at = new Map<number, number>();
+    e.order.forEach((src, v) => !at.has(src) && at.set(src, v));
+    const list = top.map((o) => ({ title: o.t, view: at.get(o.p) })).filter((m): m is { title: string; view: number } => m.view !== undefined);
+    list.sort((a, b) => a.view - b.view);
+    return list.filter((m, i) => i === 0 || m.view !== list[i - 1].view);
+  })();
+  // It starts on a split that makes a few files: a document with chapters (two or more bookmarks) by them,
+  // otherwise in two halves. (One page per file made a file for every page, a thousand for a long document.)
+  const [by, setBy] = useState<SplitBy>(() => (marks.length >= 2 ? "bookmarks" : "every"));
+  const [every, setEvery] = useState(() => String(Math.max(1, Math.ceil(count / 2))));
   const [ranges, setRanges] = useState("");
   const [mb, setMb] = useState("10");
   const [folder, setFolder] = useState(tab.path.replace(/[\\/][^\\/]+$/, ""));
@@ -579,15 +589,6 @@ function SplitDialogInner({ tab }: { tab: Tab }) {
     setReplace(null);
     setError("");
   };
-
-  // Bookmarks: the top-level ones, by where their page is shown now.
-  const marks = (() => {
-    const at = new Map<number, number>();
-    e.order.forEach((src, v) => !at.has(src) && at.set(src, v));
-    const list = top.map((o) => ({ title: o.t, view: at.get(o.p) })).filter((m): m is { title: string; view: number } => m.view !== undefined);
-    list.sort((a, b) => a.view - b.view);
-    return list.filter((m, i) => i === 0 || m.view !== list[i - 1].view);
-  })();
 
   // By size: the engine groups pages, counting shared fonts and pictures once per file.
   useEffect(() => {

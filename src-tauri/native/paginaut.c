@@ -3895,10 +3895,19 @@ static void shaped_run(fz_context *ctx, fz_device *target, const fz_text_span *s
 		fz_rethrow(ctx);
 }
 
+/* The device stamp text is drawn through: how opaque the text is goes with each piece of it. (A group with an alpha
+ * isn't enough: MuPDF's PDF writer leaves the group's alpha out, and the text came out solid.) */
+typedef struct
+{
+	fz_device super;
+	float opacity;
+} st_device;
+
 static void st_fill_text(fz_context *ctx, fz_device *dev, const fz_text *text, fz_matrix ctm, fz_colorspace *cs, const float *color, float alpha, fz_color_params cp)
 {
 	fz_device *target = dev->passthrough;
 	int any = 0;
+	alpha *= ((st_device *)dev)->opacity;
 	for (const fz_text_span *span = text->head; span && !any; span = span->next)
 		for (int i = 0; i < span->len && !any; i = cluster_end(span, i))
 			any = cluster_shaped(span, i, cluster_end(span, i));
@@ -3922,10 +3931,11 @@ static void st_fill_text(fz_context *ctx, fz_device *dev, const fz_text *text, f
 	}
 }
 
-/* Lays out a story onto dev with shaped text marked (see above). dev stays open. */
-static void draw_story_text(fz_context *ctx, fz_story *story, fz_device *dev, fz_matrix ctm)
+/* Lays out a story onto dev with shaped text marked (see above), `opacity` opaque. dev stays open. */
+static void draw_story_text(fz_context *ctx, fz_story *story, fz_device *dev, fz_matrix ctm, float opacity)
 {
-	fz_device *sd = fz_new_passthrough_device_of_size(ctx, dev, sizeof(fz_device));
+	fz_device *sd = fz_new_passthrough_device_of_size(ctx, dev, sizeof(st_device));
+	((st_device *)sd)->opacity = opacity;
 	sd->fill_text = st_fill_text;
 	fz_try(ctx)
 	{
@@ -3959,11 +3969,7 @@ int fo_stamp_text(fo_ctx *c, fo_stamp *st, const char *html, const char *css, fl
 		fz_place_story(CTX, story, fz_make_rect(0, 0, width, 100000), &filled);
 		hgt = filled.y1 - filled.y0;
 		ctm = fz_concat(fz_translate(0, -hgt * valign / 2.0f), to_matrix(m));
-		if (opacity < 0.999f)
-			fz_begin_group(CTX, st->dev, fz_make_rect(0, 0, st->w, st->h), NULL, 0, 0, FZ_BLEND_NORMAL, opacity);
-		draw_story_text(CTX, story, st->dev, ctm);
-		if (opacity < 0.999f)
-			fz_end_group(CTX, st->dev);
+		draw_story_text(CTX, story, st->dev, ctm, opacity);
 	}
 	fz_always(CTX)
 	{
@@ -4843,7 +4849,7 @@ int fo_edit_text(fo_ctx *c, fo_page *p, const float *lines, int nlines, const fl
 		fz_place_story(CTX, story, fz_make_rect(0, 0, width, 100000), &filled);
 		list = fz_new_display_list(CTX, fz_make_rect(0, 0, width, filled.y1));
 		dev = fz_new_list_device(CTX, list);
-		draw_story_text(CTX, story, dev, fz_identity);
+		draw_story_text(CTX, story, dev, fz_identity, 1);
 		fz_close_device(CTX, dev);
 		fz_drop_device(CTX, dev);
 		dev = NULL;
@@ -5339,7 +5345,7 @@ int fo_pdf_redact_apply(fo_ctx *c, fo_page *p, int cover, const float rgb[3], co
 				fz_append_string(CTX, html, "</p>");
 				story = new_story(CTX, html, css, NULL);
 				fz_place_story(CTX, story, fz_make_rect(0, 0, w, 1000), &filled);
-				draw_story_text(CTX, story, dev, fz_translate(r.x0 - b.x0, r.y0 - b.y0 + (h - (filled.y1 - filled.y0)) / 2));
+				draw_story_text(CTX, story, dev, fz_translate(r.x0 - b.x0, r.y0 - b.y0 + (h - (filled.y1 - filled.y0)) / 2), 1);
 				fz_drop_story(CTX, story);
 				story = NULL;
 				fz_drop_buffer(CTX, html);

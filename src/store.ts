@@ -151,12 +151,14 @@ const SETTINGS_KEY = "paginaut.settings";
 export const settings = signal<Settings>(
   {
     theme: "system", night: false, sidebarOpen: true, sidebarWidth: 232, sidebarTab: "pages", gridSize: 190, autoSaveRotations: false,
-    ribbon: "home", coverSeparate: false, highlightFields: true,
+    coverSeparate: false, highlightFields: true,
     annot: { colors: { hl: "#ffd400", pen: "#e8453c", shape: "#e8453c", text: "#1c1c1c", note: "#ffd400" }, width: 1.5, fontSize: 12 }, reflow: REFLOW_DEFAULTS,
     dsc: { reason: "I approve this document", location: "", showDate: true, lock: false, newFile: true, place: "box", cert: "" },
     ocr: { langs: ["eng"], quality: "fast" },
     officeEngine: "auto",
     ...load(SETTINGS_KEY, {} as Partial<Settings>),
+    // Every window Paginaut opens starts on the ribbon's Home tab, whichever tab was last used.
+    ribbon: "home",
   },
 );
 

@@ -5,6 +5,7 @@ import { DOC_STEP } from "./edits";
 import { formsChanged } from "./forms";
 import { parsePages } from "./ocr";
 import { pageGeom } from "./pagesize";
+import type { LayerPage, PageLayer, Viewer } from "./render/Viewer";
 import { baseName, settings, showToast, updateSettings, type Tab } from "./store";
 
 type M = [number, number, number, number, number, number];
@@ -116,31 +117,52 @@ function stamped(tab: Tab) {
   formsChanged(tab, true);
 }
 
+/** The header and footer boxes of one page (display index `v`, the `k`th of `count` pages stamped). */
+function headerParts(tab: Tab, v: number, k: number, count: number, s: HeaderSettings): StampPart[] {
+  const [top, bottom, side] = s.margins.map((m) => m * MM);
+  const style = { font: s.font, size: s.size, color: rgb(s.color), bold: s.bold };
+  const aligns = ["left", "center", "right"] as const;
+  const g = pageGeom(tab, v);
+  const toPage = shownToPage(g.rot, g.w, g.h);
+  const parts: StampPart[] = [];
+  s.boxes.forEach((tpl, i) => {
+    if (!tpl.trim()) return;
+    const footer = i >= 3;
+    parts.push({
+      ...style,
+      text: fill(tpl, tab, v, k, count, s),
+      align: aligns[i % 3],
+      width: g.W - 2 * side,
+      valign: footer ? 2 : 0,
+      matrix: concat(translate(side, footer ? g.H - bottom : top), toPage),
+    });
+  });
+  return parts;
+}
+
+/** Where a watermark sits on one page: its centre, turned by its angle, in the page's own coordinates. */
+function watermarkPlace(tab: Tab, v: number, s: WatermarkSettings) {
+  const g = pageGeom(tab, v);
+  const toPage = shownToPage(g.rot, g.w, g.h);
+  const cy = s.position === "top" ? g.H * 0.2 : s.position === "bottom" ? g.H * 0.8 : g.H / 2;
+  return { g, around: concat(rotate(s.angle), concat(translate(g.W / 2, cy), toPage)) };
+}
+
+/** A text watermark on one page. */
+function watermarkText(tab: Tab, v: number, s: WatermarkSettings): StampPart {
+  const { g, around } = watermarkPlace(tab, v, s);
+  const width = Math.hypot(g.W, g.H);
+  return {
+    text: s.text, font: s.font, size: s.size, color: rgb(s.color), bold: s.bold, align: "center",
+    width, valign: 1, matrix: concat(translate(-width / 2, 0), around), opacity: s.opacity / 100,
+  };
+}
+
 /** Headers and footers on the pages (display indices), replacing earlier ones. */
 export async function applyHeaders(tab: Tab, views: number[]) {
   const s = headerSettings();
   const info = tab.info.value!;
-  const [top, bottom, side] = s.margins.map((v) => v * MM);
-  const style = { font: s.font, size: s.size, color: rgb(s.color), bold: s.bold };
-  const aligns = ["left", "center", "right"] as const;
-  const pages = views.map((v, k) => {
-    const g = pageGeom(tab, v);
-    const toPage = shownToPage(g.rot, g.w, g.h);
-    const parts: StampPart[] = [];
-    s.boxes.forEach((tpl, i) => {
-      if (!tpl.trim()) return;
-      const footer = i >= 3;
-      parts.push({
-        ...style,
-        text: fill(tpl, tab, v, k, views.length, s),
-        align: aligns[i % 3],
-        width: g.W - 2 * side,
-        valign: footer ? 2 : 0,
-        matrix: concat(translate(side, footer ? g.H - bottom : top), toPage),
-      });
-    });
-    return { page: g.src, parts };
-  });
+  const pages = views.map((v, k) => ({ page: pageGeom(tab, v).src, parts: headerParts(tab, v, k, views.length, s) }));
   await api.stampPages(info.docId, pages, "Header", false, true);
   stamped(tab);
 }
@@ -156,26 +178,113 @@ export async function applyWatermark(tab: Tab, views: number[]) {
     aspect = ph / pw;
   }
   const pages = views.map((v) => {
-    const g = pageGeom(tab, v);
-    const toPage = shownToPage(g.rot, g.w, g.h);
-    const cx = g.W / 2;
-    const cy = s.position === "top" ? g.H * 0.2 : s.position === "bottom" ? g.H * 0.8 : g.H / 2;
-    const around = concat(rotate(s.angle), concat(translate(cx, cy), toPage));
     let part: StampPart;
     if (s.kind === "picture") {
+      const { g, around } = watermarkPlace(tab, v, s);
       const w = (g.W * s.scale) / 100, h = w * aspect;
       part = { image: s.picture, width: w, height: h, matrix: concat(translate(-w / 2, -h / 2), around), opacity: s.opacity / 100 };
-    } else {
-      const width = Math.hypot(g.W, g.H);
-      part = {
-        text: s.text, font: s.font, size: s.size, color: rgb(s.color), bold: s.bold, align: "center",
-        width, valign: 1, matrix: concat(translate(-width / 2, 0), around), opacity: s.opacity / 100,
-      };
-    }
-    return { page: g.src, parts: [part] };
+    } else part = watermarkText(tab, v, s);
+    return { page: pageGeom(tab, v).src, parts: [part] };
   });
   await api.stampPages(info.docId, pages, "Watermark", s.behind, true);
   stamped(tab);
+}
+
+// ---------------------------------------------------------------- preview on the pages
+
+const CSS_FONT: Record<Font, string> = {
+  "sans-serif": "Helvetica, Arial, \"Nimbus Sans\", \"Liberation Sans\", sans-serif",
+  serif: "\"Times New Roman\", Times, \"Nimbus Roman\", \"Liberation Serif\", serif",
+  monospace: "\"Courier New\", Courier, \"Nimbus Mono PS\", \"Liberation Mono\", monospace",
+};
+const cssMatrix = (m: M) => `matrix(${m.join(",")})`;
+
+/**
+ * Headers and footers, or the watermark, drawn over the pages while they're being set up: laid out as the engine
+ * will draw them (the same boxes and matrices), so what's shown is what Add puts there.
+ */
+export class StampPreview implements PageLayer {
+  z = 25;
+  private at = new Map<number, number>();
+  private count = 0;
+  private pic = "";
+  private picUrl = "";
+  constructor(readonly viewer: Viewer, private tab: Tab, private kind: "Header" | "Watermark") {
+    viewer.addLayer(this);
+  }
+
+  /** The pages it goes on (display indices, null for none) and the settings changed: drawn again. */
+  update(views: number[] | null) {
+    this.at = new Map((views ?? []).map((v, k) => [v, k]));
+    this.count = views?.length ?? 0;
+    this.viewer.refreshLayer(this);
+  }
+
+  dispose() {
+    this.viewer.removeLayer(this);
+    if (this.picUrl) URL.revokeObjectURL(this.picUrl);
+    this.pic = this.picUrl = "";
+  }
+
+  mount(page: LayerPage): HTMLElement | null {
+    const k = this.at.get(page.view);
+    if (k === undefined) return null;
+    const root = document.createElement("div");
+    root.className = "stamp-preview";
+    if (this.kind === "Header") {
+      const s = headerSettings();
+      for (const p of headerParts(this.tab, page.view, k, this.count, s)) root.append(this.text(p));
+    } else {
+      const s = watermarkSettings();
+      if (s.kind === "text") {
+        if (s.text.trim()) root.append(this.text(watermarkText(this.tab, page.view, s)));
+      } else if (s.picture) {
+        const url = this.picture(s.picture);
+        if (url) {
+          const { g, around } = watermarkPlace(this.tab, page.view, s);
+          const img = document.createElement("img");
+          img.src = url;
+          img.alt = "";
+          Object.assign(img.style, {
+            width: `${(g.W * s.scale) / 100}px`, opacity: String(s.opacity / 100),
+            transform: `${cssMatrix(around)} translate(-50%, -50%)`,
+          });
+          root.append(img);
+        }
+      }
+    }
+    return root;
+  }
+
+  private text(p: StampPart) {
+    const d = document.createElement("div");
+    d.className = "stamp-preview-text";
+    d.textContent = p.text ?? "";
+    const [r, g, b] = (p.color ?? [0, 0, 0]).map((c) => Math.round(c * 255));
+    Object.assign(d.style, {
+      width: `${p.width}px`, fontFamily: CSS_FONT[p.font ?? "sans-serif"], fontSize: `${p.size ?? 9}px`,
+      fontWeight: p.bold ? "bold" : "normal", color: `rgb(${r},${g},${b})`, textAlign: p.align ?? "left",
+      opacity: String(p.opacity ?? 1), transform: `${cssMatrix(p.matrix)} translateY(${-(p.valign ?? 0) * 50}%)`,
+    });
+    return d;
+  }
+
+  /** The watermark picture's address for an <img>, once it's been read (drawn again then). */
+  private picture(path: string) {
+    if (path === this.pic) return this.picUrl;
+    if (this.picUrl) URL.revokeObjectURL(this.picUrl);
+    this.pic = path;
+    this.picUrl = "";
+    api.readPicture(path).then(
+      (bytes) => {
+        if (this.pic !== path) return;
+        this.picUrl = URL.createObjectURL(new Blob([bytes]));
+        this.viewer.refreshLayer(this);
+      },
+      () => {},
+    );
+    return "";
+  }
 }
 
 /** Takes headers and footers (kind "Header") or watermarks off every page. */

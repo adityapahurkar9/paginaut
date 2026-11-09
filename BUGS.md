@@ -9,6 +9,14 @@ the release that carries it in ROADMAP.md.
 
 ## Fixed
 
+### Found while adding the watermark preview (2026-11-09, Windows and Linux; fixed the same day, next release 0.9.11)
+
+- [x] A text watermark is drawn solid whatever its opacity (20% came out as full red). fo_stamp_text wrapped the
+      text in a group with the opacity, and MuPDF's PDF writer leaves a group's opacity out. Pictures were right
+      (their opacity goes with the picture). (src-tauri/native/paginaut.c, fo_stamp_text)
+      Fixed: the opacity goes with each piece of text drawn (st_device). stamp_test checks a red watermark at 20%
+      comes out pale
+
 ### Found while fixing the code review (2026-11-09, Windows and Linux; fixed the same day, next release 0.9.11)
 
 - [x] A save that fails after it started writing (disk full, the target locked by another program) throws away every
