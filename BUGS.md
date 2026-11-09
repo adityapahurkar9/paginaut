@@ -135,7 +135,7 @@ Smaller cleanups found in the same review:
       save_parts, save_flattened)
       Done: one write_beside, used by all three
 
-### Android (0.6.5; fixed 2026-11-09 for the next Android release, 0.6.6; not yet checked on a phone)
+### Android (0.6.5; fixed 2026-11-09, in Android 0.6.6; checked on the emulator, not yet on a phone)
 
 - [x] Opening a PDF from another app (Gmail, WhatsApp: Open with › Paginaut) while Paginaut isn't running: the app
       starts and says "This file isn't there any more (moved or deleted)". Opening the same file again from the other
@@ -145,7 +145,8 @@ Smaller cleanups found in the same review:
       file's URI is read before it can be opened (or after the grant that came with it no longer applies)
       Fixed (in code): the sent file is read as soon as Android hands it over (PaginautPlugin.load / onNewIntent start
       the copy at once), not seconds later when the page asks; and a "not found" from the sending app's provider is
-      asked again once, 0.7 s later, before it's believed. To check on a phone: Gmail and WhatsApp, Paginaut closed
+      asked again once, 0.7 s later, before it's believed. On the emulator (0.6.6, debug and release) a file sent
+      while Paginaut was closed opened every time. To check on a phone: Gmail and WhatsApp, Paginaut closed
 
 ### Windows (0.9.10; fixed 2026-11-09, next release 0.9.11)
 

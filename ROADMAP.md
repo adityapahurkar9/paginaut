@@ -893,7 +893,9 @@ only when the user exports it and passes it on themselves (docs/PLAY-DATA-SAFETY
 
 ## 0.9.11 (Windows, Linux) and Android 0.6.6: the fixes in BUGS.md, tools in the right pane
 Built 2026-11-09: release/v0.9.11 has the Windows installer (+ .sig, latest.json, addons.json), the Linux .deb and
-AppImage; not published. Android 0.6.6 not built yet.
+AppImage; not published. Android 0.6.6 built 2026-11-10: release/android/Paginaut_0.6.6.aab and the four per-ABI
+APKs (upload-key signed); android-engine-test passes on the Pixel 9 emulator (the e-book checks need
+businessplans.epub, not on this PC), and a file sent while Paginaut is closed opens (emulator; to check on a phone).
 Every bug from the 2026-11-05 code review and the three Redact reports, fixed 2026-11-09 (details in BUGS.md):
 - [x] Unsaved redactions, text and picture edits and Sanitize reach search, Read and Book mode and Compare
       (Doc::content_changed, one place for every edit of page content)
