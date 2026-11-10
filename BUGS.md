@@ -5,7 +5,18 @@ the release that carries it in ROADMAP.md.
 
 ## Open
 
-(none)
+### Read aloud voices (reported 2026-11-10, Windows and Linux)
+
+- [ ] Listening to a voice sample in Settings › Read aloud and then closing Settings leaves the sample playing to the
+      end. Nothing stops it when the Read aloud tab or the dialog goes away: playSample only stops a sample when it's
+      clicked again, another sample starts or it finishes. Closing Settings (and leaving the Read aloud tab) should
+      stop it. (src/speech.ts, playSample; src/ui/SettingsDialog.tsx, ReadAloud)
+- [ ] Very few Indian English voices. The downloadable list has none: the Piper catalogue has English only for
+      Great Britain (9) and the United States (22), no en_IN, so it's American and British accents only. Windows'
+      own voices on the user's PC are David, Zira and Mark (all US); Windows has Indian English voices (Heera, Ravi)
+      only with the English (India) speech pack installed. To look at: other en_IN Piper voices or a newer catalogue,
+      telling people how to add Windows' English (India) voices, and showing Indian English as its own entry in the
+      language list. (src-tauri/src/piper_voices.rs from tools/piper-catalog.py; src/ui/SettingsDialog.tsx)
 
 ## Fixed
 
