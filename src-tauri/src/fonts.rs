@@ -21,7 +21,7 @@ pub fn installed() -> Vec<String> {
     {
         use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
         for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
-            names.extend(reg_values(root, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"));
+            names.extend(reg_pairs(root, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts").into_iter().map(|(name, _)| name));
         }
     }
     // Linux: fontconfig's list (every desktop has it); a family's first name, the others being translations.
@@ -54,29 +54,6 @@ fn families(value: &str) -> Vec<String> {
             (!skip).then_some(name)
         })
         .collect()
-}
-
-#[cfg(windows)]
-fn reg_values(root: windows::Win32::System::Registry::HKEY, key: &str) -> Vec<String> {
-    use windows::core::{HSTRING, PWSTR};
-    use windows::Win32::System::Registry::{RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, KEY_READ};
-    let mut out = Vec::new();
-    let mut h = HKEY::default();
-    unsafe {
-        if RegOpenKeyExW(root, &HSTRING::from(key), None, KEY_READ, &mut h).is_err() {
-            return out;
-        }
-        for i in 0.. {
-            let mut name = [0u16; 512];
-            let mut len = name.len() as u32;
-            if RegEnumValueW(h, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, None, None, None).is_err() {
-                break;
-            }
-            out.push(String::from_utf16_lossy(&name[..len as usize]));
-        }
-        let _ = RegCloseKey(h);
-    }
-    out
 }
 
 /// The installed TrueType file of the font a PDF names ("Arial-BoldMT", "TimesNewRomanPS-ItalicMT", "Calibri,Bold"),
@@ -199,11 +176,14 @@ fn find_fc(name: &str, bold: bool, italic: bool) -> Option<Result<Found, Missing
     let raw = name.split_once('+').filter(|(t, _)| t.len() == 6).map_or(name, |(_, r)| r);
     let raw = raw.split([',', '-']).next().unwrap_or(raw).trim_end_matches("PSMT").trim_end_matches("MT").trim_end_matches("PS");
     let mut spaced = String::new();
-    for (i, ch) in raw.chars().enumerate() {
-        if i > 0 && ch.is_ascii_uppercase() && !raw[..i].ends_with(|c: char| c.is_ascii_uppercase() || c == ' ') {
+    // (By letters, not bytes: a name with letters outside ASCII must not be cut inside one.)
+    let mut prev: Option<char> = None;
+    for ch in raw.chars() {
+        if ch.is_ascii_uppercase() && prev.is_some_and(|c| !c.is_ascii_uppercase() && c != ' ') {
             spaced.push(' ');
         }
         spaced.push(ch);
+        prev = Some(ch);
     }
     let pattern = format!("{spaced}:style={}", match style.as_str() { "bold" => "Bold", "italic" => "Italic", "bolditalic" => "Bold Italic", _ => "Regular" });
     let out = std::process::Command::new("fc-match").args(["-f", "%{file}\n%{family}\n", &pattern]).output().ok()?;
@@ -221,28 +201,36 @@ fn find_fc(name: &str, bold: bool, italic: bool) -> Option<Result<Found, Missing
     })
 }
 
+/// The values under a registry key, as (name, text). An entry too long for the buffers is left out and the
+/// listing goes on: only "no more items" ends it (any error used to, so one very long entry hid every font after it).
 #[cfg(windows)]
 fn reg_pairs(root: windows::Win32::System::Registry::HKEY, key: &str) -> Vec<(String, String)> {
     use windows::core::{HSTRING, PWSTR};
+    use windows::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
     use windows::Win32::System::Registry::{RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, KEY_READ};
     let mut out = Vec::new();
     let mut h = HKEY::default();
+    // A value's name is at most 16,383 letters; a font's file name or path fits 4,096 easily.
+    let mut name = vec![0u16; 16384];
+    let mut data = vec![0u16; 4096];
     unsafe {
         if RegOpenKeyExW(root, &HSTRING::from(key), None, KEY_READ, &mut h).is_err() {
             return out;
         }
         for i in 0.. {
-            let mut name = [0u16; 512];
             let mut len = name.len() as u32;
-            let mut data = [0u16; 1024];
             let mut size = (data.len() * 2) as u32;
             let mut kind = 0u32;
-            if RegEnumValueW(h, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, Some(&mut kind as *mut u32), Some(data.as_mut_ptr().cast()), Some(&mut size as *mut u32)).is_err() {
+            let r = RegEnumValueW(h, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, Some(&mut kind as *mut u32), Some(data.as_mut_ptr().cast()), Some(&mut size as *mut u32));
+            if r == ERROR_MORE_DATA {
+                continue;
+            }
+            if r != ERROR_SUCCESS {
                 break;
             }
             let chars = (size as usize / 2).min(data.len());
             let value = String::from_utf16_lossy(&data[..chars]).trim_end_matches('\0').to_string();
-            out.push((String::from_utf16_lossy(&name[..len as usize]), value));
+            out.push((String::from_utf16_lossy(&name[..(len as usize).min(name.len())]), value));
         }
         let _ = RegCloseKey(h);
     }

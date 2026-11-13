@@ -7986,12 +7986,96 @@ static int64_t sig_end(fz_context *ctx, pdf_obj *field)
 	int n = pdf_array_len(ctx, br);
 	if (n < 2)
 		return 0;
-	return pdf_array_get_int(ctx, br, n - 2) + pdf_array_get_int(ctx, br, n - 1);
+	return pdf_to_int64(ctx, pdf_array_get(ctx, br, n - 2)) + pdf_to_int64(ctx, pdf_array_get(ctx, br, n - 1));
+}
+
+static int hex_val(int ch)
+{
+	if (ch >= '0' && ch <= '9') return ch - '0';
+	if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+	if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+	return -1;
+}
+
+/* A signature is only worth checking when its /ByteRange covers the file from its first byte to the end of the
+ * signed revision, leaving out nothing but the signature's own /Contents: [0 a b c], where the bytes from a to b
+ * are exactly the hex string <...> that holds this signature. MuPDF hashes whatever the range names, so without
+ * this a made-up file could show a valid signature over bytes that aren't the document shown (the visible
+ * content sitting in the gap, or before the range). Throws when the range isn't that. */
+static void check_byte_range(fz_context *ctx, pdf_document *pdf, pdf_obj *field, const char *contents, size_t clen)
+{
+	pdf_obj *br = pdf_dict_getl(ctx, field, PDF_NAME(V), PDF_NAME(ByteRange), NULL);
+	int64_t o0, l0, o1, l1, gap, size, back, k;
+	unsigned char *raw = NULL;
+	size_t got, digits = 0, at = 0;
+	int hi = -1;
+	if (pdf_array_len(ctx, br) != 4)
+		fz_throw(ctx, FZ_ERROR_FORMAT, "it doesn't cover the document in one piece around the signature");
+	o0 = pdf_to_int64(ctx, pdf_array_get(ctx, br, 0));
+	l0 = pdf_to_int64(ctx, pdf_array_get(ctx, br, 1));
+	o1 = pdf_to_int64(ctx, pdf_array_get(ctx, br, 2));
+	l1 = pdf_to_int64(ctx, pdf_array_get(ctx, br, 3));
+	gap = o1 - l0;
+	if (o0 != 0 || l0 <= 0 || l1 < 0 || gap < 2 || gap > ((int64_t)1 << 28))
+		fz_throw(ctx, FZ_ERROR_FORMAT, "it doesn't cover the document from its start, leaving out only the signature");
+	back = fz_tell(ctx, pdf->file);
+	fz_var(raw);
+	fz_try(ctx)
+	{
+		fz_seek(ctx, pdf->file, 0, SEEK_END);
+		size = fz_tell(ctx, pdf->file);
+		if (o1 + l1 > size)
+			fz_throw(ctx, FZ_ERROR_FORMAT, "it names more bytes than the file has");
+		raw = fz_malloc(ctx, (size_t)gap);
+		fz_seek(ctx, pdf->file, l0, SEEK_SET);
+		got = fz_read(ctx, pdf->file, raw, (size_t)gap);
+		if (got != (size_t)gap || raw[0] != '<' || raw[gap - 1] != '>')
+			fz_throw(ctx, FZ_ERROR_FORMAT, "it leaves out more than the signature itself");
+		/* What's left out is this signature's /Contents and nothing else: hex digits (white space allowed, as in
+		 * any hex string) that give the very bytes being checked. */
+		for (k = 1; k < gap - 1; k++)
+		{
+			int ch = raw[k], v = hex_val(ch);
+			if (v < 0)
+			{
+				if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '\f' || ch == 0)
+					continue;
+				fz_throw(ctx, FZ_ERROR_FORMAT, "it leaves out more than the signature itself");
+			}
+			digits++;
+			if (hi < 0)
+				hi = v;
+			else
+			{
+				if (at >= clen || (unsigned char)contents[at] != (unsigned char)(hi << 4 | v))
+					fz_throw(ctx, FZ_ERROR_FORMAT, "what it leaves out isn't this signature");
+				at++;
+				hi = -1;
+			}
+		}
+		if (hi >= 0)
+		{
+			/* An odd digit count: the last one is the high half of a byte. */
+			if (at >= clen || (unsigned char)contents[at] != (unsigned char)(hi << 4))
+				fz_throw(ctx, FZ_ERROR_FORMAT, "what it leaves out isn't this signature");
+			at++;
+		}
+		if (at != clen || digits == 0)
+			fz_throw(ctx, FZ_ERROR_FORMAT, "what it leaves out isn't this signature");
+	}
+	fz_always(ctx)
+	{
+		fz_free(ctx, raw);
+		fz_seek(ctx, pdf->file, back, SEEK_SET);
+	}
+	fz_catch(ctx)
+		fz_rethrow(ctx);
 }
 
 /* JSON [{"i","name","page","signed","changed":bool (bytes added after it),
  * "invalidAt": saves ago it was invalidated by a disallowed change (0: none),
- * "reason","location","m" (PDF date),"sub" (SubFilter),"whole" (covers the file up to its update)}] */
+ * "end" (where the signed revision ends in the file),"reason","location","m" (PDF date),"signer",
+ * "sub" (SubFilter)}]. Whether a signature covers its revision whole is checked by fo_sig_data. */
 char *fo_sigs_json(fo_ctx *c, fo_doc *d)
 {
 	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
@@ -8060,7 +8144,8 @@ char *fo_sigs_json(fo_ctx *c, fo_doc *d)
 }
 
 /* The bytes signature `i` covers and its CMS blob, for checking by the app.
- * Both are freed with fo_free. Returns 0, or -1. */
+ * Both are freed with fo_free. Returns 0, or -1 (also when the signature doesn't cover its revision of the file
+ * whole: see check_byte_range). */
 int fo_sig_data(fo_ctx *c, fo_doc *d, int i, unsigned char **data, size_t *len, unsigned char **cms, size_t *cms_len)
 {
 	pdf_document *pdf = pdf_specifics(CTX, (fz_document *)d);
@@ -8083,6 +8168,7 @@ int fo_sig_data(fo_ctx *c, fo_doc *d, int i, unsigned char **data, size_t *len, 
 		if (i < 0 || i >= n || !pdf_signature_is_signed(CTX, pdf, sigs[i]))
 			fz_throw(CTX, FZ_ERROR_ARGUMENT, "not a signed signature field");
 		*cms_len = pdf_signature_contents(CTX, pdf, sigs[i], &contents);
+		check_byte_range(CTX, pdf, sigs[i], contents, *cms_len);
 		stm = pdf_signature_hash_bytes(CTX, pdf, sigs[i]);
 		buf = fz_read_all(CTX, stm, 1 << 20);
 		l = fz_buffer_storage(CTX, buf, &p);

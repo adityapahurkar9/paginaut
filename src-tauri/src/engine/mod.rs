@@ -1107,7 +1107,11 @@ impl Doc {
                 Ok(n)
             }
             Err(e) => {
+                // The marks made so far are taken back in the document; the pages kept in memory still had them.
                 inner.doc.abandon_op();
+                inner.pages.clear();
+                drop(inner);
+                self.edited();
                 Err(e)
             }
         }
@@ -1149,6 +1153,9 @@ impl Doc {
             Ok(()) => inner.doc.end_op(),
             Err(e) => {
                 inner.doc.abandon_op();
+                inner.pages.clear();
+                drop(inner);
+                self.edited();
                 return Err(e);
             }
         }
@@ -1463,8 +1470,12 @@ impl Doc {
         if let Some(t) = self.texts.lock().get(index) {
             return Ok(t);
         }
+        let rev = self.edit_rev.load(Ordering::Acquire);
         let t = Arc::new(Mutex::new(self.list(index, 0)?.text()?));
-        self.texts.lock().put(index, t.clone());
+        // Don't keep text read just before an edit changed the page (as list() does for its lists).
+        if self.edit_rev.load(Ordering::Acquire) == rev {
+            self.texts.lock().put(index, t.clone());
+        }
         Ok(t)
     }
 
@@ -1984,10 +1995,11 @@ impl Engine {
                 *v += if i % 2 == 0 { ox } else { oy };
             }
         }
-        // Signing writes into the file as it goes (the signature is made at the end of the save). Signing in place
-        // therefore goes into a copy beside it first, so a failure (a cancelled PIN, an unreachable timestamp
-        // service) never leaves the original with an empty signature in it.
-        let write_to = if in_place { format!("{cur}.signing.tmp") } else { out.clone() };
+        // Signing writes into the file as it goes (the signature is made at the end of the save). It therefore goes
+        // into a copy beside the target first, in place or not, so a failure (a cancelled PIN, an unreachable
+        // timestamp service) never leaves the original with an empty signature in it, nor takes away a file that
+        // was at the new name before.
+        let write_to = format!("{out}.signing.tmp");
         std::fs::copy(&cur, &write_to).map_err(|e| format!("Couldn't write {write_to}: {e}"))?;
         let mut signing = mupdf::Signing { sign: Box::new(sign), error: None };
         let mut inner = d.inner.lock();
@@ -2004,17 +2016,20 @@ impl Engine {
         inner.pages.clear();
         d.lists.lock().clear();
         d.texts.lock().clear();
-        if res.is_ok() && in_place {
-            // Let go of the original (the open document holds it), then put the signed copy in its place.
+        if res.is_ok() {
             res = (|| -> Result<(), String> {
-                let bytes = std::fs::read(&write_to).map_err(|e| e.to_string())?;
-                inner.doc = Document::open_buffer("pdf", &bytes, "")?;
-                std::fs::rename(&write_to, &cur).map_err(|e| format!("Couldn't replace {cur} with the signed document: {e}"))
+                if in_place {
+                    // Let go of the original (the open document holds it) before the signed copy takes its place.
+                    let bytes = std::fs::read(&write_to).map_err(|e| e.to_string())?;
+                    inner.doc = Document::open_buffer("pdf", &bytes, "")?;
+                }
+                // A search or Read mode may still be reading the file for a moment: try for a while, as saving does.
+                std::fs::rename(&write_to, &out)
+                    .or_else(|_| copy_with_retry(&write_to, &out))
+                    .map_err(|e| format!("Couldn't replace {} with the signed document: {e}", file_name(&out)))
             })();
         }
-        if res.is_err() {
-            let _ = std::fs::remove_file(&write_to);
-        }
+        let _ = std::fs::remove_file(&write_to);
         // Reopen from disk: the signed file, or on failure the untouched original.
         let reopen = if res.is_ok() { out.clone() } else { cur.clone() };
         let fresh = Document::open(&reopen)?;
@@ -2333,7 +2348,9 @@ impl Engine {
             Ok(d) => d,
             Err(e) => return done(Err(e)),
         };
-        self.pool.submit(rid, prio, move |ctl| done(render_now(&d, &req, ctl)));
+        // Guarded: a fault while drawing becomes this page's error. Unguarded, the worker caught it but the answer
+        // was never sent: the page stayed blank with no message and its request counted as running for good.
+        self.pool.submit(rid, prio, move |ctl| done(guarded(req.page, || render_now(&d, &req, ctl))));
     }
 
     /// Searches every page in parallel. `hit` runs per page with matches;

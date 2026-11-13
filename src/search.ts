@@ -100,7 +100,8 @@ function insertSorted(arr: number[], v: number) {
   if (arr[lo] !== v) arr.splice(lo, 0, v);
 }
 
-let timer = 0;
+/** Each tab's wait for a pause in typing (one for all would let another tab's Find drop this tab's search). */
+const timers = new WeakMap<Tab, number>();
 
 /** Starts (after a short typing pause) a new search in `tab`, replacing any running one. */
 export function runSearch(
@@ -110,7 +111,7 @@ export function runSearch(
   onError: (e: unknown) => void,
   extra: { snippets?: boolean; delay?: number } = {},
 ) {
-  clearTimeout(timer);
+  clearTimeout(timers.get(tab));
   const prev = tab.search.value;
   if (prev) api.cancel([prev.sid]).catch(() => {});
   const info = tab.info.value;
@@ -120,7 +121,7 @@ export function runSearch(
     tab.viewer?.setSearchHits(new Map(), null);
     return;
   }
-  timer = window.setTimeout(() => {
+  const timer = window.setTimeout(() => {
     const sid = newId();
     const opts = searchOpts.value;
     const { needle, regex } = engineNeedle(q, opts);
@@ -150,7 +151,7 @@ export function runSearch(
         const cur = tab.search.value;
         if (!cur || cur.sid !== sid) return;
         if (ev.kind === "done") {
-          const error = ev.error ? (regex ? "That pattern isn't valid." : ev.error) : null;
+          const error = ev.error ? searchError(ev.error, opts.regex) : null;
           const next = { ...cur, done: true, error, limited: ev.limited };
           tab.search.value = next;
           settle(next);
@@ -172,6 +173,16 @@ export function runSearch(
       })
       .catch(onError);
   }, extra.delay ?? 160);
+  timers.set(tab, timer);
+}
+
+/** What to say when a search failed. A pattern the engine couldn't read ("regcomp failure") is the user's to fix,
+ *  and only a pattern they typed is blamed (Whole word makes one from plain text). One that ran too long on a
+ *  page ("regexec failure") says that. Anything else (the file couldn't be read, a page failed) is said as it is. */
+function searchError(error: string, typedPattern: boolean): string {
+  if (/regcomp failure/i.test(error) && typedPattern) return "That pattern isn't valid.";
+  if (/regexec failure/i.test(error)) return typedPattern ? "That pattern takes too long on this text: try a simpler one." : "Couldn't search this text for whole words: turn Whole word off.";
+  return error;
 }
 
 export function reveal(tab: Tab) {
@@ -191,6 +202,8 @@ export function stepSearch(tab: Tab, dir: 1 | -1) {
 }
 
 export function clearSearch(tab: Tab) {
+  // Also a search still waiting for a pause in typing: it would start with the bar closed.
+  clearTimeout(timers.get(tab));
   const s = tab.search.value;
   if (s) api.cancel([s.sid]).catch(() => {});
   tab.search.value = null;

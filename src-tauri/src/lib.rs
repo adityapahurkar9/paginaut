@@ -407,6 +407,7 @@ fn run_desktop() {
             desk::signature_revocation,
             desk::update_check,
             desk::update_install,
+            desk::update_run,
             desk::update_stop,
             desk::open_path,
             desk::pkcs11_module,

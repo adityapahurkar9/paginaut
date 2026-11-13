@@ -6,7 +6,7 @@ import { compareOptions, setCompareOption } from "../compare";
 import { DEFAULT_TSA } from "../dsc";
 import { deleteModel, downloadModel, downloads, loadLangs, ocrLangs, rememberChoice, stopDownload, type OcrLang, type OcrQuality } from "../ocr";
 import { moveOnRail, onRail, openPane, railOrder, railShown, resetRail, setOnRail, setRailShown } from "../panes";
-import { downloadVoice, loadPiperVoices, piperVoices, playSample, removeVoice, samplePlaying, stopVoiceDownload, voiceDownloads, type PiperVoice } from "../speech";
+import { downloadVoice, loadPiperVoices, piperVoices, playSample, removeVoice, samplePlaying, stopSample, stopVoiceDownload, voiceDownloads, type PiperVoice } from "../speech";
 import { VoiceChoices } from "./SpeechBar";
 import { onLinux, settings, settingsOpen, updateSettings, type Settings, type SettingsTab } from "../store";
 import { About, Shortcuts } from "./HelpDialogs";
@@ -318,6 +318,8 @@ function Compare() {
 
 function ReadAloud() {
   useEffect(() => void loadPiperVoices(), []);
+  // A sample stops with this tab: leaving it, or closing Settings.
+  useEffect(() => stopSample, []);
   const all = piperVoices.value;
   const active = voiceDownloads.value;
   // Languages by name (with the country when a language has several).

@@ -321,6 +321,30 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     return display to size
   }
 
+  /**
+   * A folder of its own for a file read in place, new for every open. One folder per source would be shared by
+   * two opens of the same file (a book tapped while the shelf still reads its cover, "Open with" for the file
+   * that's open): the second would delete the first's link, and letting go of the first would close the
+   * second's handle. All of them are cleared when Paginaut starts.
+   */
+  private fun directDir(uri: Uri): File =
+    File(activity.cacheDir, "direct/" + sha1(uri.toString()).take(16) + "-" + java.lang.Long.toString(directSeq.incrementAndGet(), 36)).apply { mkdirs() }
+
+  private val directSeq = java.util.concurrent.atomic.AtomicLong(System.nanoTime())
+
+  /**
+   * The kept copy still is what the source holds: the same fingerprint (size, first and last 64 KB). A name and
+   * size alone also match a file changed in place (a form filled in again, a scan redone at the same size). A
+   * source that can't be read at random (a stream) can't be compared, and is copied again.
+   */
+  private fun sameAsSource(uri: Uri, copy: File): Boolean {
+    val pfd = activity.contentResolver.openFileDescriptor(uri, "r") ?: return false
+    return pfd.use {
+      val theirs = fingerprint(it.fileDescriptor)
+      theirs.isNotEmpty() && theirs == fingerprint(copy)
+    }
+  }
+
   private fun open(uri: Uri): Opened {
     val cr = activity.contentResolver
     val lasting = canReach(uri)
@@ -335,14 +359,14 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     val dirFor = { root: String -> File(activity.cacheDir, root + "/" + sha1(uri.toString()).take(16)) }
     // Files Paginaut can always reach again are read where they are: no copy.
     if (lasting) {
-      val dir = dirFor("direct").apply { deleteRecursively(); mkdirs() }
+      val dir = directDir(uri)
       openDirect(uri, display, dir)?.let { (link, pfd) -> return Opened(link, display, inPlace = true, lasting = true, kept = false, fp = fingerprint(pfd.fileDescriptor)) }
       // Not readable at random (a cloud file): copied, as a file lent once is.
     }
     // Big files lent once (a quarter of the cache or more) aren't kept: read in place, or failing
     // that copied for this visit only.
     if (!lasting && size > DIRECT_FROM) {
-      val dir = dirFor("direct").apply { deleteRecursively(); mkdirs() }
+      val dir = directDir(uri)
       openDirect(uri, display, dir)?.let { (link, pfd) -> return Opened(link, display, inPlace = true, lasting = false, kept = false, fp = fingerprint(pfd.fileDescriptor)) }
       val out = File(dir, display)
       val input = cr.openInputStream(uri) ?: throw IllegalStateException("the file is empty")
@@ -352,7 +376,7 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     }
     val dir = dirFor("docs")
     val out = File(dir, display)
-    if (size >= 0 && out.isFile && out.length() == size) {
+    if (size >= 0 && out.isFile && out.length() == size && sameAsSource(uri, out)) {
       // Opened again: the copy counts as recently opened.
       dir.setLastModified(System.currentTimeMillis())
       return Opened(out, display, inPlace = false, lasting = lasting, kept = true, fp = fingerprint(out))

@@ -94,29 +94,41 @@ export async function removeVoice(id: string) {
 }
 
 let sample: { id: string; audio: HTMLAudioElement } | null = null;
+/** Counts the samples asked for: one still loading plays only if it's still the latest when it arrives. */
+let sampleAsk = 0;
 export const samplePlaying = signal<string | null>(null);
-/** Plays (or stops) a voice's sample recording, fetched from the voice repository. */
-export async function playSample(id: string) {
-  const was = sample?.id;
+
+/** Stops the sample that's playing or still loading (also when Settings or its Read aloud tab goes away). */
+export function stopSample() {
+  sampleAsk++;
   if (sample) {
     sample.audio.pause();
     URL.revokeObjectURL(sample.audio.src);
     sample = null;
-    samplePlaying.value = null;
   }
+  samplePlaying.value = null;
+}
+
+/** Plays (or stops) a voice's sample recording, fetched from the voice repository. */
+export async function playSample(id: string) {
+  // A second click on the same voice stops it, playing or still loading (it used to load and play twice).
+  const was = samplePlaying.value;
+  stopSample();
   if (was === id) return;
+  const ask = sampleAsk;
   samplePlaying.value = id;
   try {
     const buf = await api.piperSample(id);
-    if (samplePlaying.value !== id) return;
+    if (ask !== sampleAsk) return;
     const audio = new Audio(URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" })));
     sample = { id, audio };
     audio.addEventListener("ended", () => {
-      if (sample?.audio === audio) void playSample(id);
+      if (sample?.audio === audio) stopSample();
     });
     await audio.play();
   } catch (e) {
-    if (samplePlaying.value === id) samplePlaying.value = null;
+    if (ask !== sampleAsk) return;
+    stopSample();
     showToast(`Couldn't play the sample: ${e}`, 5000);
   }
 }
@@ -256,6 +268,10 @@ function pageLayout(tab: Tab, flow: Flow, view: number): Promise<PageLayout> {
       return { src, words, norm: nw, spans };
     });
     byView.set(view, p);
+    // A failed reading isn't kept: the next word asks again (kept, no word on this page was ever marked again).
+    p.catch(() => {
+      if (byView.get(view) === p) byView.delete(view);
+    });
   }
   return p;
 }
