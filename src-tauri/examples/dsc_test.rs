@@ -109,6 +109,19 @@ fn main() {
     let sigs = check(&engine, &inplace);
     println!("in place, then signed: {} signature(s), all intact {}", sigs.len(), sigs.iter().all(|(_, v)| v.intact));
 
+    // Signing into a new file whose name is taken, failing: the file that was there stays as it was.
+    let taken = dir.join("dsc-taken.pdf").to_string_lossy().into_owned();
+    std::fs::write(&taken, b"someone else's file").unwrap();
+    let info = engine.open(src.to_str().unwrap()).unwrap();
+    let r = engine.sign(info.doc_id, Some(taken.clone()), 0, req("Cancelled", [0.0; 4]), |_| Err("Signing was cancelled.".into()));
+    let kept = std::fs::read(&taken).unwrap() == b"someone else's file";
+    println!("new file, failed: {:?} | the file there is kept {} | no temporary left {}", r.err(), kept, !std::path::Path::new(&format!("{taken}.signing.tmp")).exists());
+    assert!(kept, "a failed signing took away the file at the new name");
+    engine.sign(info.doc_id, Some(taken.clone()), 0, req("Paginaut Test Signer", [0.0; 4]), |data| cert.sign(data, 0)).unwrap();
+    engine.close(info.doc_id);
+    let sigs = check(&engine, &taken);
+    println!("new file, then signed: {} signature(s), all intact {}", sigs.len(), sigs.iter().all(|(_, v)| v.intact));
+
     // A certificate file (PAGINAUT_TEST_PFX, password in PAGINAUT_TEST_PFX_PW), and a trusted timestamp from the
     // service in PAGINAUT_TEST_TSA (needs internet). Both optional.
     let pfx = std::env::var("PAGINAUT_TEST_PFX").ok();

@@ -611,9 +611,11 @@ export const api = {
   updateInstall: (onEvent: (e: { kind: "progress"; done: number; total: number }) => void) => {
     const ch = new Channel<{ kind: "progress"; done: number; total: number }>();
     ch.onmessage = onEvent;
-    // False: Paginaut stays open while the system's software installer finishes (Linux's .deb).
-    return invoke<boolean>("update_install", { onEvent: ch });
+    // Downloads and checks the installer; updateRun starts it.
+    return invoke<void>("update_install", { onEvent: ch });
   },
+  // False: Paginaut stays open while the system's software installer finishes (Linux's .deb).
+  updateRun: () => invoke<boolean>("update_run"),
   updateStop: () => invoke<void>("update_stop"),
   markdownRead: (path: string) => invoke<string>("markdown_read", { path }),
   /** The Markdown file at `path` shown from `text` (a new document; pictures from its folder). */

@@ -32,13 +32,21 @@ function setEdits(tab: Tab, next: E.Edits, keepPage?: number) {
   tab.viewer?.setPages(specs, keepPage ?? Math.min(tab.page.value, specs.length - 1));
 }
 
-let autoSaveTimer = 0;
+/** Each tab's own wait before its rotations are saved (one for all would let a second tab's rotation cancel the
+ *  first tab's save). */
+const autoSaveTimers = new WeakMap<Tab, number>();
 function maybeAutoSave(tab: Tab) {
-  clearTimeout(autoSaveTimer);
+  clearTimeout(autoSaveTimers.get(tab));
   const e = tab.edits.value;
   // Only rotations: other unsaved changes (inserted pages, forms) wait for Save.
   if (!settings.value.autoSaveRotations || !e || !savesInPlace(tab) || tab.docChanged.value || !E.onlyRotations(e) || E.isIdentity(e)) return;
-  autoSaveTimer = window.setTimeout(() => void save(tab), 1200);
+  autoSaveTimers.set(
+    tab,
+    window.setTimeout(() => {
+      // Closed (or moved to another window) meanwhile: nothing to save here.
+      if (tabs.value.includes(tab)) void save(tab);
+    }, 1200),
+  );
 }
 
 export function rotatePages(tab: Tab, by: 90 | -90 | 180, page?: number) {
@@ -285,6 +293,19 @@ export function setSaveOverride(fn: typeof saveOverride) {
  * a copy is written and the tab stays on its file, edits still to save there. Resolves true on success.
  */
 export async function save(tab: Tab, saveAs = false): Promise<boolean> {
+  // One save of a tab at a time, from its very start: the questions below take time, and a second save let in
+  // meanwhile (Ctrl+S, the rotations' timer) would apply the same page changes to the file just saved.
+  if (entered.has(tab) || tab.saving.value) return false;
+  entered.add(tab);
+  try {
+    return await saveNow(tab, saveAs);
+  } finally {
+    entered.delete(tab);
+  }
+}
+const entered = new WeakSet<Tab>();
+
+async function saveNow(tab: Tab, saveAs: boolean): Promise<boolean> {
   const own = await saveOverride(tab, saveAs);
   if (own !== null) return own;
   if (!(await beforeSave(tab))) return false;

@@ -189,6 +189,21 @@ impl Voices {
     /// Piper itself: the release's zip, checked, its `piper/` folder unpacked into a fresh folder put in place last.
     fn get_runtime(&self, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
         let (host, path, size, sha) = RUNTIME;
+        // One download of Piper at a time: two voices started together on a fresh install would both write
+        // piper.zip.part and unpack into piper.part. The second waits (it can be stopped), then finds Piper there.
+        static ONE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+        let _one = loop {
+            if let Some(g) = ONE.try_lock_for(std::time::Duration::from_millis(200)) {
+                break g;
+            }
+            if cancel.load(std::sync::atomic::Ordering::Acquire) {
+                return Err("stopped".into());
+            }
+        };
+        if self.runtime().join(PIPER).is_file() {
+            progress(size, size);
+            return Ok(());
+        }
         let zip = self.dir.join("piper.zip.part");
         let fresh = self.dir.join("piper.part");
         let r = (|| {

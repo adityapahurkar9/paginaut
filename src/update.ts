@@ -42,23 +42,31 @@ export function checkFromMenu() {
   void checkForUpdates();
 }
 
+/** The tabs here with unsaved changes; says so and answers true when there are any. */
+async function unsavedFirst(): Promise<boolean> {
+  const unsaved = tabs.value.filter((t) => t.dirty.value);
+  if (!unsaved.length) return false;
+  const names = unsaved.map((t) => t.name).join(", ");
+  await ask("Save your changes first", `Updating restarts Paginaut. Save or close these, then choose Install again: ${names}.`, [
+    { label: "OK", value: "ok", primary: true },
+  ]);
+  return true;
+}
+
 export async function installUpdate() {
   const s = updateState.value;
   if (s.phase !== "checked" || !s.result.available) return;
-  const unsaved = tabs.value.filter((t) => t.dirty.value);
-  if (unsaved.length) {
-    const names = unsaved.map((t) => t.name).join(", ");
-    await ask("Save your changes first", `Updating restarts Paginaut. Save or close these first: ${names}.`, [{ label: "OK", value: "ok", primary: true }]);
-    return;
-  }
-  persistPositions();
+  if (await unsavedFirst()) return;
   updateState.value = { phase: "downloading", done: 0, total: 0 };
   try {
-    const quitting = await api.updateInstall((e) => (updateState.value = { phase: "downloading", done: e.done, total: e.total }));
-    if (!quitting) {
-      updateState.value = s;
-      showToast("The new version opened in your software installer: install it there, then start Paginaut again.", 9000);
-    }
+    // (Nothing is downloaded twice: an installer already here and checked is used.)
+    await api.updateInstall((e) => (updateState.value = { phase: "downloading", done: e.done, total: e.total }));
+    // The download took a while, and documents may have been changed since: look again before anything quits.
+    updateState.value = s;
+    if (await unsavedFirst()) return;
+    persistPositions();
+    const quitting = await api.updateRun();
+    if (!quitting) showToast("The new version opened in your software installer: install it there, then start Paginaut again.", 9000);
   } catch (e) {
     updateState.value = String(e) === "stopped" ? s : { phase: "error", message: String(e) };
   }

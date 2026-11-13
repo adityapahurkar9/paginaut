@@ -5,12 +5,329 @@ the release that carries it in ROADMAP.md.
 
 ## Open
 
+### Code review, whole codebase (found 2026-11-13; read from the code, none checked by running yet)
+
+After five passes everything has been read, native/paginaut.c included (all 14,000 lines, in the fifth pass). Only
+glanced at: HelpDialogs.tsx, Logo.tsx, ToolFrame.tsx, SortToggle.tsx. In paginaut.c the PDF/A checker (the last 4,500
+lines) was read for memory safety and plain logic, not against the PDF/A standard itself.
+
+Most serious first. Read in full for this: lib.rs, app.rs, desk.rs, engine/mod.rs, engine/pool.rs, net.rs, update.rs,
+piper.rs, ocr.rs, fonts.rs, addons.rs, shelf.rs, prefs.rs, sigstore.rs, appwindows.rs, office/libre.rs, mobile.rs,
+store.ts, pages.ts, speech.ts, search.ts, RenderManager.ts, update.ts; parts of paginaut.c, dsc.rs and
+PaginautPlugin.kt.
+
+- [x] Security: opening an attachment can run a program. attachment_open compares the name's extension with the RISKY
+      list as it is, and free_path cleans the name but not the extension: an attachment called "invoice.exe " (a
+      space at the end) has the extension "exe ", passes, is written as a file Windows stores as invoice.exe, and is
+      opened. "x.exe::$DATA" passes the same way. Old Office files that can carry macros (doc, xls, ppt, dot, xlt)
+      aren't on the list although docm and xlsm are. A list of what may be opened (documents, pictures, text, as
+      open_path has) on a tidied name would close the whole kind. (src-tauri/src/desk.rs, attachment_open and RISKY;
+      src-tauri/src/engine/mod.rs, free_path)
+      Fixed: a list of what may be opened (documents, pictures, text, sound and video: desk.rs OPENABLE) on the name
+      tidied as Windows stores it; everything else is only saved. Old Office formats (doc, xls, ppt) are among what
+      isn't opened. Unit test desk::tests
+- [x] Signing into a new file that already exists, then failing (PIN cancelled, timestamp service unreachable),
+      deletes that file. sign copies the document straight over the target before signing and removes the target on
+      failure; nothing is written beside it first. (src-tauri/src/engine/mod.rs, sign)
+      Fixed: signing always writes beside the target (<name>.signing.tmp) and takes its place only when it worked.
+      dsc_test checks a file at the new name survives a cancelled signing
+- [x] Installing an update can throw away changes made while it downloads. Unsaved changes are looked for before the
+      download (update.ts installUpdate, appwindows::others_dirty), but the app quits (app.exit) after the download
+      and the installer's start, minutes later, without looking again or asking. (src-tauri/src/desk.rs,
+      update_install; src/update.ts)
+      Fixed: update_install only downloads and checks; the page then looks at its tabs again, and update_run looks at
+      the other windows again, before the installer starts. With changes found, the downloaded installer is kept for
+      the next try
+- [x] Security, to confirm: a signature is checked over whatever its /ByteRange names. Nothing checks that the range
+      starts at 0 and that the gap in it is exactly the signature's /Contents, so a made-up PDF could show a valid
+      signature over a document whose visible content isn't in the signed bytes. fo_sigs_json's comment still lists
+      a "whole" field it doesn't write. Not checked: whether MuPDF's pdf_validate_signature already refuses this.
+      (src-tauri/native/paginaut.c, fo_sigs_json and fo_sig_data; src-tauri/src/desk.rs, signatures)
+      Fixed: confirmed (MuPDF hashes whatever the range names). fo_sig_data now refuses a signature unless its range
+      is [0 a b c] within the file and the bytes left out are exactly the hex string holding that signature
+      (check_byte_range); such a signature shows as one that can't be relied on. Read from the code and tried on
+      Paginaut's own signatures (dsc_test: one, two, in place); no forged file was made to try it
+- [x] Two saves can run at once. save looks at tab.saving before its waits (the PDF/A check and question) and sets
+      it only after them: with rotations saved automatically, Ctrl+S right after a rotation and the 1.2 s timer can
+      both get through, and the second applies the same rotations and page order to the file already saved.
+      (src/pages.ts, save)
+      Fixed: a tab is marked as saving from the first line of save (a set of tabs entered), not after its questions
+- [x] Downloading two Piper voices at once on a fresh install: both download Piper itself into the same
+      piper.zip.part and unpack into the same piper.part, so one or both fail ("didn't match the expected one").
+      Only a second download of the same voice is refused. (src-tauri/src/piper.rs, get_runtime; desk.rs,
+      piper_download)
+      Fixed: one download of Piper itself at a time; the second waits (Stop still works) and then finds it there
+- [x] Linux: PDF/A saving stops with a fault on a font whose name isn't plain ASCII. find_fc counts letters and uses
+      the count as a byte position (raw[..i]). (src-tauri/src/fonts.rs, find_fc)
+      Fixed: find_fc goes by letters. Not run on Linux yet
+- [x] Signing in place fails ("Couldn't replace…") while a search or Read mode is still reading the file, after the
+      PIN was entered: the signed copy is put in place with one rename, where save_with tries for 3 seconds
+      (copy_with_retry) for this very reason. (src-tauri/src/engine/mod.rs, sign)
+      Fixed: the signed copy takes the file's place with a rename, then copy_with_retry (3 s) as saving does
+- [x] Saving a picture writes a different file than the one chosen: the extension is swapped for the picture's own
+      kind after the dialog, so "scan.png" becomes "scan.jpg" and overwrites one that's there without asking;
+      "report.v2" becomes "report.jpg". (src-tauri/src/desk.rs, picture_save)
+      Fixed: the chosen file is the one written; only a name with no extension gets the picture's own, and then never
+      over a file that's there
+- [x] Closing Find within 160 ms of typing still runs the search: highlights appear with the bar closed.
+      clearSearch doesn't stop runSearch's timer; the timer is also one for all tabs, so typing in another tab's Find
+      drops the first tab's search. (src/search.ts)
+      Fixed: clearSearch stops the waiting search; each tab has its own timer
+- [ ] Security, low: an update's version isn't signed. latest.json is read as it comes and only the installer is
+      checked against the key, so an old signed installer can be offered as a newer version (and apt is run with
+      --allow-downgrades). Needs someone who can change the release's files but not the key. (src-tauri/src/update.rs)
+- [x] Clicking a voice's sample twice while it loads plays it twice over itself; the first can't be stopped.
+      (src/speech.ts, playSample; see also the open sample bug below)
+      Fixed: each sample asked for is counted and only the latest plays; a second click on a loading sample stops it
+      (speech.ts stopSample)
+- [x] A fault while drawing a page leaves its request unanswered: the worker catches it, but the answer is never
+      sent, so the page stays blank with no message and the request counts as running. Only search and the like are
+      guarded per page. (src-tauri/src/engine/pool.rs, worker; engine/mod.rs, render)
+      Fixed: render runs guarded, so the fault is the page's error and the request ends
+- [x] Android: a file sent again from the same place opens the kept copy when its name and size match, even if its
+      content changed. (PaginautPlugin.kt, open)
+      Fixed: the kept copy is used only when its fingerprint (size, first and last 64 KB) matches the source's; a
+      source that can't be compared is copied again. Not built or run on Android yet
+- [x] "View signed version" after a save that kept its copy beside the file (couldn't replace it) cuts the wrong
+      file: the offsets are the copy's, the bytes are read from the original path. (src-tauri/src/desk.rs,
+      signed_version: Doc::path where Doc::file is meant)
+      Fixed: reads Doc::file, and only the bytes the signature covers
+- [x] Any failure of a search with Regular expression or Whole word on says "That pattern isn't valid", also when
+      the file couldn't be read. (src/search.ts)
+      Fixed: "That pattern isn't valid" only for MuPDF's "regcomp failure" on a pattern the user typed; a pattern that
+      runs too long says so; anything else is said as it is
+- [x] Saving rotations automatically has one timer for all tabs: a rotation in a second tab within 1.2 s cancels the
+      first tab's save, and a tab closed within 1.2 s gets "Couldn't save: document … is not open". (src/pages.ts,
+      maybeAutoSave)
+      Fixed: a timer per tab, and a tab closed meanwhile isn't saved
+- [x] Setting up LibreOffice, or downloading an OCR language, can be started twice (two windows, a double click):
+      both write the same .part file, and for LibreOffice the second start clears a Stop just pressed. Only Piper
+      voices refuse a second start. (src-tauri/src/desk.rs, office_install and ocr_download)
+      Fixed: both refuse a second start while one runs
+- [x] Two windows saving a signature at the same moment: one is lost (the list is read, changed and written with no
+      lock; prefs.rs has one for its file). (src-tauri/src/desk.rs, sig_add and sig_delete)
+      Fixed: sig_add and sig_delete hold one lock from reading to writing
+- [x] Windows: one very long entry among the installed fonts ends the listing there (any error from RegEnumValueW
+      stops it, also "more data"): fonts after it are missing from themes and count as not installed for PDF/A.
+      (src-tauri/src/fonts.rs, reg_values and reg_pairs)
+      Fixed: an entry too long for the buffers (now 16,384 and 4,096 letters) is skipped and the listing goes on;
+      reg_values is gone (reg_pairs' names)
+- [x] Marking for redaction that fails partway leaves the marks made so far showing on the pages (the step is taken
+      back in the document, but the pages kept in memory aren't dropped, as annot_edit does).
+      (src-tauri/src/engine/mod.rs, redact_mark)
+      Fixed: the pages kept in memory are dropped on failure (also when removing marks fails)
+- [x] Read aloud: one failed reading of a page's words is kept, so the word being read is never marked on that page
+      again until the text is made anew. (src/speech.ts, pageLayout)
+      Fixed: a failed reading is forgotten, so the next word asks again
+- [x] A page's text read at the very moment of an edit can be kept from before the edit (text() has no check like
+      list()'s edit_rev). (src-tauri/src/engine/mod.rs, Doc::text)
+      Fixed: text() checks edit_rev before keeping, as list() does
+
+Second pass, the same day. Read for it: compare.rs, convert.rs, office/mod.rs, office/com.rs, engine/mupdf.rs,
+engine/ocr.rs, engine/sandbox.rs, print.rs, windows.ts, main.tsx, edits.ts, annots.ts, forms.ts, ocr.ts, redact.ts,
+dsc.ts, mobile/open.ts, the first third of Viewer.ts, and the capability files. Most serious first.
+
+- [ ] Web links on PDF pages don't open, on Windows, Linux and Android. Both capability files give
+      "opener:allow-open-url" and nothing that says which addresses (not "opener:default" or
+      "opener:allow-default-urls"); tauri-plugin-opener 2.7.0 refuses every address when none is allowed, and the
+      click swallows the error. Read from the plugin's code, not tried. When allowed, only http, https and mailto
+      should be: the address comes from the PDF (file:, ms-…: and \\server links would open too).
+      (src-tauri/capabilities/default.json and mobile.json; src/render/Viewer.ts, loadLinks)
+- [ ] Privacy: what Sanitize takes out, and pages and comments deleted, are still in the saved file. An ordinary
+      Save of a PDF adds the changes to the end of the file (that's what makes it quick) unless redactions were
+      applied (MuPDF then insists on a full write). So after Sanitize (metadata, scripts, attached files, comments)
+      or deleting a page, Save leaves the old content in the file's earlier bytes, where it can be read back. A
+      save after any of these should write the file afresh. (src-tauri/src/engine/mod.rs, save_with: the
+      incremental branch)
+- [ ] A signature that a later change made invalid still shows as valid. fo_sigs_json gives "invalidAt" (MuPDF's
+      pdf_validate_signature: a change the signature doesn't allow was saved after it; -2 damaged), and nothing in
+      the app reads it: verdictOf goes by the signed bytes and the certificate alone. (src/dsc.ts, verdictOf and
+      describe; src/ui/SigPanel.tsx)
+- [ ] Ctrl+S leaves out the form field being typed in: a field's text goes to the document when the field is left
+      (or Enter), and Ctrl+S saves without that. The text still shows, so the form looks saved. The same for a text
+      box (comment) still open. (src/main.tsx, the Ctrl+S key; src/forms.ts, commit; src/annots.ts, editText)
+- [ ] Recognized text that fails partway (and Remove recognized text) still leaves an undo step in the document,
+      while the app is told it failed and counts none: Undo is out of step from then on, and the tab isn't marked
+      changed. apply_ocr and remove_ocr call end_op where annot_edit now calls abandon_op.
+      (src-tauri/src/engine/ocr.rs)
+- [ ] The page turns are handed to the C side without their count: fo_write_document reads rot[order[k]] whatever
+      the list's length. A convert to text, or Save as PDF of a file that isn't a PDF, with a list shorter than the
+      highest page reads past its end (wrong turns, or a crash). apply_page_edits passes and checks the count.
+      (src-tauri/src/engine/mupdf.rs, write_document and convert_to_pdf; native/paginaut.c, fo_write_document)
+- [ ] Document properties: a title, subject or keywords over 1 KB is read cut short (a 1024-byte buffer), and
+      Apply writes all four back, so the rest is lost. (src-tauri/src/engine/mupdf.rs, metadata; engine/mod.rs,
+      set_properties)
+- [ ] Windows: when Word, Excel or PowerPoint stops answering during a conversion, Paginaut gives up after 3
+      minutes and leaves it running, hidden, with the file open ("check for its window", but it has none to see).
+      The file stays locked until the program is ended in Task Manager. (src-tauri/src/office/com.rs, run)
+- [ ] Moving a tab to a new window lets go of it before the new window has it. If that window's page never starts
+      (or it's closed at once), the document stays open with its unsaved changes and no tab anywhere.
+      (src/windows.ts, moveToNewWindow)
+- [ ] Signing into a new file accepts the name of a PDF open in another tab (Save refuses that).
+      (src/dsc.ts, finish)
+- [ ] Android: a big file read in place stays held when its password is cancelled or it can't be unlocked
+      (closeCurrent lets go of such files; this path doesn't). (src/mobile/open.ts, openPicked)
+- [ ] Convert to pictures numbers the files by the page's place in the file, not as shown: after moving or deleting
+      pages, "report-9.png, report-1.png…". Excel's sheets ("Page 9") the same. (src-tauri/src/convert.rs)
+- [ ] A conversion stopped or failed partway leaves what it wrote: half a TIFF at the chosen name (over a file
+      that was there), the first pictures of many. (src-tauri/src/convert.rs)
+- [ ] The pages box takes "1-5" but not "1 - 5" or "3 to 8", which its pattern was written for (the text is split
+      at spaces first). (src/ocr.ts, parsePages)
+- [ ] A drop-down you can type in ignores "read only", and two pages in view with a field of the same number share
+      one list of choices (the list's id repeats). (src/forms.ts, create)
+
+Third pass, the same day. Read for it: engine_link.rs, pkcs11.rs, defaults.rs, officetext.rs, xml.rs, flow.rs,
+docx.rs, markdown.rs, tiff.rs, tts.rs, snap.rs, print_linux.rs, engine/table.rs, most of engine/pdfa.rs, the first
+half of engine/pdfhtml.rs, the rest of dsc.rs's Linux side and the start of its Windows side, native/cbr.c,
+native/ocr.cpp, all of PaginautPlugin.kt and MainActivity.kt, the rest of Viewer.ts, markdown.ts, print.ts,
+actions.ts, textedit.ts, office.ts, compare.ts, sign.ts, extract.ts, pagesize.ts, stamps.ts, shelf.ts,
+reflow/model.ts, find.ts and overrides.ts, mobile/records.ts, main.tsx, speech.ts, search.ts, shelf.ts and flow.ts,
+ui/SecureUI.tsx and most of ui/PagesUI.tsx. Most serious first.
+
+- [ ] Moving a Markdown tab to another window loses what was typed in its source and not yet saved. The source is
+      kept by the tab's key in the window it was opened in; the move doesn't take it along, and the old window
+      forgets it when the tab leaves. The new window reads the file from disk again, still shows the tab as changed,
+      and Save then offers Save as PDF. (src/markdown.ts, sources; src/windows.ts, pack and busy)
+- [ ] A Markdown file that isn't UTF-8 (Windows-1252, UTF-16) is read with its other letters turned into "�", and
+      saving writes that back over the file. A UTF-8 file's byte order mark is dropped on save. Such a file should
+      be read in its own encoding, or opened read-only. (src-tauri/src/desk.rs, markdown_read and markdown_save)
+- [ ] Android: opening a file that's read where it is while it's already held drops the new one's link. Such a file
+      always gets the same link (direct/<its address, hashed>/<name>): the second open deletes and remakes the
+      folder and replaces the held handle without closing it, and when the first one is let go that closes the
+      second's handle and deletes its link. Easiest to meet: tapping a book on the shelf while the shelf is still
+      reading that book's cover (just after new books were found). The book fails to open, or opens and then Print,
+      Share and coming back after the engine restarts fail. Also "Open with" from Files for the file that's open.
+      (PaginautPlugin.kt, open, openDirect and release; src/mobile/shelf.ts, fillCovers)
+- [ ] Android: a bad book on the shelf can get the document you're reading refused. When the engine stops, each
+      document with something under way takes a strike; a cover being drawn for the shelf has no strike (and no
+      refusal) of its own. So a damaged book whose cover stops the engine twice in two minutes gets the open,
+      healthy document closed as "stopped the engine twice", and the bad book is tried again on every scan.
+      (src-tauri/src/engine_link.rs, strike, engine_stopped and cover)
+- [ ] A signature made with an expired certificate shows as valid on the signer's own word about when it signed.
+      The certificate is judged at the time the signature claims (on Linux also at the time of a timestamp from a
+      service that isn't trusted), and "expired" is shown green: "valid when it signed, expired since". Without a
+      trusted timestamp nothing proves when it was signed; that case should read as a warning.
+      (src-tauri/src/dsc.rs, verify on both systems; src/dsc.ts, verdictOf)
+- [ ] A table saved as Excel gets wrong numbers when the figures use a decimal comma: every comma is taken out
+      before the number is read, so "12,5" becomes 125 and "1.234,56" becomes 1.23456 (percentages the same). A
+      comma should count as a thousands mark only when groups of two or three digits follow it; otherwise the cell
+      should stay text. (src-tauri/src/engine/table.rs, number and percent)
+- [ ] Linux: converting Office files to PDF into a chosen folder writes them next to it under a name with a
+      backslash in it ("out\report.pdf"): the path is put together with "\\". Names already taken are also compared
+      in lower case, where Linux keeps Report and report apart. (src/office.ts, runConvert)
+- [ ] Compare: changing an option or swapping sides while a comparison runs starts another without stopping the
+      first. The first keeps going in the engine and Stop no longer reaches it (its number was replaced).
+      (src/compare.ts, compareAgain and swapSides)
+- [ ] Android: the cache tidy can delete the copy of the document just opened. A tidy already under way is reused
+      by a later call, and doesn't know the copy that call asked to keep. (src/mobile/records.ts, tidyCache)
+- [ ] A short line at the top or bottom of a page made only of the letters i, v, x, l, c, d, m is taken for a
+      Roman page number and left out: "CV" at the head of a résumé, "Civil", "Mid", "DVD". Read and Book modes and
+      read aloud drop it, and so do Save as Word and Markdown. A real Roman numeral should be asked for (and a
+      small one). (src/reflow/model.ts, PAGE_NUMBER; src-tauri/src/flow.rs, page_number)
+- [ ] Linux: a timestamp is put into the signature without checking it is the one asked for (the same random
+      number, the same hash of the signature). A wrong or replayed answer is embedded and signing says it worked.
+      (src-tauri/src/dsc.rs, the Linux add_timestamp)
+- [ ] Save as Markdown writes "\2024. A year" for a paragraph that starts with a number and a dot, and the
+      backslash shows: Markdown takes a backslash only before punctuation. The dot is what needs it ("2024\.").
+      The test expects the wrong form. (src-tauri/src/markdown.rs, escape_start)
+- [ ] Compare reads an Excel file's text one place off after an empty entry written as <si/> in its list of
+      shared text (Excel itself writes <si><t/></si>; other tools may not). (src-tauri/src/officetext.rs,
+      shared_strings)
+- [ ] Edit text: with a picture selected, the one-key shortcuts still run (the selection box has the focus, not a
+      text field), so R turns the whole page. (src/main.tsx, the keys; src/textedit.ts)
+- [ ] Protect: when checking the permissions password fails (not a wrong password: the call itself), nothing is
+      said. (src/ui/SecureUI.tsx, unlock)
+
+Fourth pass, the same day. Read for it: the rest of dsc.rs (Windows signing and checking), engine/pdfhtml.rs,
+engine/pdfa.rs, officetext.rs and compare.rs; dragghost.rs, base64.rs; api.ts, skin.ts, themes.ts, modes.ts,
+panes.ts, toolpanes.ts; reflow's BookView, ReadView, LayoutEditor and render; the mobile screens (Reader, Sheets,
+Library, ShelfView, Storage, select, state, native, nav); every file in src/ui; EngineService.kt and
+RefusedActivity.kt; and parts of paginaut.c (see the note at the top).
+
+- [ ] Book mode: text written without spaces (Chinese, Japanese, Thai) can't be split across pages, since a
+      paragraph is only cut at a space. A paragraph taller than a page is put whole on one page and its end is cut
+      off, never shown. (src/reflow/BookView.ts, fit and paginate)
+- [ ] Attaching a file whose name is very long (511 bytes or more, about 170 Chinese or Hindi letters) when the PDF
+      already has an attachment of that name hangs the app: the numbered name ("name (2)") is cut back to the same
+      name, so the search for a free one never ends. (src-tauri/native/paginaut.c, fo_pdf_attachment_add)
+- [ ] Split by bookmarks: two bookmarks whose names differ only in capitals ("Summary", "SUMMARY") get the same
+      file on Windows, so one part replaces the other and the message still counts both. (src/ui/PagesUI.tsx,
+      SplitDialogInner, plan)
+- [ ] Read and Book modes keep their place as a count of paragraphs. After pages are moved or deleted (from the
+      sidebar, while reading) the text is built again and the old count points somewhere else, so the view jumps.
+      (src/ui/Reflow.tsx, ReflowHost; tab.reflowBlock)
+- [ ] An e-book made from a PDF with more than 512 fonts: text in the fonts after the 512th isn't drawn, on screen
+      or in Save as PDF, and nothing says so. (src-tauri/native/paginaut.c, fo_pinned_pdf, MAX_FONTS)
+- [ ] Save as repaired EPUB leaves out a first or last line of a page made only of the letters i, v, x, l, c
+      ("Civil", a lone "I"): it's taken for a Roman page number. (src-tauri/src/engine/pdfhtml.rs, is_folio)
+- [ ] The table tool asks the engine again after each change to its lines and shows whichever answer comes last,
+      so after two quick changes the cells can be those of the earlier lines. (src/ui/TableUI.tsx, the effect on
+      cols and rows)
+- [ ] Android, Document info: Created and Modified ignore the date's time zone, so they're hours off (and near
+      midnight a day off). The desktop reads the zone. (src/mobile/Sheets.tsx, pdfDate)
+- [ ] Page numbers: "Start numbering at" 0 and Bates "From" 0 turn back into 1, though both boxes allow 0.
+      (src/ui/StampUI.tsx, HeaderDialogInner)
+- [ ] Sign pane: "Goes in the form's field … on page N" gives the page's number in the file, not where it's shown
+      after pages were moved or deleted. (src/ui/CertSection.tsx)
+- [ ] Attached files: a file pinned to a page that has been deleted is listed as on "page 0".
+      (src/ui/ExtractUI.tsx, Attachments)
+- [ ] Compare: with the list narrowed to one kind (Added, say), F7 and the arrows still stop at the differences
+      that are hidden. (src/ui/CompareUI.tsx, step)
+- [ ] Convert: after the last page the progress reads one page too many ("Page 11 of 10…").
+      (src/ui/ConvertPane.tsx)
+- [ ] Book mode in a narrow window shows one page but its bar still says two ("5–6 of 200").
+      (src/ui/Reflow.tsx, BookBar)
+- [ ] Android, Settings and Storage: with no copies kept it says "0.1 MB of copies". (src/mobile/Storage.tsx,
+      sizeText)
+
+Fifth pass, the same day. Read for it: the rest of native/paginaut.c, start to end.
+
+- [ ] Save as PDF/A can crash on a font whose LastChar is above 255 (or FirstChar below 0): its widths are written
+      again over that range from a list of 256, read past its end. Needs an embedded simple font with one drawn
+      letter whose width is wrong. (native/paginaut.c, pa_put_widths and the Type 3 loop in pa_font_use)
+- [ ] After a redaction, a text edit, a picture edit or removing hidden text on a page, that page's recognised
+      text (OCR layer) can no longer be removed and the page isn't counted as having one: the page's content is
+      written again as one stream, without the mark the layer is found by. (native/paginaut.c, stamps_aside,
+      is_ocr_stream, fo_ocr_apply)
+- [ ] Inserting pages from a PDF can copy the whole of that PDF in: a form button (any comment but a link) that
+      goes to a page brings that page along, and with it every page of the file. The saved file is far bigger and
+      still holds the pages left out. (native/paginaut.c, insert_pdf_pages, is_internal_link)
+- [ ] Sanitize, scripts: scripts on a form field that has several boxes (they sit on the field, not on its boxes)
+      and on bookmarks are left in. (native/paginaut.c, fo_pdf_sanitize, drop_scripts_in)
+- [ ] Page labels that start again with the same style (two reports in one file, each numbered from 1) run on
+      after any page is moved or deleted: the second report becomes 50, 51, 52. (native/paginaut.c, write_labels)
+
+Cleanup:
+
+- [ ] Removing every watermark leaves the empty "Watermark" layer in the file, which other readers still list.
+      (native/paginaut.c, fo_stamp_remove, watermark_layer)
+- [ ] A photo loaded while making a signature is kept in memory until the window closes (its object URL is never
+      revoked). (src/ui/SignMaker.tsx, Photo, load)
+- [ ] Save as Word keeps every page's pictures in memory, then the zip writer copies them all again; its sizes and
+      places are 32-bit and its file count 16-bit, unchecked, so past 4 GB (a long colour scan) it writes a file
+      Word can't open. Save as Markdown also holds every picture before writing any.
+      (src-tauri/src/engine/table.rs, zip; src-tauri/src/docx.rs and flow.rs, document)
+- [ ] Compare counts each word's place from the start of its paragraph or cell again: slow for very long ones.
+      (src-tauri/src/compare.rs, tokens)
+- [ ] com.rs reads "Visible" the same way in three places (convert_on_this_thread).
+- [ ] The signature panel copies everything a signature covers twice into memory, per signature (a 900 MB scan:
+      about 1.8 GB each); signed_version reads the whole file to write its start. (src-tauri/native/paginaut.c,
+      fo_sig_data; src-tauri/src/desk.rs)
+- [x] "A progress event per 1%" is written out four times, two with `done - last` (which underflows if progress
+      ever starts over) and two with saturating_sub. (src-tauri/src/desk.rs)
+      Fixed: one progress_step, which also counts progress that starts over
+- [ ] "Open, and give the kept password if it's asked for" is written out seven times. (src-tauri/src/engine/mod.rs)
+- [ ] git_blob_sha1 is in ocr.rs and in piper.rs.
+- [ ] verify and verify_file read the key and signature the same way twice (update.rs); reg_values is reg_pairs
+      without the data (fonts.rs).
+
 ### Read aloud voices (reported 2026-11-10, Windows and Linux)
 
-- [ ] Listening to a voice sample in Settings › Read aloud and then closing Settings leaves the sample playing to the
+- [x] Listening to a voice sample in Settings › Read aloud and then closing Settings leaves the sample playing to the
       end. Nothing stops it when the Read aloud tab or the dialog goes away: playSample only stops a sample when it's
       clicked again, another sample starts or it finishes. Closing Settings (and leaving the Read aloud tab) should
       stop it. (src/speech.ts, playSample; src/ui/SettingsDialog.tsx, ReadAloud)
+      Fixed: the Read aloud tab stops the sample when it goes away (leaving the tab or closing Settings)
 - [ ] Very few Indian English voices. The downloadable list has none: the Piper catalogue has English only for
       Great Britain (9) and the United States (22), no en_IN, so it's American and British accents only. Windows'
       own voices on the user's PC are David, Zira and Mark (all US); Windows has Indian English voices (Heera, Ravi)

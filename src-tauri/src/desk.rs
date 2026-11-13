@@ -260,13 +260,20 @@ pub async fn picture_bytes(state: State<'_, AppState>, doc: DocId, page: usize, 
     blocking(move || Ok(tauri::ipc::Response::new(engine.doc(doc)?.picture_data(page, idx, fmt)?.0))).await
 }
 
-/// Saves a picture at `path` (its extension follows how the picture is saved); returns the path used.
+/// Saves a picture at `path`, the file chosen (the page offers a name with the picture's own extension); returns
+/// the path used.
 #[tauri::command]
 pub async fn picture_save(state: State<'_, AppState>, doc: DocId, page: usize, idx: usize, fmt: i32, path: String) -> Res<String> {
     let engine = state.engine.clone();
     blocking(move || {
         let (bytes, ext) = engine.doc(doc)?.picture_data(page, idx, fmt)?;
-        let p = std::path::Path::new(&path).with_extension(ext);
+        // The file chosen in the dialog is the file written (the dialog asked about replacing that one, and no
+        // other). Only a name with no extension at all gets the picture's own added.
+        let chosen = std::path::Path::new(&path);
+        let p = if chosen.extension().is_some() { chosen.to_path_buf() } else { std::path::PathBuf::from(format!("{path}.{ext}")) };
+        if p != chosen && p.exists() {
+            return Err(format!("{} is already there: choose another name.", p.file_name().unwrap_or_default().to_string_lossy()));
+        }
         std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
         Ok(p.to_string_lossy().into_owned())
     })
@@ -481,24 +488,32 @@ pub async fn sanitize(state: State<'_, AppState>, doc: DocId, what: i32) -> Res<
     blocking(move || engine.doc(doc)?.sanitize(what)).await
 }
 
-/// Kinds of file that run code when opened: attachments like these are only saved, never opened. One list for
-/// Windows and Linux (a file saved on one may be opened on the other).
-const RISKY: &[&str] = &[
-    // Windows programs, scripts, installers and shortcuts
-    "exe", "com", "bat", "cmd", "scr", "pif", "cpl", "msi", "msp", "mst", "msc", "dll", "sys", "ocx", "drv", "jar", "jnlp", "js", "jse",
-    "vb", "vbs", "vbe", "wsf", "wsh", "wsc", "sct", "ps1", "ps1xml", "ps2", "ps2xml", "psc1", "psc2", "psd1", "psm1", "msh", "msh1", "msh2",
-    "mshxml", "msh1xml", "msh2xml", "hta", "lnk", "url", "website", "reg", "inf", "scf", "appref-ms", "application", "xbap", "gadget",
-    "chm", "hlp", "iso", "img", "vhd", "vhdx", "msix", "msixbundle", "appx", "appxbundle", "appinstaller", "settingcontent-ms",
-    "search-ms", "searchconnector-ms", "library-ms", "diagcab", "theme", "themepack", "deskthemepack", "cab", "xll",
-    // Office files that can carry macros, and Access databases (which run them)
-    "docm", "dotm", "xlsm", "xltm", "xlsb", "xlam", "xla", "xlm", "pptm", "potm", "ppsm", "ppam", "ppa", "sldm", "mdb", "mde", "accdb",
-    "accde", "ade", "adp",
-    // Pages that run scripts in a browser
-    "html", "htm", "svg", "xhtml", "mht", "mhtml",
-    // Linux programs, scripts, launchers and packages
-    "desktop", "sh", "bash", "zsh", "ksh", "csh", "fish", "run", "bin", "out", "appimage", "so", "py", "pyw", "pyc", "pl", "pm", "rb",
-    "php", "lua", "tcl", "deb", "rpm", "snap", "flatpak", "flatpakref", "flatpakrepo", "command", "elf",
+/// The kinds of attachment Paginaut opens with their usual app: documents, pictures, text, sound and video. Anything
+/// else (programs, scripts, shortcuts, pages that run scripts, Office files that can carry macros, and whatever
+/// isn't known) is only saved, never opened. A list of what may be opened, not of what may not: a list of risky
+/// kinds is never complete.
+const OPENABLE: &[&str] = &[
+    "pdf", "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "txt", "csv", "tsv", "md", "log", "json", "png", "jpg", "jpeg", "jfif",
+    "gif", "bmp", "tif", "tiff", "webp", "heic", "mp3", "wav", "m4a", "ogg", "flac", "mp4", "m4v", "mov", "mkv", "webm",
 ];
+
+/// An attachment's name as it will be on disk, and its extension in lower case: Windows drops spaces and dots at a
+/// name's end ("invoice.exe " is stored as invoice.exe) and takes ':' for a stream ("x.exe::$DATA" is x.exe), so
+/// the kind is read from the name tidied the same way. None when the kind isn't one Paginaut opens.
+fn openable(name: &str) -> Option<(String, String)> {
+    // Only the last part of a name with folders in it.
+    let name = name.rsplit(['/', '\\']).next().unwrap_or("");
+    if name.contains(':') || name.chars().any(|c| c.is_control()) {
+        return None;
+    }
+    let name = name.trim_end_matches(|c: char| c == '.' || c.is_whitespace()).trim_start();
+    let (stem, ext) = name.rsplit_once('.')?;
+    let ext = ext.to_ascii_lowercase();
+    if stem.trim().is_empty() || !OPENABLE.contains(&ext.as_str()) {
+        return None;
+    }
+    Some((stem.trim().to_string(), ext))
+}
 
 /// Opens attachment `i` with its usual app (from a temporary copy). Files that could run code are refused.
 #[tauri::command]
@@ -508,14 +523,11 @@ pub async fn attachment_open(app: tauri::AppHandle, state: State<'_, AppState>, 
     let path = blocking(move || {
         let d = engine.doc(doc)?;
         let name = d.attachments()?.into_iter().find(|a| a.i == i).map(|a| a.name).unwrap_or_default();
-        let file = std::path::Path::new(&name);
-        let ext = file.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-        if ext.is_empty() || RISKY.contains(&ext.as_str()) {
-            return Err(format!("\"{name}\" could run programs on this PC, so Paginaut won't open it. Save it instead, and open it only if you trust where it came from."));
-        }
+        let Some((stem, ext)) = openable(&name) else {
+            return Err(format!("Paginaut only opens attached documents, pictures, text, sound and video. \"{}\" is another kind of file (it could run programs on this PC): save it instead, and open it only if you trust where it came from.", name.trim()));
+        };
         let dir = std::env::temp_dir().join("Paginaut").join("attachments");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("attachment").to_string();
         let p = crate::engine::free_path(&dir.to_string_lossy(), &stem, &ext);
         std::fs::write(&p, d.attachment_data(i)?).map_err(|e| e.to_string())?;
         Ok(p.to_string_lossy().into_owned())
@@ -548,10 +560,15 @@ pub async fn sig_list(app: tauri::AppHandle) -> Res<Vec<crate::sigstore::SigEntr
     blocking(move || crate::sigstore::load(&dir)).await
 }
 
+/// The saved signatures are read, changed and written as one step: two windows saving at the same moment would
+/// otherwise each write its own list, and one signature would be lost.
+static SIG_LIST: Mutex<()> = Mutex::new(());
+
 #[tauri::command]
 pub async fn sig_add(app: tauri::AppHandle, kind: String, name: String, png: String) -> Res<crate::sigstore::SigEntry> {
     let dir = sig_dir(&app)?;
     blocking(move || {
+        let _one = SIG_LIST.lock();
         let mut list = crate::sigstore::load(&dir)?;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         // Unique among those saved: an id made from the time and the count alone repeated when one was deleted
@@ -575,6 +592,7 @@ pub async fn sig_add(app: tauri::AppHandle, kind: String, name: String, png: Str
 pub async fn sig_delete(app: tauri::AppHandle, id: String) -> Res<()> {
     let dir = sig_dir(&app)?;
     blocking(move || {
+        let _one = SIG_LIST.lock();
         let mut list = crate::sigstore::load(&dir)?;
         list.retain(|e| e.id != id);
         crate::sigstore::save(&dir, &list)
@@ -848,7 +866,7 @@ pub async fn signatures(state: State<'_, AppState>, doc: DocId) -> Res<Vec<serde
                 let when = s["m"].as_str().and_then(pdf_date);
                 let check = match engine.sig_data(doc, i) {
                     Ok((data, cms)) => crate::dsc::verify(&data, &cms, when),
-                    Err(e) => crate::dsc::SigCheck { trust: "invalid".into(), detail: format!("The signature is damaged: {e}"), ..Default::default() },
+                    Err(e) => crate::dsc::SigCheck { trust: "invalid".into(), detail: format!("The signature can't be relied on: {e}"), ..Default::default() },
                 };
                 s["check"] = serde_json::to_value(check).map_err(|e| e.to_string())?;
                 s["time"] = when.map_or(serde_json::Value::Null, |t| t.into());
@@ -869,9 +887,19 @@ pub async fn signed_version(state: State<'_, AppState>, doc: DocId, i: usize) ->
         let list: Vec<serde_json::Value> = serde_json::from_str(&engine.sigs_json(doc)?).map_err(|e| e.to_string())?;
         let s = list.iter().find(|s| s["i"].as_u64() == Some(i as u64)).ok_or("no such signature")?;
         let end = s["end"].as_u64().ok_or("not signed")? as usize;
-        let path = engine.doc(doc)?.path();
-        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-        if end == 0 || end > bytes.len() {
+        let d = engine.doc(doc)?;
+        let path = d.path();
+        // The bytes come from the file the open document reads (after a save that couldn't replace the file, that's
+        // the copy kept beside it: the offsets are that copy's), and only as many as the signature covers.
+        let file = d.file();
+        let len = std::fs::metadata(&file).map_err(|e| e.to_string())?.len();
+        if end == 0 || end as u64 > len {
+            return Err("The signature's byte range doesn't fit the file.".into());
+        }
+        use std::io::Read;
+        let mut bytes = Vec::with_capacity(end);
+        std::fs::File::open(&file).map_err(|e| e.to_string())?.take(end as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+        if bytes.len() != end {
             return Err("The signature's byte range doesn't fit the file.".into());
         }
         let stem = std::path::Path::new(&path).file_stem().and_then(|x| x.to_str()).unwrap_or("document").to_string();
@@ -879,7 +907,7 @@ pub async fn signed_version(state: State<'_, AppState>, doc: DocId, i: usize) ->
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let name = s["name"].as_str().unwrap_or("signature").replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
         let out = dir.join(format!("{stem} (as signed - {name}).pdf"));
-        std::fs::write(&out, &bytes[..end]).map_err(|e| e.to_string())?;
+        std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
         Ok(out.to_string_lossy().into_owned())
     })
     .await
@@ -895,6 +923,16 @@ pub fn ocr_languages(dirs: State<'_, ModelDirs>) -> Vec<crate::ocr::LangInfo> {
     dirs.languages()
 }
 
+/// Whether a progress event is due: one per 1% is plenty (and one at the end). `last` is where the last one was
+/// sent; progress that starts over (a download begun again on another mirror) counts from there.
+fn progress_step(done: u64, total: u64, last: &mut u64) -> bool {
+    if done == total || done < *last || done - *last >= total / 100 {
+        *last = done;
+        return true;
+    }
+    false
+}
+
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DownloadEvent {
@@ -908,13 +946,18 @@ pub async fn ocr_download(dirs: State<'_, ModelDirs>, code: String, quality: Str
     let q = Quality::parse(&quality);
     let key = crate::ocr::download_key(&code, q);
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    crate::ocr::DOWNLOADS.lock().insert(key.clone(), stop.clone());
+    {
+        // One download of a model at a time (a second window, a double click): both would write the same file.
+        let mut running = crate::ocr::DOWNLOADS.lock();
+        if running.contains_key(&key) {
+            return Err("That language is already downloading.".into());
+        }
+        running.insert(key.clone(), stop.clone());
+    }
     let res = blocking(move || {
         let mut last = 0u64;
         dirs.download(&code, q, &stop, |done, total| {
-            // A progress event per 1% is plenty.
-            if done == total || done - last >= total / 100 {
-                last = done;
+            if progress_step(done, total, &mut last) {
                 let _ = on_event.send(DownloadEvent::Progress { done, total });
             }
         })
@@ -1040,14 +1083,28 @@ static OFFICE_INSTALL_STOP: once_cell::sync::Lazy<Arc<std::sync::atomic::AtomicB
 /// Downloads and sets up Paginaut's LibreOffice; resolves when it's ready.
 #[tauri::command]
 pub async fn office_install(office: State<'_, Arc<Office>>, on_event: Channel<InstallEvent>) -> Res<Engines> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // One setup at a time (a second window, a double click): both would write the same files, and the second
+    // start would clear a Stop just pressed.
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    if RUNNING.swap(true, Ordering::AcqRel) {
+        return Err("LibreOffice is already being set up.".into());
+    }
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            RUNNING.store(false, Ordering::Release);
+        }
+    }
+    let _done = Done;
     let office = office.inner().clone();
-    OFFICE_INSTALL_STOP.store(false, std::sync::atomic::Ordering::Release);
+    OFFICE_INSTALL_STOP.store(false, Ordering::Release);
     blocking(move || {
         let mut last = (0u64, 99u8);
         office.install_pack(&OFFICE_INSTALL_STOP, &mut |stage, done, total| {
-            // A progress event per 1% is plenty.
             let s = stage as u8;
-            if s != last.1 || done == total || done.saturating_sub(last.0) >= total / 100 {
+            let new_stage = s != last.1;
+            if progress_step(done, total, &mut last.0) || new_stage {
                 last = (done, s);
                 let _ = on_event.send(InstallEvent::Progress { stage, done, total });
             }
@@ -1374,14 +1431,15 @@ pub async fn update_check(app: tauri::AppHandle) -> Res<crate::update::Checked> 
     .await
 }
 
-/// Downloads the newer version found by the check, checks its signature, starts its installer and quits. False
-/// when Paginaut stays open (Linux's .deb: the software installer takes over).
+/// The installer downloaded and checked by update_install, until update_run starts it.
+static UPDATE_READY: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+/// Downloads the newer version found by the check and checks its signature. Nothing is started: the download
+/// takes minutes, in which documents may be changed, so the page looks at them again and then calls update_run.
 #[tauri::command]
-pub async fn update_install(window: tauri::WebviewWindow, on_event: Channel<DownloadEvent>) -> Res<bool> {
-    let app = window.app_handle().clone();
-    // This window has checked its own tabs; quitting closes the others too.
-    if crate::appwindows::others_dirty(&app, window.label()) {
-        return Err("Another Paginaut window has unsaved changes: save or close them first.".into());
+pub async fn update_install(on_event: Channel<DownloadEvent>) -> Res<()> {
+    if UPDATE_READY.lock().as_ref().is_some_and(|p| p.exists()) {
+        return Ok(());
     }
     let dir = std::env::temp_dir().join("Paginaut update");
     // Installers from earlier updates (and a stopped download) go first: only the new one is kept.
@@ -1390,13 +1448,26 @@ pub async fn update_install(window: tauri::WebviewWindow, on_event: Channel<Down
     let installer = blocking(move || {
         let mut last = 0u64;
         crate::update::download(&dir, &UPDATE_STOP, &mut |done, total| {
-            if done == total || done - last >= total / 100 {
-                last = done;
+            if progress_step(done, total, &mut last) {
                 let _ = on_event.send(DownloadEvent::Progress { done, total });
             }
         })
     })
     .await?;
+    *UPDATE_READY.lock() = Some(installer);
+    Ok(())
+}
+
+/// Starts the downloaded installer and quits. False when Paginaut stays open (Linux's .deb: the software installer
+/// takes over). The calling window has just checked its own tabs; the other windows are checked here, now and not
+/// before the download, since quitting closes them too.
+#[tauri::command]
+pub async fn update_run(window: tauri::WebviewWindow) -> Res<bool> {
+    let app = window.app_handle().clone();
+    if crate::appwindows::others_dirty(&app, window.label()) {
+        return Err("Another Paginaut window has unsaved changes: save or close them, then choose Install again.".into());
+    }
+    let installer = UPDATE_READY.lock().clone().filter(|p| p.exists()).ok_or("The update isn't downloaded yet.")?;
     // (On Linux this waits for apt, after the password prompt.)
     if blocking(move || crate::update::run_installer(&installer)).await? {
         app.exit(0);
@@ -1634,8 +1705,7 @@ pub async fn piper_download(piper: State<'_, crate::piper::Voices>, id: String, 
     let res = blocking(move || {
         let mut last = 0u64;
         piper.download(&id, &stop, &mut |done, total| {
-            if done == total || done.saturating_sub(last) >= total / 100 {
-                last = done;
+            if progress_step(done, total, &mut last) {
                 let _ = on_event.send(DownloadEvent::Progress { done, total });
             }
         })
@@ -1778,5 +1848,22 @@ pub fn snap_button(window: tauri::WebviewWindow, x: i32, y: i32, w: i32, h: i32,
     {
         let _ = (window, x, y, w, h, shown);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::openable;
+
+    #[test]
+    fn attachments_opened_by_kind() {
+        assert_eq!(openable("Report.PDF"), Some(("Report".into(), "pdf".into())));
+        assert_eq!(openable("folder/scan 1.jpeg"), Some(("scan 1".into(), "jpeg".into())));
+        // As Windows stores them: these are programs.
+        for name in ["invoice.exe ", "invoice.exe.", "x.exe::$DATA", "a.pdf:b.exe", "run.bat", "macro.docm", "old.doc", "page.html", "noextension", ".pdf", "a.pdf\u{0}.exe"] {
+            assert_eq!(openable(name), None, "{name}");
+        }
+        // A tidy name with spaces or dots after it is the document it looks like.
+        assert_eq!(openable("notes.txt. "), Some(("notes".into(), "txt".into())));
     }
 }
