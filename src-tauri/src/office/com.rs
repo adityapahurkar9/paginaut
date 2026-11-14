@@ -209,17 +209,42 @@ mod win {
         }
     }
 
-    fn convert_on_this_thread(job: &Job, input: &str, output: &str) -> Result<(), String> {
+    /// The running copies of a program, by process id.
+    fn running(exe: &str) -> std::collections::HashSet<u32> {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+        let mut sys = System::new();
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+        sys.processes().iter().filter(|(_, p)| p.name().eq_ignore_ascii_case(exe)).map(|(pid, _)| pid.as_u32()).collect()
+    }
+
+    /// `started`: the process this conversion started for itself (none when it joined a copy the user has open),
+    /// while it's at work. If it stops answering, `run` ends that process: it has no window to close it by, and
+    /// would keep the file locked.
+    fn convert_on_this_thread(job: &Job, input: &str, output: &str, started: &std::sync::Mutex<Option<u32>>) -> Result<(), String> {
         let app = job.app();
         let clsid = unsafe { CLSIDFromProgID(&HSTRING::from(app.prog_id())) }.map_err(|_| format!("{} isn't installed.", app.name()))?;
+        let exe = match app {
+            App::Word => "WINWORD.EXE",
+            App::Excel => "EXCEL.EXE",
+            App::PowerPoint => "POWERPNT.EXE",
+        };
+        let before = running(exe);
         let office = Obj(unsafe { CoCreateInstance(&clsid, None, CLSCTX_LOCAL_SERVER) }.map_err(|e| format!("Couldn't start {}: {}", app.name(), e.message()))?);
         // PowerPoint (one window for everything) may already be open for the user: leave it running then.
-        let (docs, visible) = match app {
-            App::Word => ("Documents", office.get("Visible").ok().and_then(|v| v.int()).unwrap_or(0) != 0),
-            App::Excel => ("Workbooks", office.get("Visible").ok().and_then(|v| v.int()).unwrap_or(0) != 0),
-            App::PowerPoint => ("Presentations", office.get("Visible").ok().and_then(|v| v.int()).unwrap_or(0) != 0),
+        let docs = match app {
+            App::Word => "Documents",
+            App::Excel => "Workbooks",
+            App::PowerPoint => "Presentations",
         };
+        let visible = office.get("Visible").ok().and_then(|v| v.int()).unwrap_or(0) != 0;
         let was_in_use = visible || office.count(docs) > 0;
+        if !was_in_use {
+            // Exactly one new process of that program since just before: the one made for this.
+            let new: Vec<u32> = running(exe).difference(&before).copied().collect();
+            if let [pid] = new[..] {
+                *started.lock().unwrap() = Some(pid);
+            }
+        }
         let _ = office.put("AutomationSecurity", Arg::Int(3)); // msoAutomationSecurityForceDisable: no macros
         let result = (|| -> Result<(), String> {
             match app {
@@ -302,6 +327,8 @@ mod win {
                 _ => office.call("Quit", &[]),
             };
         }
+        // Answering again (or done): no longer `run`'s to end.
+        *started.lock().unwrap() = None;
         result
     }
 
@@ -384,11 +411,13 @@ mod win {
         let app = job.app();
         let (tx, rx) = std::sync::mpsc::channel();
         let (input, output) = (input.to_string(), output.to_string());
+        let started = std::sync::Arc::new(std::sync::Mutex::new(None::<u32>));
+        let theirs = started.clone();
         std::thread::Builder::new()
             .name("office-com".into())
             .spawn(move || {
                 let init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-                let r = if init.is_ok() { convert_on_this_thread(&job, &input, &output) } else { Err(format!("COM: {}", init.message())) };
+                let r = if init.is_ok() { convert_on_this_thread(&job, &input, &output, &theirs) } else { Err(format!("COM: {}", init.message())) };
                 if init.is_ok() {
                     unsafe { CoUninitialize() };
                 }
@@ -397,7 +426,21 @@ mod win {
             .map_err(|e| e.to_string())?;
         match rx.recv_timeout(timeout) {
             Ok(r) => r,
-            Err(_) => Err(format!("{} stopped answering. It may be showing a message: check for its window.", app.name())),
+            Err(_) => {
+                // The copy started for this conversion is hidden, with the file open: nothing the user could close.
+                // It's ended here, so the file isn't kept locked. A copy the user had open is theirs and is left.
+                let ended = started.lock().unwrap().take().is_some_and(|pid| {
+                    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+                    let mut sys = System::new();
+                    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true, ProcessRefreshKind::nothing());
+                    sys.process(Pid::from_u32(pid)).is_some_and(|p| p.kill())
+                });
+                Err(if ended {
+                    format!("{} stopped answering, so Paginaut closed the hidden copy it had started. The file may be damaged, protected, or need something {0} asks about when it's opened there.", app.name())
+                } else {
+                    format!("{} stopped answering. It may be showing a message: check for its window.", app.name())
+                })
+            }
         }
     }
 }

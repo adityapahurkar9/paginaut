@@ -8,7 +8,7 @@ import { openSignPane } from "./sign";
 import type { DocInfo, Widget } from "./api";
 import { adoptSaved, onDocReady, save } from "./pages";
 import { onSignatureClick } from "./forms";
-import { ask, askSecret, baseName, onLinux, settings, showToast, updateSettings, type Tab } from "./store";
+import { ask, askSecret, baseName, onLinux, samePath, settings, showToast, tabs, updateSettings, type Tab } from "./store";
 
 export interface CertSummary {
   thumb: string;
@@ -65,7 +65,12 @@ export interface SigInfo {
   signed: boolean;
   /** Something was saved after this signature (another signature, comments, form entries…). */
   changed: boolean;
+  /** Saves ago a change beyond filling in forms and signing was saved (0: none, below 0: couldn't be judged). */
   invalidAt: number;
+  /** What the signature allows after it: its certification level (1 nothing, 2 forms and signing, 3 comments too;
+   *  0: it doesn't certify), and whether it locks form fields. */
+  mdp?: number;
+  lock?: boolean;
   end: number;
   reason: string;
   location: string;
@@ -130,13 +135,47 @@ export type Verdict = "valid" | "warn" | "invalid";
 export function verdictOf(s: SigInfo): Verdict {
   const c = s.check;
   if (!c || !c.intact || c.trust === "invalid" || c.trust === "revoked") return "invalid";
+  const later = laterChange(s);
+  if (later === "broken") return "invalid";
+  if (later === "unsure") return "warn";
   return c.trust === "trusted" || c.trust === "expired" ? "valid" : "warn";
+}
+
+/**
+ * Whether what was saved after the signature is something the signature allows. A signature covers the file up to
+ * itself, and later changes are added after it: fine for an ordinary signature (it says nothing against them), but
+ * one that certifies the document or locks fields says what may still change. "broken": a change it doesn't
+ * allow was saved after it. "unsure": changes were saved that can't be judged (it allows comments, and what
+ * changed is more than filling in forms; or the file's history couldn't be read).
+ */
+export function laterChange(s: SigInfo): "ok" | "broken" | "unsure" {
+  if (!s.changed) return "ok";
+  const mdp = s.mdp ?? 0;
+  // Certified with no changes allowed: anything saved after it breaks it.
+  if (mdp === 1) return "broken";
+  if (!mdp && !s.lock) return "ok";
+  const at = s.invalidAt ?? 0;
+  if (at < 0) return "unsure";
+  if (at === 0) return "ok";
+  // More than filling in forms and signing was saved after it.
+  return mdp === 3 ? "unsure" : "broken";
 }
 
 export function describe(s: SigInfo): string {
   const c = s.check;
   if (!c) return "Not checked.";
   if (!c.intact) return c.detail || "The signature doesn't match the document.";
+  const later = laterChange(s);
+  if (later === "broken") {
+    return (
+      (s.mdp === 1
+        ? "Not valid any more: this signature certified the document with no changes allowed, and changes were saved after it."
+        : s.mdp === 2
+          ? "Not valid any more: this signature certified the document allowing only forms to be filled in and signed, and other changes were saved after it."
+          : "Not valid any more: this signature locks parts of the document, and changes it doesn't allow were saved after it.") +
+      " Open the signed version to see exactly what was signed."
+    );
+  }
   const parts: string[] = [];
   parts.push(
     c.trust === "trusted" ? "Signature is valid: the document hasn't been altered since it was signed, and Windows trusts the certificate."
@@ -145,7 +184,14 @@ export function describe(s: SigInfo): string {
   );
   if (c.timestamp && c.timestampTrusted) parts.push(`A trusted timestamp proves it was signed on ${new Date(c.timestamp * 1000).toLocaleString()}.`);
   else if (c.timestamp) parts.push("It has a timestamp, but Windows doesn't trust the service that issued it.");
-  if (s.changed) parts.push("Changes were saved after this signature (for example more signatures, comments or form entries). Open the signed version to see exactly what was signed.");
+  if (later === "unsure") {
+    parts.push(
+      (s.invalidAt ?? 0) < 0
+        ? "Changes were saved after this signature, and Paginaut couldn't read the file's history to tell whether the signature allows them."
+        : "This signature certified the document allowing forms and comments, and changes were saved after it that may be more than that.",
+      "Open the signed version to see exactly what was signed.",
+    );
+  } else if (s.changed) parts.push("Changes were saved after this signature (for example more signatures, comments or form entries). Open the signed version to see exactly what was signed.");
   return parts.join(" ");
 }
 
@@ -254,6 +300,12 @@ async function finish(tab: Tab, setup: SignSetup, src: number, rect?: number[], 
       filters: [{ name: "PDF", extensions: ["pdf"] }],
     });
     if (!target) return;
+    // As Save refuses it: a file open in another tab would be replaced under that tab.
+    const chosen = target;
+    if (!samePath(chosen, tab.path) && tabs.value.some((t) => t !== tab && samePath(t.path, chosen))) {
+      showToast(`${baseName(chosen)} is open in Paginaut. Close it first, or choose another name.`, 5000);
+      return;
+    }
   }
   const flags = SHOW_LABELS | SHOW_TEXT_NAME | (setup.showDate ? SHOW_DATE : 0) | (setup.image ? 0 : SHOW_GRAPHIC_NAME);
   // Linux: the token's PIN is typed here (Windows' drivers ask in their own window); kept for this signature only.

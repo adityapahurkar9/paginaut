@@ -17,6 +17,10 @@ pub struct Request {
     pub doc: DocId,
     /// Pages to convert (document page indices, in this order) and every page's turn.
     pub order: Vec<usize>,
+    /// Where each of those pages is shown (0-based place among the pages as they are now, moved and deleted ones
+    /// counted): what numbered files and sheets are named by. Without it, the place in `order`.
+    #[serde(default)]
+    pub shown: Vec<usize>,
     pub rot: Vec<i32>,
     /// "docx", "xlsx", "pptx", "md", "png", "jpg", "tiff" or "txt".
     pub format: String,
@@ -86,6 +90,8 @@ pub fn run(engine: &Engine, office: &Office, r: &Request, cancel: &AtomicBool, p
     let dir = out.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
     let rot = |page: usize| r.rot.get(page).copied().unwrap_or(0);
     let stopped = || cancel.load(Ordering::Acquire);
+    // A page's number as the user sees it (not its place in the file, which moving and deleting pages change).
+    let number = |k: usize| r.shown.get(k).copied().unwrap_or(k) + 1;
     let opts = options(office);
     let pick = |list: &[String]| -> Option<String> {
         match &r.engine {
@@ -137,7 +143,7 @@ pub fn run(engine: &Engine, office: &Office, r: &Request, cancel: &AtomicBool, p
                 }
                 progress(k, r.order.len());
                 for (i, t) in d.tables(page)?.into_iter().enumerate() {
-                    let name = if i == 0 { format!("Page {}", page + 1) } else { format!("Page {} ({})", page + 1, i + 1) };
+                    let name = if i == 0 { format!("Page {}", number(k)) } else { format!("Page {} ({})", number(k), i + 1) };
                     found.push((name, t));
                 }
             }
@@ -189,30 +195,50 @@ pub fn run(engine: &Engine, office: &Office, r: &Request, cancel: &AtomicBool, p
             let dpi = r.dpi.unwrap_or(150.0).clamp(36.0, 600.0);
             let d = engine.doc(r.doc)?;
             if r.format == "tiff" {
-                let mut tiff = crate::tiff::Tiff::create(&out)?;
+                // Written beside the chosen name and put there when whole: stopped or failed partway, nothing is
+                // left, and a file that was there is still there.
+                let part = PathBuf::from(format!("{}.paginaut-tmp", r.out));
+                let res = (|| -> Result<(), String> {
+                    let mut tiff = crate::tiff::Tiff::create(&part)?;
+                    for (k, &page) in r.order.iter().enumerate() {
+                        if stopped() {
+                            return Err("stopped".into());
+                        }
+                        progress(k, r.order.len());
+                        tiff.add_pnm(&d.page_image(page, rot(page), "pnm", dpi)?, dpi)?;
+                    }
+                    tiff.finish()?;
+                    std::fs::rename(&part, &out).or_else(|_| std::fs::copy(&part, &out).map(drop)).map_err(|e| format!("Couldn't write {}: {e}", r.out))
+                })();
+                let _ = std::fs::remove_file(&part);
+                res?;
+                return done("Paginaut", String::new());
+            }
+            let stem = stem_of(&out);
+            let mut files: Vec<PathBuf> = Vec::new();
+            let res = (|| -> Result<(), String> {
                 for (k, &page) in r.order.iter().enumerate() {
                     if stopped() {
                         return Err("stopped".into());
                     }
                     progress(k, r.order.len());
-                    tiff.add_pnm(&d.page_image(page, rot(page), "pnm", dpi)?, dpi)?;
+                    let image = d.page_image(page, rot(page), &r.format, dpi)?;
+                    // One page: the name chosen. Several: numbered after it as the pages are shown ("report-1.png"),
+                    // next to it.
+                    let file = if r.order.len() == 1 { out.clone() } else { free_path(&dir, &format!("{stem}-{}", number(k)), &r.format) };
+                    files.push(file.clone());
+                    std::fs::write(&file, image).map_err(|e| format!("Couldn't write {}: {e}", file.display()))?;
                 }
-                tiff.finish()?;
-                return done("Paginaut", String::new());
-            }
-            let stem = stem_of(&out);
-            let mut files = Vec::new();
-            for (k, &page) in r.order.iter().enumerate() {
-                if stopped() {
-                    return Err("stopped".into());
+                Ok(())
+            })();
+            if let Err(e) = res {
+                // Stopped or failed partway: the pictures written so far go (each was a new name, or the one chosen).
+                for f in &files {
+                    let _ = std::fs::remove_file(f);
                 }
-                progress(k, r.order.len());
-                // One page: the name chosen. Several: numbered after it ("report-1.png"), next to it.
-                let file = if r.order.len() == 1 { out.clone() } else { free_path(&dir, &format!("{stem}-{}", page + 1), &r.format) };
-                std::fs::write(&file, d.page_image(page, rot(page), &r.format, dpi)?).map_err(|e| format!("Couldn't write {}: {e}", file.display()))?;
-                files.push(file.to_string_lossy().into_owned());
+                return Err(e);
             }
-            Ok(Done { files, by: "Paginaut".into(), note: String::new() })
+            Ok(Done { files: files.iter().map(|f| f.to_string_lossy().into_owned()).collect(), by: "Paginaut".into(), note: String::new() })
         }
         f => Err(format!("unknown format {f}")),
     }

@@ -127,54 +127,83 @@ Second pass, the same day. Read for it: compare.rs, convert.rs, office/mod.rs, o
 engine/ocr.rs, engine/sandbox.rs, print.rs, windows.ts, main.tsx, edits.ts, annots.ts, forms.ts, ocr.ts, redact.ts,
 dsc.ts, mobile/open.ts, the first third of Viewer.ts, and the capability files. Most serious first.
 
-- [ ] Web links on PDF pages don't open, on Windows, Linux and Android. Both capability files give
+- [x] Web links on PDF pages don't open, on Windows, Linux and Android. Both capability files give
       "opener:allow-open-url" and nothing that says which addresses (not "opener:default" or
       "opener:allow-default-urls"); tauri-plugin-opener 2.7.0 refuses every address when none is allowed, and the
       click swallows the error. Read from the plugin's code, not tried. When allowed, only http, https and mailto
       should be: the address comes from the PDF (file:, ms-…: and \\server links would open too).
       (src-tauri/capabilities/default.json and mobile.json; src/render/Viewer.ts, loadLinks)
-- [ ] Privacy: what Sanitize takes out, and pages and comments deleted, are still in the saved file. An ordinary
+      Fixed: both capability files allow https, http and mailto addresses, and the page checks the same before asking
+      (Viewer.ts openableLink); another kind of link, or one that can't be opened, is said in a toast. Not tried in
+      the running app yet
+- [x] Privacy: what Sanitize takes out, and pages and comments deleted, are still in the saved file. An ordinary
       Save of a PDF adds the changes to the end of the file (that's what makes it quick) unless redactions were
       applied (MuPDF then insists on a full write). So after Sanitize (metadata, scripts, attached files, comments)
       or deleting a page, Save leaves the old content in the file's earlier bytes, where it can be read back. A
       save after any of these should write the file afresh. (src-tauri/src/engine/mod.rs, save_with: the
       incremental branch)
-- [ ] A signature that a later change made invalid still shows as valid. fo_sigs_json gives "invalidAt" (MuPDF's
+      Fixed: a save after a page was deleted, or after Sanitize, a deleted comment or attached file, an edit of text
+      or pictures, removed recognised text or changed properties (Doc::took_out), writes the file afresh. Except a
+      signed file: its signatures cover the earlier bytes, so it's still only added to. save_test: a deleted page
+      makes the file smaller and its text is on no page
+- [x] A signature that a later change made invalid still shows as valid. fo_sigs_json gives "invalidAt" (MuPDF's
       pdf_validate_signature: a change the signature doesn't allow was saved after it; -2 damaged), and nothing in
       the app reads it: verdictOf goes by the signed bytes and the certificate alone. (src/dsc.ts, verdictOf and
       describe; src/ui/SigPanel.tsx)
-- [ ] Ctrl+S leaves out the form field being typed in: a field's text goes to the document when the field is left
+      Fixed: the engine also gives what a signature allows after it ("mdp": its certification level, "lock": locked
+      fields). One that certifies with no changes allowed and has changes after it, or that limits changes and has
+      more than form filling and signing after it (MuPDF's invalidAt), is not valid; with comments allowed, or a
+      history that can't be read, it's a warning (dsc.ts laterChange). An ordinary signature isn't judged by
+      invalidAt: MuPDF counts any added comment or signature field as a change, which such a signature allows. Not
+      tried on a certified file (none among the test files)
+- [x] Ctrl+S leaves out the form field being typed in: a field's text goes to the document when the field is left
       (or Enter), and Ctrl+S saves without that. The text still shows, so the form looks saved. The same for a text
       box (comment) still open. (src/main.tsx, the Ctrl+S key; src/forms.ts, commit; src/annots.ts, editText)
-- [ ] Recognized text that fails partway (and Remove recognized text) still leaves an undo step in the document,
+      Fixed: Save first hands over the field or text box in use and waits for edits under way (store.ts settleEdits);
+      Ctrl+S in a text box reaches Save
+- [x] Recognized text that fails partway (and Remove recognized text) still leaves an undo step in the document,
       while the app is told it failed and counts none: Undo is out of step from then on, and the tab isn't marked
       changed. apply_ocr and remove_ocr call end_op where annot_edit now calls abandon_op.
       (src-tauri/src/engine/ocr.rs)
-- [ ] The page turns are handed to the C side without their count: fo_write_document reads rot[order[k]] whatever
+      Fixed: abandon_op on failure, and the pages kept in memory are dropped
+- [x] The page turns are handed to the C side without their count: fo_write_document reads rot[order[k]] whatever
       the list's length. A convert to text, or Save as PDF of a file that isn't a PDF, with a list shorter than the
       highest page reads past its end (wrong turns, or a crash). apply_page_edits passes and checks the count.
       (src-tauri/src/engine/mupdf.rs, write_document and convert_to_pdf; native/paginaut.c, fo_write_document)
-- [ ] Document properties: a title, subject or keywords over 1 KB is read cut short (a 1024-byte buffer), and
+      Fixed: the turns are filled out with 0 up to the highest page named before they're handed over (mupdf.rs
+      order_and_turns)
+- [x] Document properties: a title, subject or keywords over 1 KB is read cut short (a 1024-byte buffer), and
       Apply writes all four back, so the rest is lost. (src-tauri/src/engine/mupdf.rs, metadata; engine/mod.rs,
       set_properties)
-- [ ] Windows: when Word, Excel or PowerPoint stops answering during a conversion, Paginaut gives up after 3
+      Fixed: a longer value is read again whole
+- [x] Windows: when Word, Excel or PowerPoint stops answering during a conversion, Paginaut gives up after 3
       minutes and leaves it running, hidden, with the file open ("check for its window", but it has none to see).
       The file stays locked until the program is ended in Task Manager. (src-tauri/src/office/com.rs, run)
-- [ ] Moving a tab to a new window lets go of it before the new window has it. If that window's page never starts
+      Fixed: the copy of the program started for the conversion (the one new process of it) is ended when it stops
+      answering, and the message says so; a copy the user had open is left. Not tried with a program that hangs
+- [x] Moving a tab to a new window lets go of it before the new window has it. If that window's page never starts
       (or it's closed at once), the document stays open with its unsaved changes and no tab anywhere.
       (src/windows.ts, moveToNewWindow)
-- [ ] Signing into a new file accepts the name of a PDF open in another tab (Save refuses that).
+      Fixed: a window that goes before its page took the tab hands it back to the window it came from (or any left)
+- [x] Signing into a new file accepts the name of a PDF open in another tab (Save refuses that).
       (src/dsc.ts, finish)
-- [ ] Android: a big file read in place stays held when its password is cancelled or it can't be unlocked
+      Fixed: refused as Save refuses it
+- [x] Android: a big file read in place stays held when its password is cancelled or it can't be unlocked
       (closeCurrent lets go of such files; this path doesn't). (src/mobile/open.ts, openPicked)
-- [ ] Convert to pictures numbers the files by the page's place in the file, not as shown: after moving or deleting
+      Fixed: let go on every way out of openPicked that doesn't show the file. Not built or run on Android yet
+- [x] Convert to pictures numbers the files by the page's place in the file, not as shown: after moving or deleting
       pages, "report-9.png, report-1.png…". Excel's sheets ("Page 9") the same. (src-tauri/src/convert.rs)
-- [ ] A conversion stopped or failed partway leaves what it wrote: half a TIFF at the chosen name (over a file
+      Fixed: files and Excel's sheets are numbered as the pages are shown (the request carries each page's place)
+- [x] A conversion stopped or failed partway leaves what it wrote: half a TIFF at the chosen name (over a file
       that was there), the first pictures of many. (src-tauri/src/convert.rs)
-- [ ] The pages box takes "1-5" but not "1 - 5" or "3 to 8", which its pattern was written for (the text is split
+      Fixed: a TIFF is written beside its name and put there when whole; pictures written before a stop or failure are
+      deleted
+- [x] The pages box takes "1-5" but not "1 - 5" or "3 to 8", which its pattern was written for (the text is split
       at spaces first). (src/ocr.ts, parsePages)
-- [ ] A drop-down you can type in ignores "read only", and two pages in view with a field of the same number share
+      Fixed: spaces around a range's mark are taken out before the text is split
+- [x] A drop-down you can type in ignores "read only", and two pages in view with a field of the same number share
       one list of choices (the list's id repeats). (src/forms.ts, create)
+      Fixed: read only is set, and each list has an id of its own
 
 Third pass, the same day. Read for it: engine_link.rs, pkcs11.rs, defaults.rs, officetext.rs, xml.rs, flow.rs,
 docx.rs, markdown.rs, tiff.rs, tts.rs, snap.rs, print_linux.rs, engine/table.rs, most of engine/pdfa.rs, the first
@@ -191,13 +220,15 @@ ui/SecureUI.tsx and most of ui/PagesUI.tsx. Most serious first.
 - [ ] A Markdown file that isn't UTF-8 (Windows-1252, UTF-16) is read with its other letters turned into "�", and
       saving writes that back over the file. A UTF-8 file's byte order mark is dropped on save. Such a file should
       be read in its own encoding, or opened read-only. (src-tauri/src/desk.rs, markdown_read and markdown_save)
-- [ ] Android: opening a file that's read where it is while it's already held drops the new one's link. Such a file
+- [x] Android: opening a file that's read where it is while it's already held drops the new one's link. Such a file
       always gets the same link (direct/<its address, hashed>/<name>): the second open deletes and remakes the
       folder and replaces the held handle without closing it, and when the first one is let go that closes the
       second's handle and deletes its link. Easiest to meet: tapping a book on the shelf while the shelf is still
       reading that book's cover (just after new books were found). The book fails to open, or opens and then Print,
       Share and coming back after the engine restarts fail. Also "Open with" from Files for the file that's open.
       (PaginautPlugin.kt, open, openDirect and release; src/mobile/shelf.ts, fillCovers)
+      Fixed: every open of a file read in place gets a folder of its own (PaginautPlugin.kt directDir), so two opens
+      of one file don't share a link or a handle. Not built or run on Android yet
 - [ ] Android: a bad book on the shelf can get the document you're reading refused. When the engine stops, each
       document with something under way takes a strike; a cover being drawn for the shelf has no strike (and no
       refusal) of its own. So a damaged book whose cover stops the engine twice in two minutes gets the open,
@@ -273,8 +304,9 @@ RefusedActivity.kt; and parts of paginaut.c (see the note at the top).
       (src/ui/ExtractUI.tsx, Attachments)
 - [ ] Compare: with the list narrowed to one kind (Added, say), F7 and the arrows still stop at the differences
       that are hidden. (src/ui/CompareUI.tsx, step)
-- [ ] Convert: after the last page the progress reads one page too many ("Page 11 of 10…").
+- [x] Convert: after the last page the progress reads one page too many ("Page 11 of 10…").
       (src/ui/ConvertPane.tsx)
+      Fixed: never more than the total
 - [ ] Book mode in a narrow window shows one page but its bar still says two ("5–6 of 200").
       (src/ui/Reflow.tsx, BookBar)
 - [ ] Android, Settings and Storage: with no copies kept it says "0.1 MB of copies". (src/mobile/Storage.tsx,
@@ -309,7 +341,8 @@ Cleanup:
       (src-tauri/src/engine/table.rs, zip; src-tauri/src/docx.rs and flow.rs, document)
 - [ ] Compare counts each word's place from the start of its paragraph or cell again: slow for very long ones.
       (src-tauri/src/compare.rs, tokens)
-- [ ] com.rs reads "Visible" the same way in three places (convert_on_this_thread).
+- [x] com.rs reads "Visible" the same way in three places (convert_on_this_thread).
+      Fixed: read once
 - [ ] The signature panel copies everything a signature covers twice into memory, per signature (a 900 MB scan:
       about 1.8 GB each); signed_version reads the whole file to write its start. (src-tauri/native/paginaut.c,
       fo_sig_data; src-tauri/src/desk.rs)

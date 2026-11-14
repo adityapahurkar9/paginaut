@@ -128,6 +128,10 @@ pub struct Doc {
     /// The file the open document reads when it isn't `path`: a save wrote everything into a copy beside the file
     /// but couldn't put it in the file's place, and that copy is kept (with the changes) until a save succeeds.
     backing: Mutex<Option<String>>,
+    /// Something was taken out of the document since it was last saved (Sanitize, a deleted comment or attached
+    /// file, text or a picture edited away, properties changed): the next save writes the file afresh. An ordinary
+    /// save only adds the changes to the file's end, and what was taken out would still be in its earlier bytes.
+    took_out: AtomicBool,
 }
 
 /// Where a background job reads pages from: a private copy of the file (fast,
@@ -843,6 +847,9 @@ impl Doc {
 
     /// Deletes (0), moves or resizes (1), replaces (2) or adds (3) a picture on page `index` (one undo step).
     pub fn picture_edit(&self, index: usize, target: [f32; 4], action: i32, dest: [f32; 4], data: &[u8]) -> Result<(), String> {
+        if action != 3 {
+            self.took_out.store(true, Ordering::Release);
+        }
         {
             let mut inner = self.inner.lock();
             if !inner.doc.is_pdf() {
@@ -923,6 +930,7 @@ impl Doc {
     /// Replaces a paragraph's text on page `index` (one undo step), laid out in its box with its
     /// size, spacing, colour and alignment, in its own font where that has the letters.
     pub fn edit_text(&self, index: usize, e: &TextEdit) -> Result<(), String> {
+        self.took_out.store(true, Ordering::Release);
         let p = &e.para;
         // Runs carry their own weight and style (<b>, <i>) over a plain paragraph.
         let runs = e.runs.as_ref().filter(|r| !r.is_empty());
@@ -1060,6 +1068,7 @@ impl Doc {
     }
 
     pub fn attachment_remove(&self, i: usize) -> Result<(), String> {
+        self.took_out.store(true, Ordering::Release);
         self.inner.lock().doc.attachment_remove(i)?;
         self.edited();
         Ok(())
@@ -1198,6 +1207,7 @@ impl Doc {
 
     /// Takes out (one undo step): what & 1 metadata, 2 scripts, 4 attached files, 8 comments, 16 hidden text.
     pub fn sanitize(&self, what: i32) -> Result<Sanitized, String> {
+        self.took_out.store(true, Ordering::Release);
         let mut out = Sanitized::default();
         // Hidden text and scripts come out of the pages' content.
         self.doc_step("Sanitize", true, |doc| {
@@ -1272,6 +1282,7 @@ impl Doc {
     }
 
     pub fn set_properties(&self, p: &Properties) -> Result<(), String> {
+        self.took_out.store(true, Ordering::Release);
         self.doc_op("Properties", |doc| {
             for (k, v) in [("info:Title", &p.title), ("info:Author", &p.author), ("info:Subject", &p.subject), ("info:Keywords", &p.keywords)] {
                 doc.set_metadata(k, v.trim())?;
@@ -1437,6 +1448,7 @@ impl Doc {
         let res = (|| -> Result<i32, String> {
             if delete {
                 let n = num.ok_or("which annotation?")?;
+                self.took_out.store(true, Ordering::Release);
                 page.annot_delete(n)?;
                 return Ok(n);
             }
@@ -1670,6 +1682,7 @@ impl Engine {
             file_pages: AtomicUsize::new(0),
             converted: RwLock::new(None),
             backing: Mutex::new(None),
+            took_out: AtomicBool::new(false),
         });
         d.prepare()?;
         self.docs.write().insert(id, d.clone());
@@ -1696,6 +1709,7 @@ impl Engine {
             file_pages: AtomicUsize::new(0),
             converted: RwLock::new(converted),
             backing: Mutex::new(None),
+            took_out: AtomicBool::new(false),
         });
         let locked = d.inner.lock().doc.needs_password();
         if !locked {
@@ -1849,7 +1863,13 @@ impl Engine {
             let start = inner.doc.journal_pos();
             let file_pages = d.file_pages.load(Ordering::Relaxed);
             // Pages added in memory and then removed again would still be appended to the file; a full rewrite leaves them out.
-            let unused = (file_pages..d.page_count()).any(|i| !order.contains(&i));
+            let kept: std::collections::HashSet<usize> = order.iter().copied().collect();
+            let unused = (file_pages..d.page_count()).any(|i| !kept.contains(&i));
+            // Privacy: a deleted page, and whatever else was taken out (see `took_out`), must not stay in the file's
+            // earlier bytes, so the file is written afresh. Except a signed file: its signatures cover those very
+            // bytes, and only adding to the file keeps them valid.
+            let deleted = (0..file_pages.min(d.page_count())).any(|i| !kept.contains(&i));
+            let afresh = (deleted || d.took_out.load(Ordering::Acquire)) && !inner.doc.sigs_json().is_ok_and(|j| j.contains("\"signed\":true"));
             inner.doc.begin_op("Save");
             let prep = (|| -> Result<(), String> {
                 inner.doc.apply_page_edits(&rot, &order, file_pages)?;
@@ -1890,7 +1910,7 @@ impl Engine {
             };
             let res = if !in_place {
                 write_beside(&out, |t| write(&inner.doc, t))
-            } else if !opts.any() && backing.is_none() && !unused && inner.doc.can_save_incrementally() {
+            } else if !opts.any() && backing.is_none() && !unused && !afresh && inner.doc.can_save_incrementally() {
                 // Checked first (another program can hold the file): MuPDF's own attempt, once started, leaves the
                 // document in a state the undo journal doesn't fully take back.
                 writable(&cur).and_then(|_| inner.doc.save_pdf(&cur, true))
@@ -1952,6 +1972,7 @@ impl Engine {
         *d.path.write() = out;
         *d.converted.write() = None;
         d.content_edited.store(false, Ordering::Release);
+        d.took_out.store(false, Ordering::Release);
         d.prepare()?;
         Ok(d.info())
     }

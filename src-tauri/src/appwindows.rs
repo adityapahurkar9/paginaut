@@ -17,6 +17,9 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, We
 pub struct WindowStart {
     pub files: Vec<String>,
     pub tab: Option<serde_json::Value>,
+    /// The window the tab came from: it gets the tab back if this one goes before its page has taken it.
+    #[serde(skip)]
+    pub from: Option<String>,
 }
 
 /// What a window told us about itself (see `window_report`).
@@ -94,7 +97,19 @@ pub fn on_window_event(win: &tauri::Window, event: &tauri::WindowEvent) {
         tauri::WindowEvent::Focused(true) => *state.last_focused.lock() = win.label().to_owned(),
         tauri::WindowEvent::Destroyed => {
             state.reports.lock().remove(win.label());
-            state.starts.lock().remove(win.label());
+            // A tab moved here that the page never took (it didn't start, or the window was closed at once): the
+            // window it came from has let go of it, so its document would stay open, unsaved changes and all, with
+            // no tab anywhere. It goes back where it came from (or to any window left).
+            let untaken = state.starts.lock().remove(win.label());
+            if let Some(WindowStart { tab: Some(tab), from, .. }) = untaken {
+                let app = win.app_handle();
+                let back = from
+                    .and_then(|l| app.get_webview_window(&l))
+                    .or_else(|| app.webview_windows().into_values().find(|w| w.label() != win.label()));
+                if let Some(w) = back {
+                    let _ = w.emit_to(w.label(), "tab-arrive", serde_json::json!({ "tab": tab, "atX": null }));
+                }
+            }
             #[cfg(windows)]
             crate::snap::forget(win.label());
         }
@@ -197,7 +212,8 @@ pub fn window_start(window: WebviewWindow, state: State<'_, Windows>) -> WindowS
 /// (a tab dragged out of the strip and dropped there). Async: on Windows a window made from a command that runs
 /// on the UI thread would wait for itself.
 #[tauri::command]
-pub async fn window_new(app: AppHandle, tab: Option<serde_json::Value>, at_cursor: bool) -> Result<String, String> {
+pub async fn window_new(window: WebviewWindow, tab: Option<serde_json::Value>, at_cursor: bool) -> Result<String, String> {
+    let app = window.app_handle().clone();
     let at = if at_cursor {
         // The tab lands under the mouse: the window's top-left a little up and left of it.
         app.cursor_position().ok().map(|c| {
@@ -207,7 +223,7 @@ pub async fn window_new(app: AppHandle, tab: Option<serde_json::Value>, at_curso
     } else {
         None
     };
-    open_window(&app, at, WindowStart { files: Vec::new(), tab }).map(|w| w.label().to_owned())
+    open_window(&app, at, WindowStart { files: Vec::new(), tab, from: Some(window.label().to_owned()) }).map(|w| w.label().to_owned())
 }
 
 #[derive(Serialize)]

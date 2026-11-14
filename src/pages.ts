@@ -6,7 +6,7 @@ import { api, type DocInfo, type Inserted, type InsertSource, type SaveOptions }
 import * as E from "./edits";
 import { metaChanged } from "./edits";
 import { formsChanged, initForms } from "./forms";
-import { ask, baseName, rememberFile, samePath, setSaveHook, settings, showToast, tabs, type Tab } from "./store";
+import { ask, baseName, rememberFile, samePath, setSaveHook, settings, settleEdits, showToast, tabs, type Tab } from "./store";
 
 /** Pages an action applies to: the thumbnail selection if it includes `page`, else just `page`. */
 export function targets(tab: Tab, page?: number): number[] {
@@ -306,6 +306,8 @@ export async function save(tab: Tab, saveAs = false): Promise<boolean> {
 const entered = new WeakSet<Tab>();
 
 async function saveNow(tab: Tab, saveAs: boolean): Promise<boolean> {
+  // The form field or text box still being typed in goes into the document first.
+  await settleEdits();
   const own = await saveOverride(tab, saveAs);
   if (own !== null) return own;
   if (!(await beforeSave(tab))) return false;

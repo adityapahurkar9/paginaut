@@ -441,10 +441,19 @@ impl Document {
         let k = CString::new(key).ok()?;
         let mut buf = vec![0u8; 1024];
         with_kind(self.1, |c| {
-            let n = unsafe { fo_metadata(c, self.0, k.as_ptr(), buf.as_mut_ptr().cast(), buf.len() as c_int) };
+            let mut n = unsafe { fo_metadata(c, self.0, k.as_ptr(), buf.as_mut_ptr().cast(), buf.len() as c_int) };
+            // The answer is how many bytes the whole text takes: a longer one (keywords can run to pages) is read
+            // again whole. Cut short at 1 KB, Properties would write the cut text back and lose the rest.
+            if n > buf.len() as c_int && n <= 16 << 20 {
+                buf = vec![0u8; n as usize + 1];
+                n = unsafe { fo_metadata(c, self.0, k.as_ptr(), buf.as_mut_ptr().cast(), buf.len() as c_int) };
+            }
             if n <= 0 {
                 return None;
             }
+            // (Never read past the buffer, whatever was answered.)
+            let last = buf.len() - 1;
+            buf[last] = 0;
             let s = unsafe { CStr::from_ptr(buf.as_ptr().cast()) }.to_string_lossy().trim().to_string();
             (!s.is_empty()).then_some(s)
         })
@@ -533,7 +542,7 @@ impl Document {
     pub fn write_document(&self, path: &str, format: &str, options: &str, order: &[usize], rot: &[i32]) -> Result<()> {
         let p = CString::new(path).map_err(|e| e.to_string())?;
         let (f, o) = (CString::new(format).map_err(|e| e.to_string())?, CString::new(options).map_err(|e| e.to_string())?);
-        let order: Vec<c_int> = order.iter().map(|&x| x as c_int).collect();
+        let (order, rot) = order_and_turns(order, rot);
         with_kind(self.1, |c| {
             let rc = unsafe { fo_write_document(c, self.0, p.as_ptr(), f.as_ptr(), o.as_ptr(), order.as_ptr(), order.len() as c_int, rot.as_ptr()) };
             if rc == 0 { Ok(()) } else { Err(last_error(c)) }
@@ -541,9 +550,10 @@ impl Document {
     }
 
     /// Writes any document (EPUB, images, XPS…) as a PDF with the given order and rotations.
+    /// (fo_write_document reads rot[order[k]] without knowing the list's length: see order_and_turns.)
     pub fn convert_to_pdf(&self, path: &str, order: &[usize], rot: &[i32]) -> Result<()> {
         let p = CString::new(path).map_err(|e| e.to_string())?;
-        let order: Vec<c_int> = order.iter().map(|&x| x as c_int).collect();
+        let (order, rot) = order_and_turns(order, rot);
         with_kind(self.1, |c| {
             let rc = unsafe { fo_convert_to_pdf(c, self.0, p.as_ptr(), order.as_ptr(), order.len() as c_int, rot.as_ptr()) };
             if rc == 0 { Ok(()) } else { Err(last_error(c)) }
@@ -1462,4 +1472,16 @@ impl Drop for Text {
     fn drop(&mut self) {
         drop_with(self.1, |c| unsafe { fo_text_drop(c, self.0) })
     }
+}
+
+/// The page order and the turns for fo_write_document, which reads `rot[order[k]]` and isn't told how long `rot`
+/// is: the turns are filled out with 0 up to the highest page named, so a short list (a file's pages counted
+/// before pages were added, a caller that passed none) is never read past its end.
+fn order_and_turns(order: &[usize], rot: &[i32]) -> (Vec<c_int>, Vec<c_int>) {
+    let need = order.iter().max().map_or(0, |m| m + 1).max(1);
+    let mut turns: Vec<c_int> = rot.iter().map(|&r| r as c_int).collect();
+    if turns.len() < need {
+        turns.resize(need, 0);
+    }
+    (order.iter().map(|&x| x as c_int).collect(), turns)
 }

@@ -182,7 +182,7 @@ function ThisDocument({ tab }: { tab: Tab }) {
     try {
       job.current = newId();
       const r = await api.convertFromPdf(
-        { doc: tab.info.value!.docId, order, rot: edits.rot, format, out, engine: chosen ?? null, dpi: target === "images" ? dpi : null },
+        { doc: tab.info.value!.docId, order, shown, rot: edits.rot, format, out, engine: chosen ?? null, dpi: target === "images" ? dpi : null },
         job.current,
         (e) => setBusy((b) => ({ ...b, done: e.done, total: e.total })),
       );
@@ -358,7 +358,7 @@ function ThisDocument({ tab }: { tab: Tab }) {
         {busy ? (
           <>
             <span class="secure-busy" style={{ flex: 1 }}>
-              <span class="spin" /> {pdfa ? "Saving as PDF/A…" : busy.stopping ? "Stopping…" : busy.total > 1 && busy.done ? `Page ${busy.done + 1} of ${busy.total}…` : "Converting…"}
+              <span class="spin" /> {pdfa ? "Saving as PDF/A…" : busy.stopping ? "Stopping…" : busy.total > 1 && busy.done ? `Page ${Math.min(busy.done + 1, busy.total)} of ${busy.total}…` : "Converting…"}
             </span>
             {!pdfa && (
               <button

@@ -119,6 +119,7 @@ function Pages({ d }: { d: OpenDoc }) {
         viewer.el.classList.toggle("turn", docLayout.value !== "scroll" && fit === "page");
       },
       onSelection: () => selTick.value++,
+      onMessage: say,
       onPageAction() {},
       onScroll: () => {
         // Reading on hides the bars (not when the app moved the view, nor right after they appeared).
