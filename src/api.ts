@@ -51,6 +51,8 @@ export type ExportFormat = "docx" | "xlsx" | "pptx" | "md" | "png" | "jpg" | "ti
 export interface ExportRequest {
   doc: number;
   order: number[];
+  /** Where each of those pages is shown (0-based), for the numbers in file and sheet names. */
+  shown?: number[];
   rot: number[];
   format: ExportFormat;
   out: string;

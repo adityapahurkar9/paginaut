@@ -271,7 +271,9 @@ effect(() => {
 /** Pages from text like "1-5, 8, 12-" (1-based, display order) → display indices; null if invalid. */
 export function parsePages(text: string, count: number): number[] | null {
   const out = new Set<number>();
-  for (const part of text.split(/[,;\s]+/).filter(Boolean)) {
+  // "1 - 5" and "3 to 8" are ranges too: the spaces around a range's mark go before the text is split at spaces.
+  const tidy = text.replace(/\s*(?:-|–|\bto\b)\s*/gi, "-");
+  for (const part of tidy.split(/[,;\s]+/).filter(Boolean)) {
     const m = /^(\d*)\s*(?:-|–|to)?\s*(\d*)$/.exec(part);
     if (!m || (!m[1] && !m[2])) return null;
     const range = /-|–|to/.test(part);

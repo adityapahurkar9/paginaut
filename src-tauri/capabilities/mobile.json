@@ -4,5 +4,11 @@
   "description": "The Android viewer",
   "windows": ["main"],
   "platforms": ["android"],
-  "permissions": ["core:default", "opener:allow-open-url"]
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }, { "url": "mailto:*" }]
+    }
+  ]
 }

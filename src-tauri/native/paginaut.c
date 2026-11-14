@@ -8072,8 +8072,33 @@ static void check_byte_range(fz_context *ctx, pdf_document *pdf, pdf_obj *field,
 		fz_rethrow(ctx);
 }
 
+/* What a signature says may be changed after it. *mdp: its DocMDP level when it certifies the document (1 nothing,
+ * 2 filling in forms and signing, 3 comments too), else 0. *lock: it locks form fields (FieldMDP, or the field's
+ * /Lock). With neither, the signature allows later changes (they're added after it and it stays valid). */
+static void sig_limits(fz_context *ctx, pdf_obj *field, pdf_obj *v, int *mdp, int *lock)
+{
+	pdf_obj *refs = pdf_dict_get(ctx, v, PDF_NAME(Reference));
+	int i, n = pdf_array_len(ctx, refs);
+	*mdp = 0;
+	*lock = pdf_is_dict(ctx, pdf_dict_get(ctx, field, PDF_NAME(Lock)));
+	for (i = 0; i < n; i++)
+	{
+		pdf_obj *r = pdf_array_get(ctx, refs, i);
+		pdf_obj *method = pdf_dict_get(ctx, r, PDF_NAME(TransformMethod));
+		if (pdf_name_eq(ctx, method, PDF_NAME(DocMDP)))
+		{
+			pdf_obj *p = pdf_dict_getl(ctx, r, PDF_NAME(TransformParams), PDF_NAME(P), NULL);
+			int level = p ? pdf_to_int(ctx, p) : 2;
+			*mdp = level >= 1 && level <= 3 ? level : 2;
+		}
+		else if (pdf_name_eq(ctx, method, PDF_NAME(FieldMDP)))
+			*lock = 1;
+	}
+}
+
 /* JSON [{"i","name","page","signed","changed":bool (bytes added after it),
- * "invalidAt": saves ago it was invalidated by a disallowed change (0: none),
+ * "invalidAt": saves ago a change was saved that goes beyond filling in forms and signing, as MuPDF judges it
+ * (0: none, -2: couldn't be judged), "mdp" and "lock": what the signature allows after it (see sig_limits),
  * "end" (where the signed revision ends in the file),"reason","location","m" (PDF date),"signer",
  * "sub" (SubFilter)}]. Whether a signature covers its revision whole is checked by fo_sig_data. */
 char *fo_sigs_json(fo_ctx *c, fo_doc *d)
@@ -8095,7 +8120,7 @@ char *fo_sigs_json(fo_ctx *c, fo_doc *d)
 			pdf_obj *f = sigs[i];
 			pdf_obj *v = pdf_dict_get_inheritable(CTX, f, PDF_NAME(V));
 			int signed_ = pdf_signature_is_signed(CTX, pdf, f);
-			int changed = 0, invalid = 0;
+			int changed = 0, invalid = 0, mdp = 0, lock = 0;
 			char *name = pdf_load_field_name(CTX, f);
 			if (signed_)
 			{
@@ -8106,6 +8131,7 @@ char *fo_sigs_json(fo_ctx *c, fo_doc *d)
 				}
 				fz_catch(CTX)
 					invalid = -2; /* damaged */
+				sig_limits(CTX, f, v, &mdp, &lock);
 			}
 			if (i)
 				fz_append_byte(CTX, buf, ',');
@@ -8116,8 +8142,8 @@ char *fo_sigs_json(fo_ctx *c, fo_doc *d)
 				/* fz_append_printf has no 64-bit integers. */
 				char end[32];
 				snprintf(end, sizeof end, "%lld", (long long)sig_end(CTX, f));
-				fz_append_printf(CTX, buf, ",\"page\":%d,\"signed\":%s,\"changed\":%s,\"invalidAt\":%d,\"end\":%s,\"reason\":",
-					sig_page(CTX, pdf, f), signed_ ? "true" : "false", changed ? "true" : "false", invalid, end);
+				fz_append_printf(CTX, buf, ",\"page\":%d,\"signed\":%s,\"changed\":%s,\"invalidAt\":%d,\"mdp\":%d,\"lock\":%s,\"end\":%s,\"reason\":",
+					sig_page(CTX, pdf, f), signed_ ? "true" : "false", changed ? "true" : "false", invalid, mdp, lock ? "true" : "false", end);
 			}
 			json_str(CTX, buf, pdf_dict_get_text_string(CTX, v, PDF_NAME(Reason)));
 			fz_append_string(CTX, buf, ",\"location\":");

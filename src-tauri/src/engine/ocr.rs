@@ -348,12 +348,21 @@ impl Doc {
             }
             Ok(())
         })();
+        if let Err(e) = res {
+            // Nothing of a half-added layer stays, and no undo step is left that the app doesn't know of (as
+            // annot_edit does): the pages kept in memory go, since some had the text put on them.
+            inner.doc.abandon_op();
+            inner.pages.clear();
+            drop(inner);
+            self.content_changed();
+            return Err(e);
+        }
         inner.doc.end_op();
         drop(inner);
         if pages > 0 {
             self.content_changed();
         }
-        res.map(|_| (pages, replaced, words))
+        Ok((pages, replaced, words))
     }
 
     /// Pages carrying text Paginaut recognised.
@@ -367,6 +376,7 @@ impl Doc {
         if !inner.doc.is_pdf() {
             return Ok(0);
         }
+        self.took_out.store(true, std::sync::atomic::Ordering::Release);
         let mut count = 0;
         let mut font = 0;
         inner.doc.begin_op("Remove recognized text");
@@ -380,12 +390,19 @@ impl Doc {
             }
             Ok(())
         })();
+        if let Err(e) = res {
+            inner.doc.abandon_op();
+            inner.pages.clear();
+            drop(inner);
+            self.content_changed();
+            return Err(e);
+        }
         inner.doc.end_op();
         drop(inner);
         if count > 0 {
             self.content_changed();
         }
-        res.map(|_| count)
+        Ok(count)
     }
 }
 

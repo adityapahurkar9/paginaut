@@ -19,7 +19,10 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:allow-message",
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }, { "url": "mailto:*" }]
+    },
     "opener:allow-reveal-item-in-dir"
   ]
 }

@@ -8,7 +8,7 @@ import { api, type Annot, type AnnotProps, type Quad } from "./api";
 import { DOC_STEP } from "./edits";
 import { formsChanged } from "./forms";
 import type { LayerPage, PageLayer } from "./render/Viewer";
-import { activeTab, settings, showToast, updateSettings, type Tab } from "./store";
+import { activeTab, settings, showToast, trackEdit, updateSettings, type Tab } from "./store";
 
 export type AnnotTool =
   | "highlight" | "underline" | "strike" | "area" | "pen" | "note" | "text" | "rect" | "ellipse" | "line" | "arrow"
@@ -329,7 +329,8 @@ class AnnotLayer implements PageLayer {
     ta.value = a?.text ?? "";
     ta.addEventListener("pointerdown", (e) => e.stopPropagation());
     ta.addEventListener("keydown", (e) => {
-      e.stopPropagation();
+      // Ctrl+S goes on to the app: Save takes this box's text in first (settleEdits).
+      if (!((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s")) e.stopPropagation();
       if (e.key === "Escape") ta.blur();
     });
     let done = false;
@@ -353,7 +354,7 @@ class AnnotLayer implements PageLayer {
         });
       }
     };
-    ta.addEventListener("blur", () => void commit());
+    ta.addEventListener("blur", () => void trackEdit(commit()));
     root.append(ta);
     requestAnimationFrame(() => ta.focus());
   }

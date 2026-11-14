@@ -31,7 +31,7 @@ fn main() {
     let stop = AtomicBool::new(false);
     let go = |doc: &paginaut_lib::engine::DocInfo, format: &str, engine_: Option<&str>, name: &str| {
         let out = tmp.join(name).to_string_lossy().into_owned();
-        let req = Request { doc: doc.doc_id, order: all(doc.page_count), rot: vec![0; doc.page_count], format: format.into(), out, engine: engine_.map(Into::into), dpi: Some(100.0) };
+        let req = Request { doc: doc.doc_id, order: all(doc.page_count), shown: Vec::new(), rot: vec![0; doc.page_count], format: format.into(), out, engine: engine_.map(Into::into), dpi: Some(100.0) };
         let t = Instant::now();
         let r = run(&engine, &office, &req, &stop, &mut |_, _| {});
         (r, t.elapsed())

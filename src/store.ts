@@ -410,6 +410,24 @@ export function askSecret(title: string, text: string, label: string, ok: string
 }
 
 let toastTimer = 0;
+// Edits on their way to the document (a form field's text, a text box): Save waits for them, so what's typed is
+// what's saved.
+const pendingEdits = new Set<Promise<unknown>>();
+/** Counts `p` as an edit under way until it settles. */
+export function trackEdit<T>(p: Promise<T>): Promise<T> {
+  pendingEdits.add(p);
+  const done = () => pendingEdits.delete(p);
+  p.then(done, done);
+  return p;
+}
+/** Hands the field or text box being typed in to the document (as leaving it does) and waits for every edit
+ *  under way. Without this, Ctrl+S saved without the text still in the field, which went on showing it. */
+export async function settleEdits() {
+  const el = document.activeElement as HTMLElement | null;
+  if (el?.closest?.(".fw, .an-edit")) el.blur();
+  while (pendingEdits.size) await Promise.allSettled([...pendingEdits]);
+}
+
 export function showToast(text: string, ms = 2600) {
   clearTimeout(toastTimer);
   toast.value = { text, id: Date.now() };

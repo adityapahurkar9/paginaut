@@ -87,6 +87,14 @@ export interface ViewerCallbacks {
   dragBox?(hasText: boolean): boolean;
   /** The view scrolled (by the user or the program). */
   onScroll?(): void;
+  /** Something to tell the user (a link that isn't opened, and why). */
+  onMessage?(text: string): void;
+}
+
+/** The web and mail links on a page that are opened: the address comes from the PDF, so nothing that opens a file,
+ *  a program or another app's own links (file:, ms-…:, \\server). The capability files allow the same three. */
+export function openableLink(url: string): boolean {
+  return /^(https?:\/\/|mailto:)/i.test(url.trim());
 }
 
 interface PageView {
@@ -1574,6 +1582,15 @@ export class Viewer {
     }
   }
 
+  private openLink(url: string) {
+    const u = url.trim();
+    if (!openableLink(u)) {
+      this.cb.onMessage?.(`Paginaut only opens web and mail links. This one isn't opened: ${u.slice(0, 120)}`);
+      return;
+    }
+    openUrl(u).catch((e) => this.cb.onMessage?.(`Couldn't open the link: ${e}`));
+  }
+
   private async loadLinks(pv: PageView) {
     pv.linksLoaded = true;
     const src = pv.spec.src;
@@ -1598,7 +1615,7 @@ export class Viewer {
         a.href = "#";
         a.addEventListener("click", (e) => {
           e.preventDefault();
-          if (l.u) openUrl(l.u).catch(() => {});
+          if (l.u) this.openLink(l.u);
           else if (l.p !== undefined && l.p >= 0) this.goToSource(l.p, l.y);
         });
         return a;

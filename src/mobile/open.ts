@@ -43,10 +43,18 @@ export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
   const uri = p.uri ?? p.path;
   busy.value = "Opening…";
   let info: DocInfo;
+  // A file read in place is held by Android until it's let go: also when it doesn't get as far as being shown
+  // (it couldn't be opened, its password was cancelled), as closeCurrent does for one that was.
+  const path = p.path;
+  const letGo = (docId?: number) =>
+    void (docId === undefined ? Promise.resolve() : api.close(docId).catch(() => {})).then(() => {
+      if (p.inPlace) void native.release(path);
+    });
   try {
     info = await api.open(p.path);
   } catch (e) {
     busy.value = null;
+    letGo();
     if (!quiet) say(`Couldn't open ${name}: ${errorText(e)}`);
     return false;
   }
@@ -56,7 +64,7 @@ export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
     for (;;) {
       const pw = await askPassword(name, wrong);
       if (pw === null) {
-        void api.close(info.docId);
+        letGo(info.docId);
         return true;
       }
       let unlocked: DocInfo | null;
@@ -64,7 +72,7 @@ export async function openPicked(p: Picked, quiet = false): Promise<boolean> {
         unlocked = await api.unlock(info.docId, pw);
       } catch (e) {
         // Not a wrong password: the file couldn't be read (the reading engine stopped, say).
-        void api.close(info.docId);
+        letGo(info.docId);
         say(`Couldn't open ${name}: ${errorText(e)}`);
         return false;
       }

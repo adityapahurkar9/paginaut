@@ -16,7 +16,7 @@ fn main() {
         }
     };
 
-    // 1. Incremental save in place: rotate page 1, delete page 3, move page 5 to the front.
+    // 1. Incremental save in place: rotate page 1, move page 5 to the front. Then page 3 deleted: written afresh.
     let p = format!("{tmp}/text-copy.pdf");
     std::fs::copy(format!("{src_dir}/text-1000.pdf"), &p).unwrap();
     let before = std::fs::metadata(&p).unwrap().len();
@@ -24,14 +24,24 @@ fn main() {
     let n = info.page_count;
     let mut rot = vec![0; n];
     rot[0] = 90;
-    let mut order: Vec<usize> = (0..n).filter(|&i| i != 2).collect();
+    let mut order: Vec<usize> = (0..n).collect();
     let five = order.remove(order.iter().position(|&x| x == 4).unwrap());
     order.insert(0, five);
-    let t = Instant::now();
     let saved = engine.save(info.doc_id, order.clone(), rot.clone(), None).unwrap();
     let after = std::fs::metadata(&p).unwrap().len();
+    check("only appended", saved.page_count == n && after > before && after - before < 200_000, format!("file grew {} bytes", after - before));
+    // The page deleted must not stay in the file's earlier bytes: the file is written afresh, without it.
+    let gone = engine.doc(saved.doc_id).unwrap().area_text(3, [0.0, 0.0, 600.0, 800.0]).unwrap();
+    let order: Vec<usize> = (0..n).filter(|&i| i != 3).collect();
+    let t = Instant::now();
+    let saved = engine.save(saved.doc_id, order, vec![0; n], None).unwrap();
+    let rewritten = std::fs::metadata(&p).unwrap().len();
+    check("a deleted page is written out of the file", rewritten < after, format!("{after} → {rewritten} bytes"));
+    let all = engine.doc(saved.doc_id).unwrap();
+    let still = (0..saved.page_count).any(|i| all.area_text(i, [0.0, 0.0, 600.0, 800.0]).unwrap() == gone);
+    check("its text is on no page", !gone.trim().is_empty() && !still, format!("{} letters", gone.len()));
+    drop(all);
     check("incremental save", saved.page_count == n - 1, format!("{} → {} pages in {:?}", n, saved.page_count, t.elapsed()));
-    check("only appended", after > before && after - before < 200_000, format!("file grew {} bytes", after - before));
     let sizes = engine.page_sizes(saved.doc_id).unwrap();
     // Page 5 is now first (unrotated), original page 1 is second and rotated (wider than tall).
     check("rotation persisted", sizes[1][0] > sizes[1][1], format!("page 2 size {:?}", sizes[1]));

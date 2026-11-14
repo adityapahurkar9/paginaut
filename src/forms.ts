@@ -8,8 +8,9 @@ import { bumpRev } from "./render/RenderManager";
 import type { LayerPage, PageLayer } from "./render/Viewer";
 import { DOC_STEP } from "./edits";
 import { refreshAnnots } from "./annots";
-import { settings, showToast, type Tab } from "./store";
+import { settings, showToast, trackEdit, type Tab } from "./store";
 
+let listIds = 0;
 const FF_READONLY = 1, FF_REQUIRED = 2, FF_MULTILINE = 1 << 12, FF_PASSWORD = 1 << 13, FF_COMB = 1 << 24, FF_EDIT = 1 << 18;
 
 type FieldEl = HTMLElement & { _w?: Widget; _src?: number };
@@ -146,8 +147,10 @@ export class FormLayer implements PageLayer {
         const editable = w.t === "combo" && (w.ff & FF_EDIT) !== 0;
         if (editable) {
           const input = document.createElement("input");
+          input.readOnly = ro;
           const list = document.createElement("datalist");
-          list.id = `fw-list-${w.n}`;
+          // One list per field shown: a field's number repeats from page to page.
+          list.id = `fw-list-${listIds++}`;
           input.setAttribute("list", list.id);
           input.addEventListener("change", () => {
             const cur = (el as FieldEl)._w;
@@ -228,7 +231,11 @@ export class FormLayer implements PageLayer {
     }
   }
 
-  private async set(src: number, w: Widget, value: string, revert: () => void) {
+  private set(src: number, w: Widget, value: string, revert: () => void) {
+    return trackEdit(this.setNow(src, w, value, revert));
+  }
+
+  private async setNow(src: number, w: Widget, value: string, revert: () => void) {
     let r: FormChange;
     try {
       r = await api.widgetSet(this.docId, src, w.n, value);

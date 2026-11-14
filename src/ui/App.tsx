@@ -12,7 +12,7 @@ import * as P from "../pages";
 import { specs } from "../edits";
 import { renderer } from "../render/RenderManager";
 import { bookScreen } from "../modes";
-import { activeKey, activeTab, closeHome, closeTab, findOpen, homes, minimized, openHome, recent, samePath, settings, tabs, type Tab } from "../store";
+import { activeKey, activeTab, closeHome, closeTab, findOpen, homes, minimized, openHome, recent, samePath, settings, showToast, tabs, type Tab } from "../store";
 import { Sidebar } from "./Sidebar";
 import { AskDialog, FindBar, Palette, PasswordDialog, Toast } from "./Overlays";
 import { Ribbon, Toolbar, ViewControls } from "./Toolbar";
@@ -311,6 +311,7 @@ function TabView({ tab, active }: { tab: Tab; active: boolean }) {
       onSelection: (has) => (tab.hasSelection.value = has),
       onSelectionEnd: (src, quads, a, b) => void (redactTab.value === tab ? markFromSelection(tab, src, quads, a, b) : markupFromSelection(tab, src, quads, a, b)),
       dragBox: (hasText) => redactTab.value === tab && (redactAreas.value || !hasText),
+      onMessage: (text) => showToast(text, 6000),
       onPageAction: (page, action) => {
         if (action === "delete") P.deletePages(tab, page);
         else P.rotatePages(tab, action === "rotate-left" ? -90 : 90, page);
