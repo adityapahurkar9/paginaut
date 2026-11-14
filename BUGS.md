@@ -355,25 +355,39 @@ RefusedActivity.kt; and parts of paginaut.c (see the note at the top).
 
 Fifth pass, the same day. Read for it: the rest of native/paginaut.c, start to end.
 
-- [ ] Save as PDF/A can crash on a font whose LastChar is above 255 (or FirstChar below 0): its widths are written
+- [x] Save as PDF/A can crash on a font whose LastChar is above 255 (or FirstChar below 0): its widths are written
       again over that range from a list of 256, read past its end. Needs an embedded simple font with one drawn
       letter whose width is wrong. (native/paginaut.c, pa_put_widths and the Type 3 loop in pa_font_use)
-- [ ] After a redaction, a text edit, a picture edit or removing hidden text on a page, that page's recognised
+      Fixed: a simple font's FirstChar and LastChar are kept to 0…255 wherever a code is used (pa_font_use,
+      pa_put_widths); its own Widths are still read from where they start. Read from the code; no such font among the
+      test files (pdfa_test passes as before)
+- [x] After a redaction, a text edit, a picture edit or removing hidden text on a page, that page's recognised
       text (OCR layer) can no longer be removed and the page isn't counted as having one: the page's content is
       written again as one stream, without the mark the layer is found by. (native/paginaut.c, stamps_aside,
       is_ocr_stream, fo_ocr_apply)
-- [ ] Inserting pages from a PDF can copy the whole of that PDF in: a form button (any comment but a link) that
+      Fixed: a page whose layer is about to be written into its content is marked (PaginautOCRMerged), counts as
+      having a layer, and Remove recognized text takes the layer out as hidden text is taken out. Removing hidden text
+      clears the mark. Not tried on a recognised page yet
+- [x] Inserting pages from a PDF can copy the whole of that PDF in: a form button (any comment but a link) that
       goes to a page brings that page along, and with it every page of the file. The saved file is far bigger and
       still holds the pages left out. (native/paginaut.c, insert_pdf_pages, is_internal_link)
-- [ ] Sanitize, scripts: scripts on a form field that has several boxes (they sit on the field, not on its boxes)
+      Fixed: comments and form buttons lose what jumps to a page of the file they come from (/Dest, GoTo in /A, /AA
+      and /Next) before they're copied; the button stays. Read from the code; insert_test passes, with no such button
+      among the test files
+- [x] Sanitize, scripts: scripts on a form field that has several boxes (they sit on the field, not on its boxes)
       and on bookmarks are left in. (native/paginaut.c, fo_pdf_sanitize, drop_scripts_in)
-- [ ] Page labels that start again with the same style (two reports in one file, each numbered from 1) run on
+      Fixed: the form's fields themselves and the bookmarks are gone through too
+- [x] Page labels that start again with the same style (two reports in one file, each numbered from 1) run on
       after any page is moved or deleted: the second report becomes 50, 51, 52. (native/paginaut.c, write_labels)
+      Fixed: a page continues the numbering before it only within its own range of labels; another range starts at its
+      own first number. meta_test: two reports stay two after a page is deleted
 
 Cleanup:
 
-- [ ] Removing every watermark leaves the empty "Watermark" layer in the file, which other readers still list.
+- [x] Removing every watermark leaves the empty "Watermark" layer in the file, which other readers still list.
       (native/paginaut.c, fo_stamp_remove, watermark_layer)
+      Fixed: the page lets go of the layer, and when no page uses it the layer leaves the document. stamp_test checks
+      a saved copy
 - [ ] A photo loaded while making a signature is kept in memory until the window closes (its object URL is never
       revoked). (src/ui/SignMaker.tsx, Photo, load)
 - [ ] Save as Word keeps every page's pictures in memory, then the zip writer copies them all again; its sizes and

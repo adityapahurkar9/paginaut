@@ -101,6 +101,15 @@ fn main() {
     let removed = d.remove_stamps("Header", None).unwrap();
     check("remove headers after reopening", removed == n && !d.text(500).unwrap().lock().all().contains("Page 501 of 1000"), format!("{removed} pages in {:?}", t.elapsed()));
     check("watermark kept", d.text(2).unwrap().lock().all().contains("CONFIDENTIAL"), String::new());
+
+    // 7. The last watermark gone: its "Watermark" layer leaves the file too (other readers went on listing it).
+    let has_layer = |path: &str| std::fs::read(path).unwrap().windows(13).any(|w| w == b"PaginautLayer");
+    let with = format!("{tmp}/with-watermark.pdf");
+    let without = format!("{tmp}/without-watermark.pdf");
+    engine.save_parts(saved.doc_id, vec![paginaut_lib::engine::Part { pages: (0..n).collect(), path: with.clone() }], vec![0; n]).unwrap();
+    d.remove_stamps("Watermark", None).unwrap();
+    engine.save_parts(saved.doc_id, vec![paginaut_lib::engine::Part { pages: (0..n).collect(), path: without.clone() }], vec![0; n]).unwrap();
+    check("the Watermark layer goes with the last watermark", has_layer(&with) && !has_layer(&without), format!("with {}, without {}", has_layer(&with), has_layer(&without)));
     engine.close(saved.doc_id);
 
     println!("{}", if failures == 0 { "ALL PASSED".to_string() } else { format!("{failures} FAILED") });

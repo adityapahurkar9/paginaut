@@ -2002,6 +2002,8 @@ typedef struct
 	pdf_obj *style;
 	const char *prefix;
 	int value;
+	int range;  /* which of the document's label ranges the page is in (-1: none) */
+	int first;  /* the number that range starts at */
 } page_label;
 
 /* Collects the ranges of a page label number tree, in page order. */
@@ -2040,13 +2042,16 @@ static page_label *read_labels(fz_context *ctx, pdf_document *doc, pdf_obj *tree
 					r = k;
 			out[i].prefix = "";
 			out[i].value = i + 1;
+			out[i].range = r;
+			out[i].first = 1;
 			if (r >= 0)
 			{
 				pdf_obj *d = pdf_array_get(ctx, dicts, r);
 				pdf_obj *st = pdf_dict_get(ctx, d, PDF_NAME(St));
 				out[i].style = pdf_dict_get(ctx, d, PDF_NAME(S));
 				out[i].prefix = pdf_dict_get_text_string(ctx, d, PDF_NAME(P));
-				out[i].value = (st ? pdf_to_int(ctx, st) : 1) + i - pdf_array_get_int(ctx, starts, r);
+				out[i].first = st ? pdf_to_int(ctx, st) : 1;
+				out[i].value = out[i].first + i - pdf_array_get_int(ctx, starts, r);
 			}
 		}
 	}
@@ -2063,28 +2068,37 @@ static page_label *read_labels(fz_context *ctx, pdf_document *doc, pdf_obj *tree
 	return out;
 }
 
-/* Page labels for the new page order: a page with the same style and prefix as
+/* Page labels for the new page order: a page from the same range of labels as
  * the one before it continues its numbering (so deleting page 5 of 1…10 gives
  * 1…9, and front matter in i, ii, iii stays apart); pages added from other
- * files continue the page before them. */
+ * files continue the page before them. A page from another range starts that
+ * range's numbering again, also when its style and prefix are the same as the
+ * range before (two reports in one file, each numbered from 1, stay two: by
+ * style alone the second ran on as 50, 51, 52 once any page was moved or deleted). */
 static void write_labels(fz_context *ctx, pdf_obj *root, const page_label *old, int file_pages, const int *order, int count)
 {
 	pdf_obj *tree = pdf_dict_put_dict(ctx, root, PDF_NAME(PageLabels), 1);
 	pdf_obj *nums = pdf_dict_put_array(ctx, tree, PDF_NAME(Nums), 8);
-	page_label prev = { NULL, "", 0 };
+	page_label prev = { NULL, "", 0, -1, 1 };
 	for (int k = 0; k < count; k++)
 	{
 		page_label l = old[order[k]];
 		int added = order[k] >= file_pages;
-		int same = k > 0 && (added || (pdf_name_eq(ctx, l.style, prev.style) && !strcmp(l.prefix, prev.prefix)));
+		int same = k > 0 && (added || (l.range == prev.range && pdf_name_eq(ctx, l.style, prev.style) && !strcmp(l.prefix, prev.prefix)));
 		if (same)
 		{
 			l.style = prev.style;
 			l.prefix = prev.prefix;
 			l.value = prev.value + 1;
+			l.range = prev.range;
+			l.first = prev.first;
 		}
 		else
 		{
+			/* The first page shown of its range: the range's own first number, unless the page is the range's
+			 * first as it was (then it's that already). After the first page of all, as before: its own number. */
+			if (k > 0)
+				l.value = l.first;
 			pdf_obj *d;
 			pdf_array_push_int(ctx, nums, k);
 			d = pdf_array_push_dict(ctx, nums, 3);
@@ -2417,6 +2431,41 @@ static int is_internal_link(fz_context *ctx, pdf_obj *annot)
 	return pdf_name_eq(ctx, pdf_dict_get(ctx, a, PDF_NAME(S)), PDF_NAME(GoTo));
 }
 
+/* An action that jumps to a page of its own document (GoTo), itself or further down its chain of /Next. */
+static int action_to_page(fz_context *ctx, pdf_obj *act, int depth)
+{
+	pdf_obj *next;
+	if (depth > 8 || !pdf_is_dict(ctx, act))
+		return 0;
+	if (pdf_name_eq(ctx, pdf_dict_get(ctx, act, PDF_NAME(S)), PDF_NAME(GoTo)))
+		return 1;
+	next = pdf_dict_get(ctx, act, PDF_NAME(Next));
+	if (pdf_is_array(ctx, next))
+	{
+		for (int i = 0; i < pdf_array_len(ctx, next); i++)
+			if (action_to_page(ctx, pdf_array_get(ctx, next, i), depth + 1))
+				return 1;
+		return 0;
+	}
+	return action_to_page(ctx, next, depth + 1);
+}
+
+/* Takes off an annotation that isn't a link (a form button, a comment) what jumps to a page of the document it
+ * comes from: copying it would bring that page along, and through the page every page of that file, so the
+ * saved file was far bigger and still held the pages left out. The button stays; its jump doesn't (the page it
+ * went to isn't there, or is somewhere else). */
+static void cut_page_jumps(fz_context *ctx, pdf_obj *annot)
+{
+	pdf_obj *aa = pdf_dict_get(ctx, annot, PDF_NAME(AA));
+	pdf_dict_del(ctx, annot, PDF_NAME(Dest));
+	if (action_to_page(ctx, pdf_dict_get(ctx, annot, PDF_NAME(A)), 0))
+		pdf_dict_del(ctx, annot, PDF_NAME(A));
+	if (pdf_is_dict(ctx, aa))
+		for (int i = pdf_dict_len(ctx, aa) - 1; i >= 0; i--)
+			if (action_to_page(ctx, pdf_dict_get_val(ctx, aa, i), 0))
+				pdf_dict_del(ctx, aa, pdf_dict_get_key(ctx, aa, i));
+}
+
 /* Where an internal link goes: the index in pages[] of its target page (with
  * the view in *view, a new array in dst without the page), or -1 when its
  * page isn't among those copied. */
@@ -2567,6 +2616,8 @@ static void insert_pdf_pages(fz_context *ctx, pdf_document *dst, pdf_document *s
 						pdf_dict_del(ctx, a, PDF_NAME(Dest));
 						pdf_dict_del(ctx, a, PDF_NAME(A));
 					}
+					else
+						cut_page_jumps(ctx, a);
 					copy = pdf_graft_mapped_object(ctx, map, a);
 					pdf_dict_put(ctx, copy, PDF_NAME(P), ref);
 					if (to >= 0)
@@ -3623,6 +3674,12 @@ static pdf_obj *stamps_aside(fz_context *ctx, pdf_page *page)
 		for (int i = 0; i < pdf_array_len(ctx, contents); i++)
 		{
 			pdf_obj *s = pdf_array_get(ctx, contents, i);
+			/* Recognised text (an OCR layer) is found by the mark on its own streams. The rewrite that follows
+			 * writes the page's content as one stream, the layer's text in it and the mark gone (the layer
+			 * can't be set aside like a stamp: a redaction has to take its words out too). The page is marked
+			 * instead, so it still counts as having a layer, and the layer can still be removed. */
+			if (pdf_to_bool(ctx, pdf_dict_gets(ctx, s, "PaginautOCR")))
+				pdf_dict_puts(ctx, page->obj, "PaginautOCRMerged", PDF_TRUE);
 			if (pdf_dict_gets(ctx, s, "PaginautStamp"))
 				pdf_array_push(ctx, seen_own ? back : front, s);
 			else
@@ -5408,6 +5465,43 @@ static int drop_scripts_in(fz_context *ctx, pdf_obj *dict)
 	return n;
 }
 
+/* Scripts on the form's fields themselves: a field with several boxes keeps its scripts on the field, not on
+ * the boxes the pages list, so going through the pages' annotations misses them. */
+static int drop_field_scripts(fz_context *ctx, pdf_obj *fields, int depth)
+{
+	int n = 0;
+	if (depth > 32)
+		return 0;
+	for (int i = 0; i < pdf_array_len(ctx, fields); i++)
+	{
+		pdf_obj *f = pdf_array_get(ctx, fields, i);
+		if (pdf_mark_obj(ctx, f))
+			continue;
+		fz_try(ctx)
+		{
+			n += drop_scripts_in(ctx, f);
+			n += drop_field_scripts(ctx, pdf_dict_get(ctx, f, PDF_NAME(Kids)), depth + 1);
+		}
+		fz_always(ctx)
+			pdf_unmark_obj(ctx, f);
+		fz_catch(ctx)
+			fz_rethrow(ctx);
+	}
+	return n;
+}
+
+/* Scripts run by clicking a bookmark. (A bookmark that only ran a script stays, and does nothing.) */
+static int drop_outline_scripts(fz_context *ctx, pdf_obj *item, int depth)
+{
+	int n = 0, guard = 0;
+	for (; pdf_is_dict(ctx, item) && guard < 100000 && depth <= 64; item = pdf_dict_get(ctx, item, PDF_NAME(Next)), guard++)
+	{
+		n += drop_scripts_in(ctx, item);
+		n += drop_outline_scripts(ctx, pdf_dict_get(ctx, item, PDF_NAME(First)), depth + 1);
+	}
+	return n;
+}
+
 /* Takes out of the document, inside the caller's undo step: what & 1 its information and XMP
  * metadata, 2 scripts (document, page, link and field JavaScript), 4 attached files, 8 comments
  * (annotations other than links, form fields and redaction marks), 16 hidden (invisible) text.
@@ -5479,6 +5573,8 @@ char *fo_pdf_sanitize(fo_ctx *c, fo_doc *d, int what)
 				for (int k = 0; k < pdf_array_len(CTX, annots); k++)
 					scripts += drop_scripts_in(CTX, pdf_array_get(CTX, annots, k));
 			}
+			scripts += drop_field_scripts(CTX, pdf_dict_getl(CTX, root, PDF_NAME(AcroForm), PDF_NAME(Fields), NULL), 0);
+			scripts += drop_outline_scripts(CTX, pdf_dict_getl(CTX, root, PDF_NAME(Outlines), PDF_NAME(First), NULL), 0);
 		}
 		if (what & 4)
 		{
@@ -5533,6 +5629,8 @@ char *fo_pdf_sanitize(fo_ctx *c, fo_doc *d, int what)
 						pdf_drop_obj(CTX, saved);
 					fz_catch(CTX)
 						fz_rethrow(CTX);
+					/* Recognised text is hidden text: it went with the rest, so the page has no layer left. */
+					pdf_dict_dels(CTX, page->obj, "PaginautOCRMerged");
 					hidden += count;
 				}
 			}
@@ -5556,6 +5654,48 @@ char *fo_pdf_sanitize(fo_ctx *c, fo_doc *d, int what)
 }
 
 /* Removes the stamps of one kind from a page. Returns how many were there. */
+/* After a page's watermarks went: the page lets go of the "Watermark" layer, and when no page uses it any more
+ * the layer leaves the document (other readers went on listing an empty "Watermark" layer). */
+static void watermark_layer_unused(fz_context *ctx, pdf_document *doc, pdf_obj *pobj)
+{
+	pdf_obj *root = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root));
+	pdf_obj *ocp = pdf_dict_get(ctx, root, PDF_NAME(OCProperties));
+	pdf_obj *ocgs = pdf_dict_get(ctx, ocp, PDF_NAME(OCGs)), *layer = NULL, *props, *d;
+	int n;
+	props = pdf_dict_getp(ctx, pobj, "Resources/Properties");
+	if (pdf_dict_gets(ctx, props, "PgnWM"))
+		pdf_dict_dels(ctx, props, "PgnWM");
+	for (int i = 0; i < pdf_array_len(ctx, ocgs); i++)
+		if (pdf_dict_gets(ctx, pdf_array_get(ctx, ocgs, i), "PaginautLayer"))
+			layer = pdf_array_get(ctx, ocgs, i);
+	if (!layer)
+		return;
+	n = pdf_count_pages(ctx, doc);
+	for (int i = 0; i < n; i++)
+	{
+		pdf_obj *res = pdf_dict_get_inheritable(ctx, pdf_lookup_page_obj(ctx, doc, i), PDF_NAME(Resources));
+		if (pdf_dict_getp(ctx, res, "Properties/PgnWM"))
+			return;
+	}
+	for (int i = pdf_array_len(ctx, ocgs) - 1; i >= 0; i--)
+		if (!pdf_objcmp(ctx, pdf_array_get(ctx, ocgs, i), layer))
+			pdf_array_delete(ctx, ocgs, i);
+	d = pdf_dict_get(ctx, ocp, PDF_NAME(D));
+	{
+		static pdf_obj * const lists[] = { PDF_NAME(Order), PDF_NAME(ON), PDF_NAME(OFF), PDF_NAME(Locked) };
+		for (int k = 0; k < (int)nelem(lists); k++)
+		{
+			pdf_obj *list = pdf_dict_get(ctx, d, lists[k]);
+			for (int i = pdf_array_len(ctx, list) - 1; i >= 0; i--)
+				if (!pdf_objcmp(ctx, pdf_array_get(ctx, list, i), layer))
+					pdf_array_delete(ctx, list, i);
+		}
+	}
+	/* The layers were ours alone: nothing is left to say about them. */
+	if (pdf_array_len(ctx, ocgs) == 0)
+		pdf_dict_del(ctx, root, PDF_NAME(OCProperties));
+}
+
 int fo_stamp_remove(fo_ctx *c, fo_page *p, const char *kind)
 {
 	pdf_page *page = pdf_page_from_fz_page(CTX, (fz_page *)p);
@@ -5580,6 +5720,8 @@ int fo_stamp_remove(fo_ctx *c, fo_page *p, const char *kind)
 		for (int i = pdf_dict_len(CTX, xobjs) - 1; count && i >= 0; i--)
 			if (!strncmp(pdf_to_name(CTX, pdf_dict_get_key(CTX, xobjs, i)), prefix, strlen(prefix)))
 				pdf_dict_del(CTX, xobjs, pdf_dict_get_key(CTX, xobjs, i));
+		if (count && !strcmp(kind, "Watermark"))
+			watermark_layer_unused(CTX, page->doc, page->obj);
 	}
 	fz_catch(CTX)
 	{
@@ -8781,6 +8923,19 @@ static int is_ocr_stream(fz_context *ctx, pdf_obj *o)
 	return pdf_to_bool(ctx, pdf_dict_gets(ctx, o, "PaginautOCR"));
 }
 
+/* The page carries recognised text: in streams of its own, or written into the page's content by a later
+ * rewrite (see stamps_aside). */
+static int page_has_ocr(fz_context *ctx, pdf_obj *pobj)
+{
+	pdf_obj *contents = pdf_dict_get(ctx, pobj, PDF_NAME(Contents));
+	if (pdf_to_bool(ctx, pdf_dict_gets(ctx, pobj, "PaginautOCRMerged")))
+		return 1;
+	for (int i = 0; i < pdf_array_len(ctx, contents); i++)
+		if (is_ocr_stream(ctx, pdf_array_get(ctx, contents, i)))
+			return 1;
+	return 0;
+}
+
 static pdf_obj *add_ocr_stream(fz_context *ctx, pdf_document *doc, fz_buffer *b)
 {
 	pdf_obj *d = pdf_new_dict(ctx, doc, 1);
@@ -8825,6 +8980,32 @@ int fo_ocr_apply(fo_ctx *c, fo_page *p, const char *content, size_t len, int *fo
 			for (int i = pdf_array_len(CTX, contents) - 1; i >= 0; i--)
 				if (is_ocr_stream(CTX, pdf_array_get(CTX, contents, i)))
 					pdf_array_delete(CTX, contents, i);
+			/* A layer that a redaction or an edit wrote into the page's own content has no stream to drop: its
+			 * text is what's invisible on the page, and is taken out as Sanitize takes hidden text out. */
+			if (pdf_to_bool(CTX, pdf_dict_gets(CTX, pobj, "PaginautOCRMerged")))
+			{
+				int count = 0;
+				pdf_sanitize_filter_options sopts = { 0 };
+				pdf_filter_factory filters[2] = { { pdf_new_sanitize_filter, &sopts }, { NULL, NULL } };
+				pdf_filter_options fopts = { 0 };
+				pdf_obj *saved;
+				sopts.opaque = &count;
+				sopts.text_filter = drop_invisible_text;
+				fopts.recurse = 0;
+				fopts.instance_forms = 1;
+				fopts.filters = filters;
+				saved = stamps_aside(CTX, page);
+				fz_try(CTX)
+				{
+					pdf_filter_page_contents(CTX, doc, page, &fopts);
+					stamps_back(CTX, page, saved);
+				}
+				fz_always(CTX)
+					pdf_drop_obj(CTX, saved);
+				fz_catch(CTX)
+					fz_rethrow(CTX);
+				pdf_dict_dels(CTX, pobj, "PaginautOCRMerged");
+			}
 			break;
 		}
 
@@ -8903,13 +9084,8 @@ int fo_ocr_layer_count(fo_ctx *c, fo_doc *d)
 		int count = pdf_count_pages(CTX, pdf);
 		for (int i = 0; i < count; i++)
 		{
-			pdf_obj *contents = pdf_dict_get(CTX, pdf_lookup_page_obj(CTX, pdf, i), PDF_NAME(Contents));
-			for (int k = 0; k < pdf_array_len(CTX, contents); k++)
-				if (is_ocr_stream(CTX, pdf_array_get(CTX, contents, k)))
-				{
-					n++;
-					break;
-				}
+			if (page_has_ocr(CTX, pdf_lookup_page_obj(CTX, pdf, i)))
+				n++;
 		}
 	}
 	fz_catch(CTX)
@@ -8929,9 +9105,7 @@ int fo_ocr_has_layer(fo_ctx *c, fo_page *p)
 		return 0;
 	fz_try(CTX)
 	{
-		pdf_obj *contents = pdf_dict_get(CTX, page->obj, PDF_NAME(Contents));
-		for (int i = 0; i < pdf_array_len(CTX, contents) && !found; i++)
-			found = is_ocr_stream(CTX, pdf_array_get(CTX, contents, i));
+		found = page_has_ocr(CTX, page->obj);
 	}
 	fz_catch(CTX)
 		return 0;
@@ -11272,8 +11446,13 @@ static fz_font *pa_program(fz_context *ctx, pdf_obj *font)
 /* A simple font's Widths again over `first`..`last`: `want` where set (>= 0), the old width otherwise. */
 static void pa_put_widths(fz_context *ctx, pdf_document *doc, pdf_obj *font, int first, int last, const int *want)
 {
-	pdf_obj *old = pdf_dict_get(ctx, font, PDF_NAME(Widths)), *w = pdf_new_array(ctx, doc, last - first + 1);
+	pdf_obj *old, *w;
 	int ofirst = pdf_dict_get_int(ctx, font, PDF_NAME(FirstChar));
+	/* `want` has the 256 codes a simple font can have: never read outside them. */
+	first = fz_clampi(first, 0, 255);
+	last = fz_clampi(last, first, 255);
+	old = pdf_dict_get(ctx, font, PDF_NAME(Widths));
+	w = pdf_new_array(ctx, doc, last - first + 1);
 	fz_try(ctx)
 	{
 		for (int c = first; c <= last; c++)
@@ -11498,6 +11677,15 @@ static void pa_font_use(fz_context *ctx, pdf_document *doc, pa_found *f)
 			pdf_obj *font = u->font, *widths = pdf_dict_get(ctx, font, PDF_NAME(Widths));
 			int n = u->cid ? 65536 : 256, first = pdf_dict_get_int(ctx, font, PDF_NAME(FirstChar)), last = pdf_dict_get_int(ctx, font, PDF_NAME(LastChar));
 			int bad = 0, missing = 0, lo = 255, hi = 0;
+			/* Where the font's own Widths start (its entries are counted from there). A simple font has the codes 0
+			 * to 255 and no others: a FirstChar below 0 or a LastChar above 255 (a damaged or made-up font) is kept
+			 * to that range for everything that goes by code, or `want` (256 entries) is read past its end. */
+			int ofirst = first;
+			if (!u->cid)
+			{
+				first = fz_clampi(first, 0, 255);
+				last = fz_clampi(last, 0, 255);
+			}
 			fz_free(ctx, want);
 			want = NULL;
 			want = fz_malloc_array(ctx, n, int);
@@ -11516,7 +11704,7 @@ static void pa_font_use(fz_context *ctx, pdf_document *doc, pa_found *f)
 						missing = 1;
 						continue;
 					}
-					if (PA_BIT(u->seen, c) && c >= first && c <= last && fabsf((pdf_array_get_real(ctx, widths, c - first) - u->t3w[c]) * scale) > 1)
+					if (PA_BIT(u->seen, c) && c >= first && c <= last && fabsf((pdf_array_get_real(ctx, widths, c - ofirst) - u->t3w[c]) * scale) > 1)
 					{
 						bad = 1;
 						want[c] = (int)u->t3w[c];
@@ -11527,7 +11715,7 @@ static void pa_font_use(fz_context *ctx, pdf_document *doc, pa_found *f)
 					/* Type 3 widths can be fractions: written as reals. */
 					for (int c = first; c <= last; c++)
 						if (want[c] >= 0)
-							pdf_array_put_real(ctx, widths, c - first, u->t3w[c]);
+							pdf_array_put_real(ctx, widths, c - ofirst, u->t3w[c]);
 				}
 			}
 			else if (pa_font_embedded(ctx, font) && (prog = pa_program(ctx, font)) != NULL)
@@ -11550,7 +11738,7 @@ static void pa_font_use(fz_context *ctx, pdf_document *doc, pa_found *f)
 					if (u->cid)
 						dw = pdf_lookup_hmtx(ctx, u->fd, c).w;
 					else if (widths && c >= first && c <= last)
-						dw = pdf_array_get_int(ctx, widths, c - first);
+						dw = pdf_array_get_int(ctx, widths, c - ofirst);
 					else
 						dw = -100000; /* no width given: PDF/A wants one */
 					if (abs(pw - dw) > 1)
