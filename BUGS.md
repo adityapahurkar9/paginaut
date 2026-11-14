@@ -213,13 +213,18 @@ actions.ts, textedit.ts, office.ts, compare.ts, sign.ts, extract.ts, pagesize.ts
 reflow/model.ts, find.ts and overrides.ts, mobile/records.ts, main.tsx, speech.ts, search.ts, shelf.ts and flow.ts,
 ui/SecureUI.tsx and most of ui/PagesUI.tsx. Most serious first.
 
-- [ ] Moving a Markdown tab to another window loses what was typed in its source and not yet saved. The source is
+- [x] Moving a Markdown tab to another window loses what was typed in its source and not yet saved. The source is
       kept by the tab's key in the window it was opened in; the move doesn't take it along, and the old window
       forgets it when the tab leaves. The new window reads the file from disk again, still shows the tab as changed,
       and Save then offers Save as PDF. (src/markdown.ts, sources; src/windows.ts, pack and busy)
-- [ ] A Markdown file that isn't UTF-8 (Windows-1252, UTF-16) is read with its other letters turned into "�", and
+      Fixed: the source (as typed, and as last saved) travels with the tab (markdown.ts packMdSource / adoptMdSource),
+      and the pages are made again from it in the new window
+- [x] A Markdown file that isn't UTF-8 (Windows-1252, UTF-16) is read with its other letters turned into "�", and
       saving writes that back over the file. A UTF-8 file's byte order mark is dropped on save. Such a file should
       be read in its own encoding, or opened read-only. (src-tauri/src/desk.rs, markdown_read and markdown_save)
+      Fixed: read in its own encoding (UTF-16 by its mark, else Windows-1252) and opened read-only, as chosen: the
+      pane says why and offers "Save a UTF-8 copy", which opens the copy to edit. A UTF-8 file's byte order mark is
+      kept on saving. Unit test desk::tests::markdown_encodings; not tried in the running app yet
 - [x] Android: opening a file that's read where it is while it's already held drops the new one's link. Such a file
       always gets the same link (direct/<its address, hashed>/<name>): the second open deletes and remakes the
       folder and replaces the held handle without closing it, and when the first one is let go that closes the
@@ -229,45 +234,65 @@ ui/SecureUI.tsx and most of ui/PagesUI.tsx. Most serious first.
       (PaginautPlugin.kt, open, openDirect and release; src/mobile/shelf.ts, fillCovers)
       Fixed: every open of a file read in place gets a folder of its own (PaginautPlugin.kt directDir), so two opens
       of one file don't share a link or a handle. Not built or run on Android yet
-- [ ] Android: a bad book on the shelf can get the document you're reading refused. When the engine stops, each
+- [x] Android: a bad book on the shelf can get the document you're reading refused. When the engine stops, each
       document with something under way takes a strike; a cover being drawn for the shelf has no strike (and no
       refusal) of its own. So a damaged book whose cover stops the engine twice in two minutes gets the open,
       healthy document closed as "stopped the engine twice", and the bad book is tried again on every scan.
       (src-tauri/src/engine_link.rs, strike, engine_stopped and cover)
-- [ ] A signature made with an expired certificate shows as valid on the signer's own word about when it signed.
+      Fixed: an engine that stops while a cover is drawn is put down to that book, not to the open document; a book
+      whose cover stops the engine twice isn't tried again until Paginaut starts anew (engine_link.rs covering,
+      bad_covers). Not built or run on Android yet
+- [x] A signature made with an expired certificate shows as valid on the signer's own word about when it signed.
       The certificate is judged at the time the signature claims (on Linux also at the time of a timestamp from a
       service that isn't trusted), and "expired" is shown green: "valid when it signed, expired since". Without a
       trusted timestamp nothing proves when it was signed; that case should read as a warning.
       (src-tauri/src/dsc.rs, verify on both systems; src/dsc.ts, verdictOf)
-- [ ] A table saved as Excel gets wrong numbers when the figures use a decimal comma: every comma is taken out
+      Fixed: "expired" is valid only with a trusted timestamp; otherwise a warning that says nothing proves when it
+      was signed. Linux no longer judges the certificate at the time of a timestamp it doesn't trust
+- [x] A table saved as Excel gets wrong numbers when the figures use a decimal comma: every comma is taken out
       before the number is read, so "12,5" becomes 125 and "1.234,56" becomes 1.23456 (percentages the same). A
       comma should count as a thousands mark only when groups of two or three digits follow it; otherwise the cell
       should stay text. (src-tauri/src/engine/table.rs, number and percent)
-- [ ] Linux: converting Office files to PDF into a chosen folder writes them next to it under a name with a
+      Fixed: a comma counts as a thousands mark only before groups of three digits (or twos before a last three, as in
+      1,23,456); otherwise the cell stays text. Unit-tested
+- [x] Linux: converting Office files to PDF into a chosen folder writes them next to it under a name with a
       backslash in it ("out\report.pdf"): the path is put together with "\\". Names already taken are also compared
       in lower case, where Linux keeps Report and report apart. (src/office.ts, runConvert)
-- [ ] Compare: changing an option or swapping sides while a comparison runs starts another without stopping the
+      Fixed: the path is put together with the folder's own separator, and names taken are compared with pathKey. Not
+      run on Linux yet
+- [x] Compare: changing an option or swapping sides while a comparison runs starts another without stopping the
       first. The first keeps going in the engine and Stop no longer reaches it (its number was replaced).
       (src/compare.ts, compareAgain and swapSides)
-- [ ] Android: the cache tidy can delete the copy of the document just opened. A tidy already under way is reused
+      Fixed: the comparison still running is stopped before the next starts
+- [x] Android: the cache tidy can delete the copy of the document just opened. A tidy already under way is reused
       by a later call, and doesn't know the copy that call asked to keep. (src/mobile/records.ts, tidyCache)
-- [ ] A short line at the top or bottom of a page made only of the letters i, v, x, l, c, d, m is taken for a
+      Fixed: a running tidy keeps every copy asked to be kept by the calls it serves, checked again just before
+      deleting. Not built or run on Android yet
+- [x] A short line at the top or bottom of a page made only of the letters i, v, x, l, c, d, m is taken for a
       Roman page number and left out: "CV" at the head of a résumé, "Civil", "Mid", "DVD". Read and Book modes and
       read aloud drop it, and so do Save as Word and Markdown. A real Roman numeral should be asked for (and a
       small one). (src/reflow/model.ts, PAGE_NUMBER; src-tauri/src/flow.rs, page_number)
-- [ ] Linux: a timestamp is put into the signature without checking it is the one asked for (the same random
+      Fixed: only a real, small Roman numeral in one case counts (i to lxxxix: flow.rs roman_folio, model.ts
+      isPageNumber). Unit-tested
+- [x] Linux: a timestamp is put into the signature without checking it is the one asked for (the same random
       number, the same hash of the signature). A wrong or replayed answer is embedded and signing says it worked.
       (src-tauri/src/dsc.rs, the Linux add_timestamp)
-- [ ] Save as Markdown writes "\2024. A year" for a paragraph that starts with a number and a dot, and the
+      Fixed: the answer must hold this request's random number and the hash of this signature, or signing fails saying
+      so. Compiled and its tests pass on Linux; not tried against a service that answers wrongly
+- [x] Save as Markdown writes "\2024. A year" for a paragraph that starts with a number and a dot, and the
       backslash shows: Markdown takes a backslash only before punctuation. The dot is what needs it ("2024\.").
       The test expects the wrong form. (src-tauri/src/markdown.rs, escape_start)
-- [ ] Compare reads an Excel file's text one place off after an empty entry written as <si/> in its list of
+      Fixed: the backslash goes before the dot (or bracket); the test expects that now
+- [x] Compare reads an Excel file's text one place off after an empty entry written as <si/> in its list of
       shared text (Excel itself writes <si><t/></si>; other tools may not). (src-tauri/src/officetext.rs,
       shared_strings)
-- [ ] Edit text: with a picture selected, the one-key shortcuts still run (the selection box has the focus, not a
+      Fixed: <si/> counts as an entry
+- [x] Edit text: with a picture selected, the one-key shortcuts still run (the selection box has the focus, not a
       text field), so R turns the whole page. (src/main.tsx, the keys; src/textedit.ts)
-- [ ] Protect: when checking the permissions password fails (not a wrong password: the call itself), nothing is
+      Fixed: letters typed with a picture selected don't reach the app's shortcuts
+- [x] Protect: when checking the permissions password fails (not a wrong password: the call itself), nothing is
       said. (src/ui/SecureUI.tsx, unlock)
+      Fixed: said: "Couldn't check the password: …"
 
 Fourth pass, the same day. Read for it: the rest of dsc.rs (Windows signing and checking), engine/pdfhtml.rs,
 engine/pdfa.rs, officetext.rs and compare.rs; dragghost.rs, base64.rs; api.ts, skin.ts, themes.ts, modes.ts,
@@ -275,42 +300,58 @@ panes.ts, toolpanes.ts; reflow's BookView, ReadView, LayoutEditor and render; th
 Library, ShelfView, Storage, select, state, native, nav); every file in src/ui; EngineService.kt and
 RefusedActivity.kt; and parts of paginaut.c (see the note at the top).
 
-- [ ] Book mode: text written without spaces (Chinese, Japanese, Thai) can't be split across pages, since a
+- [x] Book mode: text written without spaces (Chinese, Japanese, Thai) can't be split across pages, since a
       paragraph is only cut at a space. A paragraph taller than a page is put whole on one page and its end is cut
       off, never shown. (src/reflow/BookView.ts, fit and paginate)
-- [ ] Attaching a file whose name is very long (511 bytes or more, about 170 Chinese or Hindi letters) when the PDF
+      Fixed: a paragraph can be cut between letters of scripts written without spaces (never before a mark or closing
+      punctuation), and text with nowhere to cut that fits is cut between any two letters instead of being put whole
+      on one page. Not tried in the running app yet
+- [x] Attaching a file whose name is very long (511 bytes or more, about 170 Chinese or Hindi letters) when the PDF
       already has an attachment of that name hangs the app: the numbered name ("name (2)") is cut back to the same
       name, so the search for a free one never ends. (src-tauri/native/paginaut.c, fo_pdf_attachment_add)
-- [ ] Split by bookmarks: two bookmarks whose names differ only in capitals ("Summary", "SUMMARY") get the same
+      Fixed: the name the numbers are added to is cut short enough (at a whole letter) that they fit
+- [x] Split by bookmarks: two bookmarks whose names differ only in capitals ("Summary", "SUMMARY") get the same
       file on Windows, so one part replaces the other and the message still counts both. (src/ui/PagesUI.tsx,
       SplitDialogInner, plan)
-- [ ] Read and Book modes keep their place as a count of paragraphs. After pages are moved or deleted (from the
+      Fixed: names are counted as the system tells files apart, so the second gets "(2)"
+- [x] Read and Book modes keep their place as a count of paragraphs. After pages are moved or deleted (from the
       sidebar, while reading) the text is built again and the old count points somewhere else, so the view jumps.
       (src/ui/Reflow.tsx, ReflowHost; tab.reflowBlock)
-- [ ] An e-book made from a PDF with more than 512 fonts: text in the fonts after the 512th isn't drawn, on screen
+      Fixed: when the text is made anew the place is found again by the page of the file it was on and how far into it
+- [x] An e-book made from a PDF with more than 512 fonts: text in the fonts after the 512th isn't drawn, on screen
       or in Save as PDF, and nothing says so. (src-tauri/native/paginaut.c, fo_pinned_pdf, MAX_FONTS)
-- [ ] Save as repaired EPUB leaves out a first or last line of a page made only of the letters i, v, x, l, c
+      Fixed: the font table grows with the fonts named
+- [x] Save as repaired EPUB leaves out a first or last line of a page made only of the letters i, v, x, l, c
       ("Civil", a lone "I"): it's taken for a Roman page number. (src-tauri/src/engine/pdfhtml.rs, is_folio)
-- [ ] The table tool asks the engine again after each change to its lines and shows whichever answer comes last,
+      Fixed: is_folio uses the same Roman numeral test (flow::roman_folio)
+- [x] The table tool asks the engine again after each change to its lines and shows whichever answer comes last,
       so after two quick changes the cells can be those of the earlier lines. (src/ui/TableUI.tsx, the effect on
       cols and rows)
-- [ ] Android, Document info: Created and Modified ignore the date's time zone, so they're hours off (and near
+      Fixed: an answer for earlier lines is dropped
+- [x] Android, Document info: Created and Modified ignore the date's time zone, so they're hours off (and near
       midnight a day off). The desktop reads the zone. (src/mobile/Sheets.tsx, pdfDate)
-- [ ] Page numbers: "Start numbering at" 0 and Bates "From" 0 turn back into 1, though both boxes allow 0.
+      Fixed: read as the desktop reads it. Not built or run on Android yet
+- [x] Page numbers: "Start numbering at" 0 and Bates "From" 0 turn back into 1, though both boxes allow 0.
       (src/ui/StampUI.tsx, HeaderDialogInner)
-- [ ] Sign pane: "Goes in the form's field … on page N" gives the page's number in the file, not where it's shown
+      Fixed: 0 stays 0; only an empty box is 1
+- [x] Sign pane: "Goes in the form's field … on page N" gives the page's number in the file, not where it's shown
       after pages were moved or deleted. (src/ui/CertSection.tsx)
-- [ ] Attached files: a file pinned to a page that has been deleted is listed as on "page 0".
+      Fixed: the page's number as shown
+- [x] Attached files: a file pinned to a page that has been deleted is listed as on "page 0".
       (src/ui/ExtractUI.tsx, Attachments)
-- [ ] Compare: with the list narrowed to one kind (Added, say), F7 and the arrows still stop at the differences
+      Fixed: it says "on a deleted page"
+- [x] Compare: with the list narrowed to one kind (Added, say), F7 and the arrows still stop at the differences
       that are hidden. (src/ui/CompareUI.tsx, step)
+      Fixed: F7 and the arrows step through the differences the list shows
 - [x] Convert: after the last page the progress reads one page too many ("Page 11 of 10…").
       (src/ui/ConvertPane.tsx)
       Fixed: never more than the total
-- [ ] Book mode in a narrow window shows one page but its bar still says two ("5–6 of 200").
+- [x] Book mode in a narrow window shows one page but its bar still says two ("5–6 of 200").
       (src/ui/Reflow.tsx, BookBar)
-- [ ] Android, Settings and Storage: with no copies kept it says "0.1 MB of copies". (src/mobile/Storage.tsx,
+      Fixed: one number when one page is shown
+- [x] Android, Settings and Storage: with no copies kept it says "0.1 MB of copies". (src/mobile/Storage.tsx,
       sizeText)
+      Fixed: "0 MB"
 
 Fifth pass, the same day. Read for it: the rest of native/paginaut.c, start to end.
 

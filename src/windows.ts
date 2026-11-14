@@ -13,6 +13,7 @@ import { pageSizeEdit } from "./pagesize";
 import { layoutEdit } from "./reflow/LayoutEditor";
 import type { FitMode, LayoutMode, ViewState } from "./render/Viewer";
 import { adoptTab, closeTabNow, openFiles, showToast, Tab } from "./store";
+import { adoptMdSource, packMdSource, type MdCarried } from "./markdown";
 
 /** A tab on its way to another window: its own record of itself, as plain data. */
 export interface TabTransfer {
@@ -35,6 +36,8 @@ export interface TabTransfer {
     zoom: number;
     fit: FitMode;
     view: ViewState | null;
+    /** A Markdown file's source as edited (with what isn't saved yet). */
+    md: MdCarried | null;
   };
 }
 
@@ -80,6 +83,7 @@ async function pack(tab: Tab): Promise<TabTransfer | null> {
       zoom: tab.zoom.value,
       fit: tab.fit.value,
       view: tab.viewer?.viewState() ?? null,
+      md: packMdSource(tab),
     },
   };
 }
@@ -117,6 +121,7 @@ export function attachTab(t: TabTransfer, index?: number) {
     tab.carriedView = d.view;
     tab.status.value = "ready";
   });
+  if (d.md) adoptMdSource(tab, d.md);
   adoptTab(tab, index);
 }
 

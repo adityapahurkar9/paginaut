@@ -10,6 +10,7 @@ import { ShelfAccess } from "./ShelfView";
 import { SortToggle, type SortState } from "./SortToggle";
 
 export function sizeText(n: number) {
+  if (n <= 0) return "0 MB";
   if (n < 1024 * 1024) return `${Math.max(0.1, n / 1024 / 1024).toFixed(1)} MB`;
   const mb = n / 1024 / 1024;
   return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;

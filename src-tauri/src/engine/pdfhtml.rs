@@ -961,8 +961,11 @@ fn running_key(t: &str) -> String {
     t.chars().filter(|c| !c.is_ascii_digit() && !"•·|".contains(*c)).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
+/// A page number standing alone on a line: digits or a small Roman numeral (flow::roman_folio: "Civil" or a
+/// heading like "CV" isn't one), with the dots and bars some are set between.
 fn is_folio(t: &str) -> bool {
-    !t.is_empty() && t.chars().all(|c| c.is_ascii_digit() || "ivxlcIVXLC •·|".contains(c))
+    let mut words = t.split(|c: char| c.is_whitespace() || "•·|".contains(c)).filter(|w| !w.is_empty()).peekable();
+    words.peek().is_some() && words.all(|w| w.chars().all(|c| c.is_ascii_digit()) || crate::flow::roman_folio(w))
 }
 
 fn same(a: f32, b: f32) -> bool {

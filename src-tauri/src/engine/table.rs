@@ -176,6 +176,26 @@ fn number(s: &str) -> Option<String> {
         Some(inner) => (true, inner.trim()),
         None => (false, t),
     };
+    // A comma is a thousands mark only where groups of digits follow it as such marks are written: threes
+    // ("1,234,567"), or twos before a last three ("1,23,456"). Anything else ("12,5", "1.234,56": a decimal comma)
+    // isn't a number read this way, and the cell stays text rather than become a wrong number.
+    if t.contains(',') {
+        let whole = t.strip_prefix('-').unwrap_or(t);
+        let whole = whole.split_once('.').map_or(whole, |(int, frac)| if frac.contains(',') { "," } else { int });
+        let groups: Vec<&str> = whole.split(',').collect();
+        let last = groups.len() - 1;
+        let grouped = groups.iter().enumerate().all(|(i, g)| {
+            g.chars().all(|c| c.is_ascii_digit())
+                && match i {
+                    0 => (1..=3).contains(&g.len()),
+                    i if i == last => g.len() == 3,
+                    _ => g.len() == 2 || g.len() == 3,
+                }
+        });
+        if !grouped {
+            return None;
+        }
+    }
     let digits: String = t.chars().filter(|&ch| ch != ',').collect();
     let body = digits.strip_prefix('-').unwrap_or(&digits);
     let valid = !body.is_empty()
@@ -330,6 +350,14 @@ mod tests {
         assert_eq!(number("007"), None);
         assert_eq!(number("0.5").as_deref(), Some("0.5"));
         assert_eq!(number("12a"), None);
+        // A decimal comma isn't a thousands mark: text, not a wrong number.
+        assert_eq!(number("12,5"), None);
+        assert_eq!(number("1.234,56"), None);
+        assert_eq!(number("12,50"), None);
+        assert_eq!(number("1,2345"), None);
+        assert_eq!(number("1,234,567.25").as_deref(), Some("1234567.25"));
+        assert_eq!(number("-1,234").as_deref(), Some("-1234"));
+        assert_eq!(percent("12,5%"), None);
         assert_eq!(percent("12.5%"), Some(("0.125".into(), true)));
         assert_eq!(percent("7.1 %"), Some(("0.071".into(), true)));
         assert_eq!(percent("(3%)"), Some(("-0.03".into(), false)));

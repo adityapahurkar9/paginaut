@@ -808,7 +808,8 @@ mod imp {
                 0 => ("trusted", String::new()),
                 0x800B_0101 => match at.map(|t| chain_status(signer, store, Some(t)).0) {
                     Some(0) if out.timestamp_trusted => ("expired", "The certificate was valid when it signed (a trusted timestamp proves when) and has expired since.".into()),
-                    Some(0) => ("expired", "The certificate was valid when it signed and has expired since.".into()),
+                    // Only the signer's own word for when: shown as a warning (dsc.ts verdictOf), not as valid.
+                    Some(0) => ("expired", "The certificate has expired. It was valid at the time the signature says it was made, but without a trusted timestamp nothing proves when that was.".into()),
                     _ => ("invalid", "The certificate had expired when it signed.".into()),
                 },
                 0x800B_0109 => ("untrusted", "Windows doesn't trust the authority that issued this certificate (for example a self-signed one).".into()),
@@ -1298,12 +1299,18 @@ mod imp {
             out.detail = "The document was changed after it was signed, or the signature is damaged.".into();
             return out;
         }
-        let at = (out.timestamp > 0).then_some(out.timestamp).or(signed_at);
+        // A trusted timestamp says when it was signed; otherwise the time the signature claims (one from a service
+        // this system doesn't trust proves no more than that).
+        let at = out.timestamp_trusted.then_some(out.timestamp).or(signed_at);
         let Ok(store) = trusted(at) else { return out };
         match p7.verify(&none, &store, Some(data), None, Pkcs7Flags::BINARY) {
             Ok(()) if out.not_after > 0 && now() > out.not_after => {
                 out.trust = "expired".into();
-                out.detail = "The certificate was valid when it signed, and has expired since.".into();
+                out.detail = if out.timestamp_trusted {
+                    "The certificate was valid when it signed (a trusted timestamp proves when) and has expired since.".into()
+                } else {
+                    "The certificate has expired. It was valid at the time the signature says it was made, but without a trusted timestamp nothing proves when that was.".into()
+                };
             }
             Ok(()) => out.trust = "trusted".into(),
             Err(e) => {
@@ -1362,7 +1369,9 @@ mod imp {
                 let imprint = hash(MessageDigest::sha256(), value).map_err(err)?;
                 let mut nonce = [0u8; 8];
                 openssl::rand::rand_bytes(&mut nonce).map_err(err)?;
-                nonce[0] &= 0x7f;
+                // Positive, and never starting with a zero byte: the service writes it back in its shortest form,
+                // which is then these same eight bytes (looked for in the answer below).
+                nonce[0] = (nonce[0] & 0x7f) | 0x40;
                 // TimeStampReq { version 1, messageImprint { sha256, imprint }, nonce, certReq TRUE }
                 let sha256 = der(0x30, &[der(0x06, &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]), vec![0x05, 0x00]].concat());
                 let req = der(0x30, &[der(0x02, &[1]), der(0x30, &[sha256, der(0x04, &imprint)].concat()), der(0x02, &nonce), vec![0x01, 0x01, 0xff]].concat());
@@ -1379,6 +1388,13 @@ mod imp {
                 let token = &token[..der_len(token)];
                 if token.is_empty() {
                     return Err("The timestamp service sent no timestamp.".into());
+                }
+                // The timestamp must be the one asked for: over this signature (its hash) and for this request (its
+                // random number). Both are in the token as they were sent; an answer to another request (a replayed
+                // or mixed-up one) has neither, and would be embedded as if it proved when this was signed.
+                let has = |needle: &[u8]| token.windows(needle.len()).any(|w| w == needle);
+                if !has(&der(0x04, &imprint)) || !has(&der(0x02, &nonce)) {
+                    return Err(format!("The timestamp service ({url}) answered with a timestamp for something else. Not signed: try again, or choose another service."));
                 }
                 let obj = OBJ_txt2obj(OID_TIMESTAMP_TOKEN.as_ptr().cast(), 1);
                 let ok = CMS_unsigned_add1_attr_by_OBJ(si, obj, V_ASN1_SEQUENCE, token.as_ptr().cast(), token.len() as c_int);

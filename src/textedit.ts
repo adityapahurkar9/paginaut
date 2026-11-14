@@ -278,6 +278,10 @@ class EditLayer implements PageLayer {
       } else if (e.key === "Escape") {
         e.stopPropagation();
         sel.remove();
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // A letter typed with a picture selected is not one of the app's one-key shortcuts (R would turn the
+        // whole page): the selection box has the focus, not a text field, so they'd run.
+        e.stopPropagation();
       }
     });
     root.append(sel);

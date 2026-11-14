@@ -619,10 +619,11 @@ export const api = {
   // False: Paginaut stays open while the system's software installer finishes (Linux's .deb).
   updateRun: () => invoke<boolean>("update_run"),
   updateStop: () => invoke<void>("update_stop"),
-  markdownRead: (path: string) => invoke<string>("markdown_read", { path }),
+  /** `encoding`: set when the file isn't UTF-8 (it's then shown, not written back); `bom`: it starts with a byte order mark. */
+  markdownRead: (path: string) => invoke<{ text: string; bom: boolean; encoding: string | null }>("markdown_read", { path }),
   /** The Markdown file at `path` shown from `text` (a new document; pictures from its folder). */
   markdownPreview: (path: string, text: string) => invoke<DocInfo>("markdown_preview", { path, text }),
-  markdownSave: (path: string, text: string) => invoke<void>("markdown_save", { path, text }),
+  markdownSave: (path: string, text: string, bom = false) => invoke<void>("markdown_save", { path, text, bom }),
   /** Opens a file Paginaut made in its usual program. */
   openPath: (path: string) => invoke<void>("open_path", { path }),
   /** Windows' print dialog, then the pages (file index and extra turn, as shown); `current` indexes `pages`. */

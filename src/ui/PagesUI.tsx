@@ -10,7 +10,7 @@ import { api, type InsertSource } from "../api";
 import { docSigs } from "../dsc";
 import { parsePages } from "../ocr";
 import * as P from "../pages";
-import { baseName, openFiles, samePath, showToast, tabs, type Tab } from "../store";
+import { baseName, openFiles, pathKey, samePath, showToast, tabs, type Tab } from "../store";
 import { toolPane } from "../toolpanes";
 import { ToolFrame } from "./ToolFrame";
 
@@ -632,8 +632,10 @@ function SplitDialogInner({ tab }: { tab: Tab }) {
         const from = i === 0 ? 0 : m.view;
         const to = i + 1 < marks.length ? marks[i + 1].view : count;
         const base = `${stem} - ${safeName(m.title)}`;
-        const n = (used.get(base) ?? 0) + 1;
-        used.set(base, n);
+        // Counted as the system tells files apart: on Windows "Summary" and "SUMMARY" are one file, and the second
+        // part would replace the first.
+        const n = (used.get(pathKey(base)) ?? 0) + 1;
+        used.set(pathKey(base), n);
         return { views: Array.from({ length: to - from }, (_, k) => from + k), name: n > 1 ? `${base} (${n})` : base };
       });
     }

@@ -66,11 +66,19 @@ function TableInner({ tab, view, area, initial }: { tab: Tab; view: number; area
   // Lines moved: read again with exactly those columns (and rows, once you've set them).
   useEffect(() => {
     if (!edited.current || cols.length < 2) return;
+    // Only the answer for the lines as they are now is shown: an earlier one that arrives late is dropped.
+    let latest = true;
     const id = setTimeout(() => {
       setBusy(true);
-      api.tableIn(docId, src, area, cols, rows && rows.length >= 2 ? rows : []).then(setTable).finally(() => setBusy(false));
+      api
+        .tableIn(docId, src, area, cols, rows && rows.length >= 2 ? rows : [])
+        .then((t) => latest && setTable(t))
+        .finally(() => latest && setBusy(false));
     }, 180);
-    return () => clearTimeout(id);
+    return () => {
+      latest = false;
+      clearTimeout(id);
+    };
   }, [cols, rows]);
 
   const sorted = (v: number[]) => [...v].sort((a, b) => a - b);

@@ -218,8 +218,11 @@ export async function runConvert() {
     const dir = d.folder ?? dirOf(it.path);
     let out = "";
     for (let n = 1; n < 100; n++) {
-      const candidate = `${dir}\\${stem(it.path)}${n > 1 ? ` (${n})` : ""}.pdf`;
-      if (taken.has(candidate.toLowerCase())) continue;
+      // Put together as the folder is written ("/" on Linux), and compared as the system compares names (Linux
+      // keeps Report and report apart).
+      const sep = dir.includes("\\") ? "\\" : "/";
+      const candidate = `${dir.replace(/[\\/]+$/, "")}${sep}${stem(it.path)}${n > 1 ? ` (${n})` : ""}.pdf`;
+      if (taken.has(pathKey(candidate))) continue;
       if ((await api.existingFiles([candidate])).length === 0) {
         out = candidate;
         break;
@@ -229,7 +232,7 @@ export async function runConvert() {
       update(i, { state: "error", note: "No free file name" });
       continue;
     }
-    taken.add(out.toLowerCase());
+    taken.add(pathKey(out));
     update(i, { state: "converting" });
     try {
       const r = await api.officeConvert(it.path, out, it.engine === "auto" ? undefined : it.engine, d.pdfa);

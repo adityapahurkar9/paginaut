@@ -1,7 +1,7 @@
 // The Markdown pane (right side): a .md file's source, the pages following as you type; Ctrl+S saves the file.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { X } from "lucide-preact";
-import { isMarkdown, loadMdSource, mdInput, mdLoaded, mdSource, saveMarkdown } from "../markdown";
+import { isMarkdown, loadMdSource, mdInput, mdLoaded, mdSource, saveMarkdown, saveUtf8Copy } from "../markdown";
 import { bookScreen } from "../modes";
 import { closePane, pane } from "../panes";
 import { activeTab, type Tab } from "../store";
@@ -55,15 +55,31 @@ function Editor({ tab }: { tab: Tab }) {
         </button>
       </div>
       <div class="signpane-body">
-        <div class="md-bar">
-          <span>{unsaved ? "Changes not saved yet" : "Saved"}</span>
-          <button class="btn pri sm" disabled={!unsaved} onClick={() => void saveMarkdown(tab)}>
-            Save
-          </button>
-        </div>
+        {src.encoding ? (
+          <>
+            <div class="md-bar">
+              <span>Read-only</span>
+              <button class="btn pri sm" onClick={() => void saveUtf8Copy(tab)}>
+                Save a UTF-8 copy
+              </button>
+            </div>
+            <span class="hint">
+              This file is written in {src.encoding}, not UTF-8, so it can't be changed here: saving would change its letters for other programs. Save a UTF-8 copy and edit
+              that.
+            </span>
+          </>
+        ) : (
+          <div class="md-bar">
+            <span>{unsaved ? "Changes not saved yet" : "Saved"}</span>
+            <button class="btn pri sm" disabled={!unsaved} onClick={() => void saveMarkdown(tab)}>
+              Save
+            </button>
+          </div>
+        )}
         <textarea
           ref={area}
           class="md-source"
+          readOnly={!!src.encoding}
           spellcheck={false}
           aria-label="Markdown source"
           value={text}

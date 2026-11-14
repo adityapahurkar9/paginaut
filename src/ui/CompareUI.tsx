@@ -1,5 +1,6 @@
 // Compare: the setup dialog, and the Compare tab (the two files side by side with what differs marked, and the
 // list of differences).
+import { signal } from "@preact/signals";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -201,11 +202,23 @@ function pick(i: number, from?: Side) {
   if (from !== "b") panes.b?.show(c.b, i);
 }
 
+/** The kind of difference the list is narrowed to ("all": every kind). F7 and the arrows step through the same. */
+const compareKind = signal<ChangeKind | "all">("all");
+
 function step(dir: 1 | -1) {
-  const n = compare.value?.outcome?.changes.length ?? 0;
+  const changes = compare.value?.outcome?.changes ?? [];
+  // Only the differences the list shows (all of them when none of the chosen kind is left).
+  let ids = changes.map((_, i) => i).filter((i) => compareKind.value === "all" || changes[i].kind === compareKind.value);
+  if (!ids.length) ids = changes.map((_, i) => i);
+  const n = ids.length;
   if (!n) return;
   const cur = compareSel.value;
-  pick(cur < 0 ? (dir > 0 ? 0 : n - 1) : (cur + dir + n) % n);
+  if (cur < 0) return pick(dir > 0 ? ids[0] : ids[n - 1]);
+  // From a difference that's hidden now: the next shown one in that direction.
+  const at = ids.indexOf(cur);
+  if (at >= 0) return pick(ids[(at + dir + n) % n]);
+  const next = dir > 0 ? ids.find((i) => i > cur) ?? ids[0] : [...ids].reverse().find((i) => i < cur) ?? ids[n - 1];
+  pick(next);
 }
 
 // ---------------------------------------------------------------- the Compare tab
@@ -682,7 +695,8 @@ function ChangeList({ s }: { s: CompareSession }) {
   const out = s.outcome;
   const sel = compareSel.value;
   const list = useRef<HTMLDivElement>(null);
-  const [kinds, setKinds] = useState<ChangeKind | "all">("all");
+  const kinds = compareKind.value;
+  const setKinds = (k: ChangeKind | "all") => (compareKind.value = k);
   useEffect(() => {
     if (out) setAnchors(out.anchors);
   }, [out]);

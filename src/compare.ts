@@ -140,6 +140,9 @@ async function runCompare(gen: number) {
   compareSel.value = -1;
   const names = { a: s.a.name, b: s.b.name };
   try {
+    // One comparison at a time: the one still running (an option changed, the sides swapped) is stopped first.
+    // Left running, it kept working in the engine, and Stop could no longer reach it once its number was replaced.
+    if (compareSid) void api.compareStop(compareSid).catch(() => {});
     compareSid = newId();
     const outcome = await api.compareRun(request(s.a), request(s.b), compareOptions(), compareSid, (e) => {
       if (gen !== generation) return;

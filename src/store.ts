@@ -269,7 +269,7 @@ export class Tab {
   /** Find in Read/Book modes. */
   flowSearch = signal<{ query: string; hits: import("./reflow/find").FlowHit[]; active: number; error?: string; limited: boolean } | null>(null);
   /** Book mode page numbers. */
-  bookInfo = signal<{ page: number; total: number; approx: boolean } | null>(null);
+  bookInfo = signal<{ page: number; total: number; approx: boolean; spread?: boolean } | null>(null);
   saving = signal(false);
   /** Form fields or annotations changed in memory (not yet saved). */
   docChanged = signal(false);

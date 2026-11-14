@@ -340,12 +340,15 @@ function size(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** "D:20240131093000+05'30'" → a local date and time: the date's own time zone counts (as on the desktop, MetaUI),
+ *  or the time is hours off and, near midnight, the day too. */
 function pdfDate(s?: string) {
-  // D:YYYYMMDDHHmmSS…
-  const m = s?.match(/^(?:D:)?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?/);
+  const m = s?.match(/^(?:D:)?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?(Z|[+-]\d{2}'?\d{2}'?)?/);
   if (!m) return s || "";
-  const d = new Date(Number(m[1]), Number(m[2] ?? 1) - 1, Number(m[3] ?? 1), Number(m[4] ?? 0), Number(m[5] ?? 0));
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: m[4] ? "short" : undefined });
+  const [, y, mo = "01", d = "01", h = "00", mi = "00", se = "00", z] = m;
+  const zone = !z ? "" : z === "Z" ? "Z" : `${z.slice(0, 3)}:${z.replace(/'/g, "").slice(3, 5) || "00"}`;
+  const date = new Date(`${y}-${mo}-${d}T${h}:${mi}:${se}${zone}`);
+  return isNaN(+date) ? s! : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: m[4] ? "short" : undefined });
 }
 
 function InfoSheet() {

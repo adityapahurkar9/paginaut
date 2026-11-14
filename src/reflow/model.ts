@@ -116,7 +116,17 @@ function dominant(sizes: Map<number, number>) {
 
 /** Normalised text of a header/footer candidate: digits don't matter ("Page 12" = "Page 7"). */
 const zoneKey = (t: string) => t.toLowerCase().replace(/\d+/g, "#").replace(/\s+/g, " ").trim();
-const PAGE_NUMBER = /^(page\s*)?([\divxlcdm]+|[a-z]?-?\d+)(\s*(of|\/)\s*\d+)?$/i;
+const PAGE_NUMBER = /^(page\s*)?([a-z]?-?\d+)(\s*(of|\/)\s*\d+)?$/i;
+// A Roman page number as front matter carries them: a real numeral, small (i to lxxxix), all in one case. Any word
+// of the Roman letters used to pass, so "CV", "Civil", "Mid" or "DVD" at the head of a page was left out.
+const ROMAN = /^(?=.)(?:lx{0,3}|xl|x{0,3})(?:ix|iv|v?i{0,3})$/;
+/** A line that is only a page number ("12", "Page 3 of 9", "A-4", "xii"). */
+export function isPageNumber(text: string): boolean {
+  const t = text.trim();
+  if (PAGE_NUMBER.test(t)) return true;
+  const w = t.replace(/^page\s*/i, "");
+  return (w === w.toLowerCase() || w === w.toUpperCase()) && ROMAN.test(w.toLowerCase());
+}
 
 /**
  * Picture regions on a page: images, tables, and clusters of vector drawing
@@ -342,7 +352,7 @@ export class Analysis {
   private isRunning(raw: RawPage, t: TextItem) {
     const z = this.zone(raw, t);
     if (!z) return false;
-    if (PAGE_NUMBER.test(t.runs.map((r) => r.t).join("").trim())) return true;
+    if (isPageNumber(t.runs.map((r) => r.t).join(""))) return true;
     return (this.zoneCount.get(z) ?? 0) >= this.repeatMin;
   }
 

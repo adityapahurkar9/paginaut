@@ -35,8 +35,12 @@ fn escape(t: &str) -> String {
 fn escape_start(t: &str) -> String {
     let first = t.chars().next().unwrap_or(' ');
     // Markdown takes up to nine digits and a dot or bracket for a numbered list.
-    let numbered = t.find(['.', ')']).is_some_and(|i| i > 0 && i < 10 && t[..i].chars().all(|c| c.is_ascii_digit()) && t[i + 1..].starts_with(' '));
-    if matches!(first, '#' | '>' | '+' | '-' | '=' | '|') || numbered {
+    let numbered = t.find(['.', ')']).filter(|&i| i > 0 && i < 10 && t[..i].chars().all(|c| c.is_ascii_digit()) && t[i + 1..].starts_with(' '));
+    if let Some(i) = numbered {
+        // The dot (or bracket) is what makes the list, and what takes the backslash: Markdown only takes one
+        // before punctuation, so before the number it would show.
+        format!("{}\\{}", &t[..i], &t[i..])
+    } else if matches!(first, '#' | '>' | '+' | '-' | '=' | '|') {
         format!("\\{t}")
     } else {
         t.to_string()
@@ -147,8 +151,9 @@ mod tests {
     fn escapes() {
         assert_eq!(escape("a*b_c"), "a\\*b\\_c");
         assert_eq!(escape_start("# not a heading"), "\\# not a heading");
-        assert_eq!(escape_start("2024. A year"), "\\2024. A year");
-        assert_eq!(escape_start("12. Twelfth"), "\\12. Twelfth");
+        assert_eq!(escape_start("2024. A year"), "2024\\. A year");
+        assert_eq!(escape_start("12. Twelfth"), "12\\. Twelfth");
+        assert_eq!(escape_start("3) Third"), "3\\) Third");
         assert_eq!(escape_start("Plain"), "Plain");
     }
 }

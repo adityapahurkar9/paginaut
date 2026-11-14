@@ -165,8 +165,13 @@ function Protect({ tab, sec, setSec, busy, run, setError }: { tab: Tab; sec: Sec
 
   if (sec.method && !sec.owner) {
     const unlock = async () => {
-      if (await api.checkOwner(docId, ownerTry)) setSec(await api.security(docId));
-      else setError("That isn't the permissions password.");
+      try {
+        if (await api.checkOwner(docId, ownerTry)) setSec(await api.security(docId));
+        else setError("That isn't the permissions password.");
+      } catch (e) {
+        // Not a wrong password: the check itself failed.
+        setError(`Couldn't check the password: ${e}`);
+      }
     };
     return (
       <>

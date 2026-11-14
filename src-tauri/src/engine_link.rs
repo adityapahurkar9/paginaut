@@ -597,6 +597,13 @@ pub struct Remote {
     on_refused: Box<dyn Fn(DocId) + Send + Sync>,
     /// When each document was being worked on as an engine stopped, and which engine.
     strikes: Mutex<HashMap<DocId, Vec<(Instant, u64)>>>,
+    /// Covers being drawn for the shelf (the book's path, and on which engine), the engines that stopped with one
+    /// under way, and how often each book's cover has stopped an engine. A cover has no document to count a
+    /// strike against, so an engine that stops while one is drawn is put down to that book, not to the document
+    /// being read: twice, and the book's cover isn't tried again until Paginaut starts anew.
+    covering: Mutex<HashMap<String, u64>>,
+    cover_stopped: Mutex<std::collections::HashSet<u64>>,
+    bad_covers: Mutex<HashMap<String, u32>>,
     /// Calls waiting for the engine: when they started, what they are, and on which engine (`watch`).
     waiting: Mutex<HashMap<u64, (Instant, &'static str, u64)>>,
     next_wait: AtomicU64,
@@ -644,6 +651,9 @@ impl Remote {
             streams: Mutex::new(HashMap::new()),
             on_refused: Box::new(on_refused),
             strikes: Mutex::new(HashMap::new()),
+            covering: Mutex::new(HashMap::new()),
+            cover_stopped: Mutex::new(std::collections::HashSet::new()),
+            bad_covers: Mutex::new(HashMap::new()),
             waiting: Mutex::new(HashMap::new()),
             next_wait: AtomicU64::new(1),
             temp_made: AtomicU64::new(0),
@@ -866,6 +876,11 @@ impl Remote {
     /// The document was being worked on as engine `gen` stopped (counted once per engine, however many
     /// pages were being drawn). Twice within two minutes: it's refused.
     fn strike(&self, doc: DocId, gen: u64) {
+        // A cover was being drawn on that engine: the book on the shelf is the suspect (see `covering`), not this
+        // document, which would otherwise be closed for a damaged book it has nothing to do with.
+        if self.covering.lock().values().any(|g| *g == gen) || self.cover_stopped.lock().contains(&gen) {
+            return;
+        }
         let now = Instant::now();
         let mut strikes = self.strikes.lock();
         let list = strikes.entry(doc).or_default();
@@ -1105,9 +1120,20 @@ impl Remote {
 
     /// A book's title, author and pages, and its cover saved as covers/<fp>.jpg.
     pub fn cover(&self, path: &str, covers: &Path, fp: &str) -> Result<Value, String> {
+        if self.bad_covers.lock().get(path).is_some_and(|n| *n >= 2) {
+            return Err("This book's cover stopped Paginaut's reading engine twice, so it isn't drawn. The file may be damaged.".into());
+        }
         let (link, gen) = self.link()?;
         let (fd, name) = file_for_engine(path)?;
-        let f = self.waiting("cover", gen, || link.call("cover", json!({ "name": name }), &[], &[fd.as_raw_fd()]))?;
+        self.covering.lock().insert(path.to_string(), gen);
+        let res = self.waiting("cover", gen, || link.call("cover", json!({ "name": name }), &[], &[fd.as_raw_fd()]));
+        if res.as_ref().is_err_and(|e| e == STOPPED) {
+            // Noted before the cover stops counting as under way, so `strike` sees one or the other.
+            self.cover_stopped.lock().insert(gen);
+            *self.bad_covers.lock().entry(path.to_string()).or_default() += 1;
+        }
+        self.covering.lock().remove(path);
+        let f = res?;
         let jpg = (!f.bin.is_empty()).then_some(f.bin);
         Ok(app::save_cover(f.head["v"].clone(), jpg, covers, fp))
     }

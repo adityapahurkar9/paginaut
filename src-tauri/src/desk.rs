@@ -1189,16 +1189,54 @@ fn markdown_path(path: &str) -> Res<()> {
     }
 }
 
+/// A Markdown file as read: its text, whether it starts with a byte order mark (kept when it's saved), and, when
+/// it isn't UTF-8, the encoding it was read in. Such a file is shown but not written back: Paginaut writes UTF-8,
+/// which would change every letter outside ASCII in a file other programs read as something else.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkdownFile {
+    text: String,
+    bom: bool,
+    encoding: Option<String>,
+}
+
+/// Bytes as text: UTF-8 (with or without its mark), UTF-16 by its mark, and anything else as Windows-1252 (which
+/// gives every byte a letter, so nothing becomes a replacement mark).
+fn decode_text(data: &[u8]) -> MarkdownFile {
+    if let Some(rest) = data.strip_prefix(b"\xef\xbb\xbf") {
+        if let Ok(t) = std::str::from_utf8(rest) {
+            return MarkdownFile { text: t.to_owned(), bom: true, encoding: None };
+        }
+    }
+    for (mark, big) in [(&b"\xff\xfe"[..], false), (&b"\xfe\xff"[..], true)] {
+        if let Some(rest) = data.strip_prefix(mark) {
+            let units: Vec<u16> = rest.chunks_exact(2).map(|c| if big { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) }).collect();
+            return MarkdownFile { text: String::from_utf16_lossy(&units), bom: true, encoding: Some("UTF-16".into()) };
+        }
+    }
+    if let Ok(t) = std::str::from_utf8(data) {
+        return MarkdownFile { text: t.to_owned(), bom: false, encoding: None };
+    }
+    // Windows-1252: Latin-1, but for 0x80 to 0x9F.
+    const HIGH: [char; 32] = [
+        '\u{20ac}', '\u{81}', '\u{201a}', '\u{192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}', '\u{2c6}', '\u{2030}', '\u{160}', '\u{2039}', '\u{152}',
+        '\u{8d}', '\u{17d}', '\u{8f}', '\u{90}', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}', '\u{2dc}', '\u{2122}',
+        '\u{161}', '\u{203a}', '\u{153}', '\u{9d}', '\u{17e}', '\u{178}',
+    ];
+    let text = data.iter().map(|&b| if (0x80..0xa0).contains(&b) { HIGH[(b - 0x80) as usize] } else { b as char }).collect();
+    MarkdownFile { text, bom: false, encoding: Some("Windows-1252".into()) }
+}
+
 /// A Markdown file's text, to edit.
 #[tauri::command]
-pub async fn markdown_read(path: String) -> Res<String> {
+pub async fn markdown_read(path: String) -> Res<MarkdownFile> {
     blocking(move || {
         markdown_path(&path)?;
         let data = std::fs::read(&path).map_err(|e| e.to_string())?;
         if data.len() > 8 << 20 {
             return Err("The file is too large to edit here.".into());
         }
-        Ok(String::from_utf8_lossy(data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&data)).into_owned())
+        Ok(decode_text(&data))
     })
     .await
 }
@@ -1216,11 +1254,14 @@ pub async fn markdown_preview(state: State<'_, AppState>, path: String, text: St
 
 /// Writes the Markdown file (beside it first, so a failure never leaves half a file).
 #[tauri::command]
-pub async fn markdown_save(path: String, text: String) -> Res<()> {
+pub async fn markdown_save(path: String, text: String, bom: bool) -> Res<()> {
     blocking(move || {
         markdown_path(&path)?;
         let tmp = format!("{path}.paginaut-tmp");
-        std::fs::write(&tmp, text.as_bytes()).map_err(|e| format!("Couldn't save: {e}"))?;
+        // UTF-8, with the byte order mark the file had (some programs tell UTF-8 by it).
+        let mut bytes = if bom { b"\xef\xbb\xbf".to_vec() } else { Vec::new() };
+        bytes.extend_from_slice(text.as_bytes());
+        std::fs::write(&tmp, bytes).map_err(|e| format!("Couldn't save: {e}"))?;
         std::fs::rename(&tmp, &path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             format!("Couldn't save: {e}")
@@ -1853,7 +1894,19 @@ pub fn snap_button(window: tauri::WebviewWindow, x: i32, y: i32, w: i32, h: i32,
 
 #[cfg(test)]
 mod tests {
-    use super::openable;
+    use super::{decode_text, openable};
+
+    #[test]
+    fn markdown_encodings() {
+        let f = decode_text(b"\xef\xbb\xbfcaf\xc3\xa9");
+        assert_eq!((f.text.as_str(), f.bom, f.encoding), ("caf\u{e9}", true, None));
+        let f = decode_text("plain \u{2014} utf8".as_bytes());
+        assert_eq!((f.bom, f.encoding), (false, None));
+        let f = decode_text(b"caf\xe9 \x93q\x94");
+        assert_eq!((f.text.as_str(), f.encoding.as_deref()), ("caf\u{e9} \u{201c}q\u{201d}", Some("Windows-1252")));
+        let f = decode_text(b"\xff\xfeh\x00i\x00");
+        assert_eq!((f.text.as_str(), f.encoding.as_deref()), ("hi", Some("UTF-16")));
+    }
 
     #[test]
     fn attachments_opened_by_kind() {

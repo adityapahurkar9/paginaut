@@ -6454,8 +6454,9 @@ int fo_pdf_attachment_add(fo_ctx *c, fo_doc *d, const char *name, const char *mi
 	fz_var(began);
 	fz_try(CTX)
 	{
-		char key[512];
+		char key[512], base[480];
 		int k = 2;
+		size_t cut;
 		pdf_begin_operation(CTX, pdf, "Attach file");
 		began = 1;
 		buf = fz_new_buffer_from_copied_data(CTX, data, len);
@@ -6465,9 +6466,17 @@ int fo_pdf_attachment_add(fo_ctx *c, fo_doc *d, const char *name, const char *mi
 		if (!tree)
 			tree = pdf_new_dict(CTX, pdf, 1);
 		/* A name already used gets a number, as Explorer does. */
-		fz_strlcpy(key, name, sizeof key);
+		/* The name the numbers are added to is cut short enough that they always fit (at a whole letter): a
+		 * very long name with its number used to be cut back to the same name, and the search never ended. */
+		fz_strlcpy(base, name, sizeof base);
+		cut = strlen(base);
+		if (strlen(name) > cut)
+			while (cut > 0 && ((unsigned char)name[cut] & 0xC0) == 0x80)
+				cut--;
+		base[cut] = 0;
+		fz_strlcpy(key, strlen(name) < sizeof key ? name : base, sizeof key);
 		while (pdf_dict_gets(CTX, tree, key))
-			fz_snprintf(key, sizeof key, "%s (%d)", name, k++);
+			fz_snprintf(key, sizeof key, "%s (%d)", base, k++);
 		pdf_dict_puts(CTX, tree, key, fs);
 		write_embedded_files(CTX, pdf, tree);
 		pdf_end_operation(CTX, pdf);
@@ -9152,11 +9161,14 @@ static void pinned_field(const char **s, const char *end, char *buf, size_t n)
  */
 int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, const char *out)
 {
-	enum { MAX_FONTS = 512 };
+	/* As many fonts as the script names (a table that grows): with a fixed 512, text in the fonts after the
+	 * 512th of a large e-book wasn't drawn, and nothing said so. The limit only guards against a bad number. */
+	enum { MAX_FONTS = 1 << 20 };
+	fz_font **fonts = NULL;
+	int nfonts = 0;
 	fz_archive *zip = NULL;
 	fz_document_writer *w = NULL;
 	fz_device *dev = NULL;
-	fz_font *fonts[MAX_FONTS] = { 0 };
 	fz_text *text = NULL;
 	fz_buffer *buf = NULL;
 	fz_image *img = NULL;
@@ -9171,6 +9183,8 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 	fz_var(img);
 	fz_var(p);
 	fz_var(pen);
+	fz_var(fonts);
+	fz_var(nfonts);
 	fz_try(CTX)
 	{
 		const char *s = script, *eof = script + len;
@@ -9205,7 +9219,14 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 				pinned_field(&s, end, std, sizeof std);
 				if (!std[0])
 					fz_strlcpy(std, "Times-Roman", sizeof std);
-				if (id >= 0 && id < MAX_FONTS && !fonts[id])
+				if (id >= nfonts && id < MAX_FONTS)
+				{
+					int want = id + 64;
+					fonts = fz_realloc_array(CTX, fonts, want, fz_font *);
+					memset(fonts + nfonts, 0, (size_t)(want - nfonts) * sizeof *fonts);
+					nfonts = want;
+				}
+				if (id >= 0 && id < nfonts && !fonts[id])
 				{
 					if (field[0])
 					{
@@ -9262,7 +9283,7 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 				cont = (int)pinned_num(&s);
 				if (s < end && *s == '\t')
 					s++;
-				font = id >= 0 && id < MAX_FONTS ? fonts[id] : NULL;
+				font = id >= 0 && id < nfonts ? fonts[id] : NULL;
 				if (!cont)
 					pen = 0;
 				if (font)
@@ -9305,8 +9326,9 @@ int fo_pinned_pdf(fo_ctx *c, const char *epub, const char *script, size_t len, c
 		fz_drop_text(CTX, text);
 		fz_drop_buffer(CTX, buf);
 		fz_drop_image(CTX, img);
-		for (i = 0; i < MAX_FONTS; i++)
+		for (i = 0; i < nfonts; i++)
 			fz_drop_font(CTX, fonts[i]);
+		fz_free(CTX, fonts);
 		fz_drop_document_writer(CTX, w);
 		fz_drop_archive(CTX, zip);
 		fz_free(CTX, p);

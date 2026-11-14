@@ -259,7 +259,7 @@ export function CertSection({ tab }: { tab: Tab | null }) {
       </label>
       {field ? (
         <div class="cert-field">
-          <span>Goes in the form's field “{field.w.name}” on page {field.src + 1}.</span>
+          <span>Goes in the form's field “{field.w.name}” on page {shownPage(tab, field.src)}.</span>
           <button class="ib sm" aria-label="Don't use that field" title="Don't use that field" onClick={() => (signField.value = null)}>
             <X size={14} />
           </button>
@@ -286,4 +286,10 @@ export function CertSection({ tab }: { tab: Tab | null }) {
       {chosen?.hardware && <p class="muted">Your token asks for its PIN in its own window. Paginaut never sees it.</p>}
     </div>
   );
+}
+
+/** A page of the file by the number it's shown under now (pages may have been moved or deleted). */
+function shownPage(tab: Tab | null, src: number): number {
+  const at = tab?.edits.value?.order.indexOf(src) ?? -1;
+  return (at >= 0 ? at : src) + 1;
 }

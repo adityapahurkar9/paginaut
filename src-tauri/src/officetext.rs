@@ -392,6 +392,9 @@ fn shared_strings(path: &str) -> Result<Vec<String>, String> {
     let (mut cur, mut in_t, mut in_rph) = (String::new(), false, false);
     for ev in Reader::new(&xml) {
         match ev {
+            // An empty entry written as <si/> has no closing tag to count it by (Excel writes <si><t/></si>; other
+            // tools may not): counted here, or every text after it is read one place off.
+            Ev::Open { name: "si", empty: true, .. } => out.push(String::new()),
             Ev::Open { name: "si", .. } => cur.clear(),
             Ev::Open { name: "t", empty, .. } => in_t = !empty,
             Ev::Open { name: "rPh", empty, .. } => in_rph = !empty,

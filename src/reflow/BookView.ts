@@ -240,16 +240,16 @@ export class BookView implements ReflowView {
   }
 
   /**
-   * Largest word boundary k such that characters [from, k) of the paragraph fit. Only the next
+   * Largest place to cut k such that characters [from, k) of the paragraph fit. Only the next
    * `cap` characters are tried (more than a page holds), widened if they all fit.
    */
-  private fit(block: Extract<Block, { k: "p" | "li" }>, index: number, from: number, lh: number, emptyPage: boolean, cap: number): number {
+  private fit(block: Extract<Block, { k: "p" | "li" }>, index: number, from: number, lh: number, emptyPage: boolean, cap: number, anywhere = false): number {
     const text = textOf(block);
     let cuts: number[] = [], best = -1;
     for (let end = from + cap; ; end += cap) {
       const stop = Math.min(text.length, end);
       cuts = [];
-      for (let i = from + 1; i < stop; i++) if (text[i - 1] === " ") cuts.push(i);
+      for (let i = from + 1; i < stop; i++) if (canCut(text, i, anywhere)) cuts.push(i);
       let lo = 0, hi = cuts.length - 1;
       best = -1;
       while (lo <= hi) {
@@ -265,7 +265,11 @@ export class BookView implements ReflowView {
       }
       if (stop >= text.length || best < cuts.length - 1) break;
     }
-    if (best < 0) return from;
+    if (best < 0) {
+      // On an empty page something must go on it: text with nowhere to cut that fits (one very long word, a
+      // line of symbols) is cut between any two letters, rather than put whole on a page that can't show it all.
+      return emptyPage && !anywhere ? this.fit(block, index, from, lh, emptyPage, cap, true) : from;
+    }
     const k = cuts[best];
     if (emptyPage) return k;
     // Don't leave a single line at the bottom of a page.
@@ -360,7 +364,7 @@ export class BookView implements ReflowView {
       if (i < a.s) before += n;
       total += n;
     });
-    return { page: before + a.p + 1, total, approx };
+    return { page: before + a.p + 1, total, approx, spread: !this.single };
   }
 
   /** Page numbers on screen were estimates until every section was paginated. */
@@ -724,4 +728,26 @@ export class BookView implements ReflowView {
     this.ro.disconnect();
     this.el.remove();
   }
+}
+
+// Scripts written without spaces between words: Chinese, Japanese, Thai, Lao, Khmer, Burmese. A paragraph in them
+// has no (or few) spaces to split it across pages at, so it may be cut between any two of their letters.
+const NO_SPACES = /[\u0E00-\u0EFF\u1000-\u109F\u1780-\u17FF\u2E80-\u303F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/;
+// What mustn't start a page: marks that belong to the letter before them (Thai vowels and tones, accents), and
+// closing punctuation.
+const STAYS = /[\p{M}\u3001\u3002\uFF0C\uFF0E\uFF01\uFF1F\u300D\u300F\uFF09\u3011,.;:!?)\]]/u;
+
+/** Whether a paragraph may be split across pages before character `i`: after a space, between letters of a script
+ *  written without spaces, or (`anywhere`) between any two letters. Never inside a letter (a surrogate pair, or a
+ *  letter and its marks). */
+function canCut(text: string, i: number, anywhere: boolean): boolean {
+  const prev = text[i - 1], next = text[i];
+  if (prev === " ") return true;
+  const code = next.charCodeAt(0);
+  if (code >= 0xdc00 && code <= 0xdfff) return false;
+  if (STAYS.test(next)) return false;
+  if (anywhere) return true;
+  const high = (c: string) => c.charCodeAt(0) >= 0xd800 && c.charCodeAt(0) <= 0xdfff;
+  // (Letters beyond the first 65,536 are, in running text, mostly rarer Chinese ones.)
+  return NO_SPACES.test(prev) || NO_SPACES.test(next) || (high(prev) && high(next));
 }
