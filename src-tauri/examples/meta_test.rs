@@ -80,6 +80,22 @@ fn main() {
         engine.close(i.doc_id);
     }
 
+    // Two reports in one file, each numbered from 1 in the same style: still two after a page is deleted (the
+    // second used to run on from the first).
+    let two = format!("{tmp}/two-reports.pdf");
+    std::fs::copy(format!("{dir}/text-1000.pdf"), &two).unwrap();
+    let i = engine.open(&two).unwrap();
+    let d = engine.doc(i.doc_id).unwrap();
+    d.forms_init().unwrap();
+    d.set_page_labels(&[LabelRange { s: 0, st: "D".into(), p: String::new(), n: 1 }, LabelRange { s: 10, st: "D".into(), p: String::new(), n: 1 }]).unwrap();
+    drop(d);
+    let n = i.page_count;
+    let saved = engine.save(i.doc_id, (0..n).filter(|&p| p != 3).collect(), vec![0; n], None).unwrap();
+    let labels = engine.page_labels(saved.doc_id).unwrap().unwrap_or_default();
+    let at = |k: usize| labels.get(k).cloned().unwrap_or_default();
+    check("two reports stay two after a page is deleted", at(8) == "9" && at(9) == "1" && at(10) == "2", format!("{:?}", &labels[..12.min(labels.len())]));
+    engine.close(saved.doc_id);
+
     println!("{}", if failures == 0 { "ALL PASSED".to_string() } else { format!("{failures} FAILED") });
     std::process::exit(failures);
 }
