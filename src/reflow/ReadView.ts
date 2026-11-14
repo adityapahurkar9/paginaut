@@ -10,7 +10,8 @@ export interface ReflowCallbacks {
   /** The displayed page (original page order after edits) now at the top. */
   onPage(view: number): void;
   /** Book mode: page numbers changed. */
-  onInfo?(info: { page: number; total: number; approx: boolean }): void;
+  /** `spread`: two pages are shown side by side (Book mode in a wide window). */
+  onInfo?(info: { page: number; total: number; approx: boolean; spread?: boolean }): void;
 }
 
 export interface ReflowView {

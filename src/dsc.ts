@@ -138,7 +138,10 @@ export function verdictOf(s: SigInfo): Verdict {
   const later = laterChange(s);
   if (later === "broken") return "invalid";
   if (later === "unsure") return "warn";
-  return c.trust === "trusted" || c.trust === "expired" ? "valid" : "warn";
+  // Expired since: valid only when a trusted timestamp proves it was signed while the certificate was good. On the
+  // signer's own word for the time, anyone holding an expired certificate could date a signature back.
+  if (c.trust === "expired") return c.timestamp && c.timestampTrusted ? "valid" : "warn";
+  return c.trust === "trusted" ? "valid" : "warn";
 }
 
 /**
@@ -179,7 +182,8 @@ export function describe(s: SigInfo): string {
   const parts: string[] = [];
   parts.push(
     c.trust === "trusted" ? "Signature is valid: the document hasn't been altered since it was signed, and Windows trusts the certificate."
-    : c.trust === "expired" ? "Signature is valid: the document hasn't been altered since it was signed. " + c.detail
+    : c.trust === "expired" && c.timestamp && c.timestampTrusted ? "Signature is valid: the document hasn't been altered since it was signed. " + c.detail
+    : c.trust === "expired" ? "The document hasn't been altered since it was signed, but when it was signed can't be confirmed. " + c.detail
     : "The document hasn't been altered since it was signed, but the signer's identity couldn't be confirmed. " + c.detail,
   );
   if (c.timestamp && c.timestampTrusted) parts.push(`A trusted timestamp proves it was signed on ${new Date(c.timestamp * 1000).toLocaleString()}.`);

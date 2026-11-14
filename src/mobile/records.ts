@@ -216,6 +216,8 @@ export function copyState(r: ReadRecord | undefined): { label: string; tone: "pr
 }
 
 let tidying: Promise<void> | null = null;
+/** The copies asked to be kept by the calls a running tidy serves (it's shared by calls made while it runs). */
+const keeps = new Set<string>();
 
 /**
  * Lets copies go: those no record uses; short files a week after they were last opened; and, over
@@ -223,6 +225,7 @@ let tidying: Promise<void> | null = null;
  * first). The open document's copy stays.
  */
 export function tidyCache(keep?: string): Promise<void> {
+  if (keep) keeps.add(keep);
   tidying ??= (async () => {
     const st = await refreshStorage();
     if (!st) return;
@@ -232,7 +235,7 @@ export function tidyCache(keep?: string): Promise<void> {
     const kept: { path: string; size: number; r: ReadRecord }[] = [];
     let total = 0;
     for (const c of st.copies) {
-      if (c.path === keep) {
+      if (keeps.has(c.path)) {
         total += c.size;
         continue;
       }
@@ -256,11 +259,16 @@ export function tidyCache(keep?: string): Promise<void> {
         total -= k.size;
       }
     }
-    if (drop.length) {
-      await native.dropCopies(drop);
+    // (A call that came while this ran may have asked for one of these to stay: the document just opened.)
+    const going = drop.filter((p) => !keeps.has(p));
+    if (going.length) {
+      await native.dropCopies(going);
       await refreshStorage();
     }
-  })().finally(() => (tidying = null));
+  })().finally(() => {
+    tidying = null;
+    keeps.clear();
+  });
   return tidying;
 }
 

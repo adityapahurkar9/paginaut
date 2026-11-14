@@ -148,6 +148,9 @@ export function zoomText(dir: 1 | -1 | 0) {
 
 // ---------------------------------------------------------------- host
 
+/** Where each tab was in its text when its view last went (see the mount effect in ReflowHost). */
+const places = new WeakMap<Tab, { flow: Flow; view: number; src: number; within: number }>();
+
 export function ReflowHost({ tab }: { tab: Tab }) {
   const host = useRef<HTMLDivElement>(null);
   const mode = tab.mode.value as "read" | "book";
@@ -174,10 +177,23 @@ export function ReflowHost({ tab }: { tab: Tab }) {
   const flow = state.flow;
   useEffect(() => {
     if (!flow || !host.current) return;
-    const start = tab.reflowBlock >= 0 ? tab.reflowBlock : flow.pageStart[tab.page.value] ?? 0;
+    // The place is kept as a count of paragraphs, which only means something in the text it was counted in. Made
+    // anew (pages moved or deleted in the sidebar, a correction to the layout), the text is entered at the same
+    // paragraph of the same page of the file, wherever that page is shown now.
+    const order = tab.edits.value?.order ?? [];
+    const kept = places.get(tab);
+    let start = tab.reflowBlock >= 0 ? tab.reflowBlock : flow.pageStart[tab.page.value] ?? 0;
+    if (tab.reflowBlock >= 0 && kept && kept.flow !== flow) {
+      const at = order.indexOf(kept.src);
+      // (Its page deleted: where that page was.)
+      const v = at >= 0 ? at : Math.min(kept.view, Math.max(0, order.length - 1));
+      const first = flow.pageStart[v] ?? 0;
+      const end = flow.pageStart[v + 1] ?? flow.blocks.length;
+      start = at >= 0 ? Math.min(first + kept.within, Math.max(first, end - 1)) : first;
+    }
     const cb = {
       onPage: (p: number) => (tab.page.value = p),
-      onInfo: (i: { page: number; total: number; approx: boolean }) => (tab.bookInfo.value = i),
+      onInfo: (i: { page: number; total: number; approx: boolean; spread?: boolean }) => (tab.bookInfo.value = i),
     };
     const pics = picturesOf(tab);
     const view: ReflowView =
@@ -186,6 +202,10 @@ export function ReflowHost({ tab }: { tab: Tab }) {
     view.focus();
     return () => {
       tab.reflowBlock = view.currentBlock();
+      // Which page of the file that paragraph is on, and how far into it.
+      let v = 0;
+      while (v + 1 < flow.pageStart.length && (flow.pageStart[v + 1] ?? Infinity) <= tab.reflowBlock) v++;
+      places.set(tab, { flow, view: v, src: order[v] ?? v, within: Math.max(0, tab.reflowBlock - (flow.pageStart[v] ?? 0)) });
       view.setHits([], null);
       tab.flowSearch.value = null;
       tab.reflowView = null;
@@ -398,7 +418,7 @@ function BookBar({ tab }: { tab: Tab }) {
       <button class="ib" aria-label="Previous page" title="Previous (← or Page Up)" onClick={() => v?.prev()}>
         <ChevronLeft size={18} strokeWidth={1.7} />
       </button>
-      <span class="rb-page">{i ? `${i.page}–${Math.min(i.page + 1, i.total)} of ${i.approx ? "~" : ""}${i.total.toLocaleString()}` : ""}</span>
+      <span class="rb-page">{i ? `${i.spread === false || i.page >= i.total ? i.page : `${i.page}–${i.page + 1}`} of ${i.approx ? "~" : ""}${i.total.toLocaleString()}` : ""}</span>
       <button class="ib" aria-label="Next page" title="Next (→, Space or Page Down)" onClick={() => v?.next()}>
         <ChevronRight size={18} strokeWidth={1.7} />
       </button>

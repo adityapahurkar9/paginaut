@@ -186,7 +186,7 @@ export function Attachments({ tab }: { tab: Tab }) {
           <div class="attach-main">
             <span class="attach-name">{a.name || "Unnamed file"}</span>
             <span class="attach-meta">
-              {[a.size > 0 ? size(a.size) : "", a.page >= 0 ? `page ${(tab.edits.value?.order.indexOf(a.page) ?? a.page) + 1}` : "", a.desc].filter(Boolean).join(" · ")}
+              {[a.size > 0 ? size(a.size) : "", a.page >= 0 ? pinnedOn(tab, a.page) : "", a.desc].filter(Boolean).join(" · ")}
             </span>
           </div>
           <button class="ib sm" title="Save…" aria-label={`Save ${a.name}`} onClick={() => void saveOne(a)}>
@@ -200,4 +200,12 @@ export function Attachments({ tab }: { tab: Tab }) {
       <span class="hint attach-hint">Double-click to open. Programs and scripts are never opened, only saved.</span>
     </div>
   );
+}
+
+/** Where a file pinned to a page is: the page's number as shown, or that its page has been deleted. */
+function pinnedOn(tab: Tab, src: number): string {
+  const order = tab.edits.value?.order;
+  if (!order) return `page ${src + 1}`;
+  const at = order.indexOf(src);
+  return at >= 0 ? `page ${at + 1}` : "on a deleted page";
 }

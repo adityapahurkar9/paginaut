@@ -14,6 +14,13 @@ export const watermarkDialog = signal<Tab | null>(null);
 toolPane("headers", headerDialog, { tabOf: (v) => v });
 toolPane("watermark", watermarkDialog, { tabOf: (v) => v });
 
+/** The number typed in "Start numbering at" or Bates "From": 0 is a number too (it used to turn back into 1); an
+ *  empty or unreadable box is 1. */
+const startNumber = (text: string) => {
+  const n = Math.round(Number(text));
+  return text.trim() === "" || !Number.isFinite(n) ? 1 : Math.max(0, n);
+};
+
 const NOT_PDF = "Only PDFs can have page numbers or watermarks added. Save this file as a PDF first (Save as PDF).";
 
 export function startHeaders(tab: Tab) {
@@ -204,7 +211,7 @@ function HeaderDialogInner({ tab }: { tab: Tab }) {
       <div class="ps-line">
         <label class="check-row">
           Start numbering at
-          <input class="inp sm num" type="number" min="0" value={s.start} onChange={(e) => setHeaders({ start: Math.max(0, Math.round(+(e.target as HTMLInputElement).value || 1)) })} />
+          <input class="inp sm num" type="number" min="0" value={s.start} onChange={(e) => setHeaders({ start: startNumber((e.target as HTMLInputElement).value) })} />
         </label>
       </div>
 
@@ -219,7 +226,7 @@ function HeaderDialogInner({ tab }: { tab: Tab }) {
             </label>
             <label class="check-row">
               From
-              <input class="inp sm num" type="number" min="0" value={s.bates.start} onChange={(e) => setHeaders({ bates: { ...s.bates, start: Math.max(0, Math.round(+(e.target as HTMLInputElement).value || 1)) } })} />
+              <input class="inp sm num" type="number" min="0" value={s.bates.start} onChange={(e) => setHeaders({ bates: { ...s.bates, start: startNumber((e.target as HTMLInputElement).value) } })} />
             </label>
             <input class="inp sm" placeholder="Suffix" value={s.bates.suffix} onInput={(e) => setHeaders({ bates: { ...s.bates, suffix: (e.target as HTMLInputElement).value } })} />
           </div>

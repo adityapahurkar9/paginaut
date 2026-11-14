@@ -20,7 +20,9 @@ pub fn blocks(d: &Doc, index: usize) -> Result<Vec<Block>, String> {
     let page_number = |p: &Paragraph| {
         let t = p.t.trim().to_lowercase();
         let t = t.strip_prefix("page").unwrap_or(&t).trim();
-        let numeric = !t.is_empty() && t.split(['/', ' ']).filter(|w| *w != "of" && !w.is_empty()).all(|w| w.chars().all(|c| c.is_ascii_digit() || "ivxlc".contains(c)));
+        let raw = p.t.trim();
+        let raw = if raw.len() >= 4 && raw.is_char_boundary(4) && raw[..4].eq_ignore_ascii_case("page") { raw[4..].trim() } else { raw };
+        let numeric = !t.is_empty() && raw.split(['/', ' ']).filter(|w| !w.eq_ignore_ascii_case("of") && !w.is_empty()).all(|w| w.chars().all(|c| c.is_ascii_digit()) || roman_folio(w));
         numeric && (p.r[1] > height * 0.88 || p.r[3] < height * 0.12)
     };
     let paras: Vec<Paragraph> = d.paragraphs(index)?.into_iter().filter(|p| !page_number(p)).collect();
@@ -120,5 +122,34 @@ mod tests {
     #[test]
     fn symbol_bullets() {
         assert_eq!(super::clean("\u{f0b7} New office"), "• New office");
+    }
+}
+
+/// A Roman page number as front matter carries them: a real numeral, small (i to lxxxix: only the letters i, v, x
+/// and l, in their proper order), all in one case. Any word made of the Roman letters used to pass, so "CV",
+/// "Civil", "Mid" or "DVD" at the head of a page was dropped as a page number.
+pub fn roman_folio(w: &str) -> bool {
+    if w.is_empty() || !(w.chars().all(|c| c.is_ascii_lowercase()) || w.chars().all(|c| c.is_ascii_uppercase())) {
+        return false;
+    }
+    let w = w.to_ascii_lowercase();
+    // Tens (nothing, x to xxx, xl, l to lxxx), then ones (nothing, i to iii, iv, v to viii, ix).
+    let tens = ["lxxx", "lxx", "lx", "xl", "xxx", "xx", "l", "x", ""];
+    let ones = ["viii", "vii", "vi", "iv", "ix", "iii", "ii", "v", "i", ""];
+    tens.iter().any(|t| w.strip_prefix(t).is_some_and(|rest| ones.contains(&rest)))
+}
+
+#[cfg(test)]
+mod roman_tests {
+    use super::roman_folio;
+
+    #[test]
+    fn roman_page_numbers() {
+        for w in ["i", "iv", "ix", "xii", "XLVIII", "lxxxix", "V", "L"] {
+            assert!(roman_folio(w), "{w}");
+        }
+        for w in ["CV", "Civil", "Mid", "DVD", "mix", "iiii", "vx", "Xi", "c", "m", "ixx", ""] {
+            assert!(!roman_folio(w), "{w}");
+        }
     }
 }
