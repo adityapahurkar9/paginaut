@@ -384,3 +384,11 @@ pub fn text(host: &str, path: &str, cancel: &AtomicBool) -> Result<String, Strin
     })?;
     Ok(String::from_utf8_lossy(&data).into_owned())
 }
+
+/// Git's hash of some bytes ("blob <size>\0" + the bytes), as GitHub and Hugging Face list a file's.
+pub fn git_blob_sha1(data: &[u8]) -> Result<String, String> {
+    let mut h = Hasher::new(Alg::Sha1)?;
+    h.update(format!("blob {}\0", data.len()).as_bytes())?;
+    h.update(data)?;
+    Ok(hex(&h.finish()?))
+}

@@ -169,13 +169,9 @@ pub fn download_key(code: &str, q: Quality) -> String {
     format!("{code}/{}", q.dir())
 }
 
-/// Git's hash of a file ("blob <size>\0" + contents), as GitHub lists it.
+/// Git's hash of a file, as GitHub lists it.
 fn git_blob_sha1(path: &Path) -> Result<String, String> {
-    let data = std::fs::read(path).map_err(|e| e.to_string())?;
-    let mut h = crate::net::Hasher::new(crate::net::Alg::Sha1)?;
-    h.update(format!("blob {}\0", data.len()).as_bytes())?;
-    h.update(&data)?;
-    Ok(crate::net::hex(&h.finish()?))
+    crate::net::git_blob_sha1(&std::fs::read(path).map_err(|e| e.to_string())?)
 }
 
 #[cfg(test)]

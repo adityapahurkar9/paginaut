@@ -388,26 +388,36 @@ Cleanup:
       (native/paginaut.c, fo_stamp_remove, watermark_layer)
       Fixed: the page lets go of the layer, and when no page uses it the layer leaves the document. stamp_test checks
       a saved copy
-- [ ] A photo loaded while making a signature is kept in memory until the window closes (its object URL is never
+- [x] A photo loaded while making a signature is kept in memory until the window closes (its object URL is never
       revoked). (src/ui/SignMaker.tsx, Photo, load)
-- [ ] Save as Word keeps every page's pictures in memory, then the zip writer copies them all again; its sizes and
+      Done: the address is let go once the picture has loaded (or failed)
+- [x] Save as Word keeps every page's pictures in memory, then the zip writer copies them all again; its sizes and
       places are 32-bit and its file count 16-bit, unchecked, so past 4 GB (a long colour scan) it writes a file
       Word can't open. Save as Markdown also holds every picture before writing any.
       (src-tauri/src/engine/table.rs, zip; src-tauri/src/docx.rs and flow.rs, document)
-- [ ] Compare counts each word's place from the start of its paragraph or cell again: slow for very long ones.
+      Done: pictures are read one at a time as they're written (flow.rs PicRef), and the zip is written straight to a
+      file beside the target (engine/table.rs Zip) with Zip64 records past 4 GB or 65,535 entries. Save as Markdown
+      writes each picture as it comes. Unit test for the Zip64 count; a 4 GB document wasn't made
+- [x] Compare counts each word's place from the start of its paragraph or cell again: slow for very long ones.
       (src-tauri/src/compare.rs, tokens)
+      Done: counted on from the word before
 - [x] com.rs reads "Visible" the same way in three places (convert_on_this_thread).
       Fixed: read once
-- [ ] The signature panel copies everything a signature covers twice into memory, per signature (a 900 MB scan:
+- [x] The signature panel copies everything a signature covers twice into memory, per signature (a 900 MB scan:
       about 1.8 GB each); signed_version reads the whole file to write its start. (src-tauri/native/paginaut.c,
       fo_sig_data; src-tauri/src/desk.rs)
+      Done: fo_sig_data hands over the buffer it read (fz_buffer_extract), read at the range's size; signed_version
+      reads only the signed bytes (lot 1)
 - [x] "A progress event per 1%" is written out four times, two with `done - last` (which underflows if progress
       ever starts over) and two with saturating_sub. (src-tauri/src/desk.rs)
       Fixed: one progress_step, which also counts progress that starts over
-- [ ] "Open, and give the kept password if it's asked for" is written out seven times. (src-tauri/src/engine/mod.rs)
-- [ ] git_blob_sha1 is in ocr.rs and in piper.rs.
-- [ ] verify and verify_file read the key and signature the same way twice (update.rs); reg_values is reg_pairs
+- [x] "Open, and give the kept password if it's asked for" is written out seven times. (src-tauri/src/engine/mod.rs)
+      Done: Document::unlocked_with (eight places)
+- [x] git_blob_sha1 is in ocr.rs and in piper.rs.
+      Done: one, in net.rs
+- [x] verify and verify_file read the key and signature the same way twice (update.rs); reg_values is reg_pairs
       without the data (fonts.rs).
+      Done: key_and_signature in update.rs; reg_values went in lot 1
 
 ### Read aloud voices (reported 2026-11-10, Windows and Linux)
 

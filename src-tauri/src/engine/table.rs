@@ -269,48 +269,120 @@ fn crc32(data: &[u8]) -> u32 {
 
 /// A zip archive with the files stored as they are (Office files need no compression to open).
 pub(crate) fn zip<N: AsRef<str>, B: AsRef<[u8]>>(files: &[(N, B)]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut central = Vec::new();
+    let mut z = Zip::new(Vec::new());
     for (name, body) in files {
-        let (name, body) = (name.as_ref().as_bytes(), body.as_ref());
-        let (crc, len, at) = (crc32(body), body.len() as u32, out.len() as u32);
+        // (Writing into memory can't fail.)
+        let _ = z.add(name.as_ref(), body.as_ref());
+    }
+    z.finish().unwrap_or_default()
+}
+
+/// A zip file written as it goes (entries stored, not compressed), so a document with many large pictures needn't
+/// be held in memory whole. Past 4 GB in size or offset, or 65,535 entries, it writes Zip64 records: without
+/// them sizes and places wrapped round and Word couldn't open the file.
+pub(crate) struct Zip<W: std::io::Write> {
+    out: W,
+    at: u64,
+    central: Vec<u8>,
+    count: u64,
+}
+
+const ZIP64: u64 = 0xFFFF_FFFF;
+
+impl<W: std::io::Write> Zip<W> {
+    pub fn new(out: W) -> Self {
+        Zip { out, at: 0, central: Vec::new(), count: 0 }
+    }
+
+    pub fn add(&mut self, name: &str, body: &[u8]) -> std::io::Result<()> {
+        let name = name.as_bytes();
+        let (crc, len, at) = (crc32(body), body.len() as u64, self.at);
+        let big = len >= ZIP64;
+        let far = at >= ZIP64;
+        let small = |v: u64| if v >= ZIP64 { ZIP64 as u32 } else { v as u32 };
         let head = |sig: u32, central: bool| {
+            let mut extra = Vec::new();
+            if big || (central && far) {
+                let mut fields = Vec::new();
+                if big {
+                    fields.extend_from_slice(&len.to_le_bytes());
+                    fields.extend_from_slice(&len.to_le_bytes());
+                }
+                if central && far {
+                    fields.extend_from_slice(&at.to_le_bytes());
+                }
+                extra.extend_from_slice(&1u16.to_le_bytes());
+                extra.extend_from_slice(&(fields.len() as u16).to_le_bytes());
+                extra.extend_from_slice(&fields);
+            }
+            let version: u16 = if big || far { 45 } else { 20 };
             let mut h = Vec::new();
             h.extend_from_slice(&sig.to_le_bytes());
             if central {
-                h.extend_from_slice(&20u16.to_le_bytes());
+                h.extend_from_slice(&version.to_le_bytes());
             }
-            h.extend_from_slice(&20u16.to_le_bytes()); // version needed
+            h.extend_from_slice(&version.to_le_bytes()); // version needed
             h.extend_from_slice(&0x0800u16.to_le_bytes()); // names in UTF-8
             h.extend_from_slice(&0u16.to_le_bytes()); // stored
             h.extend_from_slice(&0u32.to_le_bytes()); // time, date
             h.extend_from_slice(&crc.to_le_bytes());
-            h.extend_from_slice(&len.to_le_bytes());
-            h.extend_from_slice(&len.to_le_bytes());
+            h.extend_from_slice(&small(len).to_le_bytes());
+            h.extend_from_slice(&small(len).to_le_bytes());
             h.extend_from_slice(&(name.len() as u16).to_le_bytes());
-            h.extend_from_slice(&0u16.to_le_bytes()); // extra
+            h.extend_from_slice(&(extra.len() as u16).to_le_bytes());
             if central {
                 h.extend_from_slice(&[0; 6]); // comment length, disk, internal attributes
                 h.extend_from_slice(&0u32.to_le_bytes()); // external attributes
-                h.extend_from_slice(&at.to_le_bytes());
+                h.extend_from_slice(&small(at).to_le_bytes());
             }
             h.extend_from_slice(name);
+            h.extend_from_slice(&extra);
             h
         };
-        out.extend(head(0x0403_4b50, false));
-        out.extend_from_slice(body);
-        central.extend(head(0x0201_4b50, true));
+        let local = head(0x0403_4b50, false);
+        self.out.write_all(&local)?;
+        self.out.write_all(body)?;
+        self.at += local.len() as u64 + len;
+        self.central.extend(head(0x0201_4b50, true));
+        self.count += 1;
+        Ok(())
     }
-    let (start, size) = (out.len() as u32, central.len() as u32);
-    out.extend(central);
-    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
-    out.extend_from_slice(&[0; 4]);
-    out.extend_from_slice(&(files.len() as u16).to_le_bytes());
-    out.extend_from_slice(&(files.len() as u16).to_le_bytes());
-    out.extend_from_slice(&size.to_le_bytes());
-    out.extend_from_slice(&start.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
-    out
+
+    pub fn finish(mut self) -> std::io::Result<W> {
+        let (start, size, count) = (self.at, self.central.len() as u64, self.count);
+        self.out.write_all(&self.central)?;
+        let end = start + size;
+        if start >= ZIP64 || size >= ZIP64 || count >= 0xFFFF {
+            // Zip64 end of central directory, and where to find it.
+            let mut r = Vec::new();
+            r.extend_from_slice(&0x0606_4b50u32.to_le_bytes());
+            r.extend_from_slice(&44u64.to_le_bytes());
+            r.extend_from_slice(&45u16.to_le_bytes());
+            r.extend_from_slice(&45u16.to_le_bytes());
+            r.extend_from_slice(&[0; 8]); // this disk, the directory's disk
+            r.extend_from_slice(&count.to_le_bytes());
+            r.extend_from_slice(&count.to_le_bytes());
+            r.extend_from_slice(&size.to_le_bytes());
+            r.extend_from_slice(&start.to_le_bytes());
+            r.extend_from_slice(&0x0706_4b50u32.to_le_bytes());
+            r.extend_from_slice(&0u32.to_le_bytes());
+            r.extend_from_slice(&end.to_le_bytes());
+            r.extend_from_slice(&1u32.to_le_bytes());
+            self.out.write_all(&r)?;
+        }
+        let n16 = if count >= 0xFFFF { 0xFFFF } else { count as u16 };
+        let mut e = Vec::new();
+        e.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        e.extend_from_slice(&[0; 4]);
+        e.extend_from_slice(&n16.to_le_bytes());
+        e.extend_from_slice(&n16.to_le_bytes());
+        e.extend_from_slice(&(if size >= ZIP64 { ZIP64 as u32 } else { size as u32 }).to_le_bytes());
+        e.extend_from_slice(&(if start >= ZIP64 { ZIP64 as u32 } else { start as u32 }).to_le_bytes());
+        e.extend_from_slice(&0u16.to_le_bytes());
+        self.out.write_all(&e)?;
+        self.out.flush()?;
+        Ok(self.out)
+    }
 }
 
 #[cfg(test)]
@@ -370,5 +442,10 @@ mod tests {
         assert_eq!(col_name(0), "A");
         assert_eq!(col_name(27), "AB");
         assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
+        // Over 65,535 entries: the Zip64 records carry the count (a plain one wrapped round to 0).
+        let names: Vec<(String, &[u8])> = (0..70_000).map(|i| (format!("f{i}"), &b"x"[..])).collect();
+        let z = zip(&names);
+        assert!(z.windows(4).any(|w| w == 0x0606_4b50u32.to_le_bytes()));
+        assert_eq!(&z[z.len() - 22 + 8..z.len() - 22 + 10], &[0xff, 0xff]);
     }
 }

@@ -362,8 +362,12 @@ fn tokens(s: &Side, n: &Norm, skip_edges: bool) -> Vec<Tok> {
                     let words: Vec<(usize, &str)> = split_words(cell);
                     let numeric = words.iter().filter(|(_, w)| number(w).is_some()).count();
                     let mut first = true;
+                    // UTF-16 places, counted on from the last word (not from the cell's start for every word).
+                    let (mut seen, mut units) = (0usize, 0u32);
                     for (off, w) in words {
-                        let from = cell[..off].encode_utf16().count() as u32;
+                        units += cell[seen..off].encode_utf16().count() as u32;
+                        seen = off;
+                        let from = units;
                         let to = from + w.encode_utf16().count() as u32;
                         let line = first;
                         first = false;

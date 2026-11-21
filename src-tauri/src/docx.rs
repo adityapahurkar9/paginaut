@@ -3,9 +3,9 @@
 //! order, a page break between pages. The flow of the text, not the page layout: easy to edit.
 //! (MuPDF's own .docx writer makes files Word refuses to open; LibreOffice's loses text under shading.)
 
-use crate::engine::table::{xml, zip, Table};
+use crate::engine::table::{xml, Table, Zip};
 use crate::engine::{Doc, Paragraph};
-use crate::flow::{clean, document, Block};
+use crate::flow::{clean, document, Block, PicRef};
 
 /// "ABCDEF+Aptos-Bold" → "Aptos".
 fn family(font: &str) -> String {
@@ -117,7 +117,8 @@ pub fn write(d: &Doc, order: &[usize], path: &str, progress: &mut dyn FnMut(usiz
     let margin = 54.0; // ¾ inch
     let (max_w, max_h) = ((pw - 2.0 * margin).max(72.0), (ph - 2.0 * margin).max(72.0));
     let mut body = String::new();
-    let mut media: Vec<(String, Vec<u8>)> = Vec::new();
+    // Only where each picture is: they're read one at a time as the file is written.
+    let mut media: Vec<(String, PicRef)> = Vec::new();
     let mut rels = String::new();
     for (k, blocks) in document(d, order, progress)?.into_iter().enumerate() {
         let mut new_page = k > 0;
@@ -131,12 +132,12 @@ pub fn write(d: &Doc, order: &[usize], path: &str, progress: &mut dyn FnMut(usiz
                     }
                     body.push_str(&table(&t));
                 }
-                Block::Picture(data, ext, w, h) => {
+                Block::Picture(pic, w, h) => {
                     let n = media.len() + 1;
-                    let name = format!("image{n}.{}", if ext == "png" { "png" } else { "jpeg" });
+                    let name = format!("image{n}.{}", pic.kind);
                     rels.push_str(&format!(r#"<Relationship Id="img{n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/{name}"/>"#));
                     body.push_str(&picture(n, w, h, max_w, max_h, new_page));
-                    media.push((format!("word/media/{name}"), data));
+                    media.push((format!("word/media/{name}"), pic));
                 }
             }
             new_page = false;
@@ -147,7 +148,7 @@ pub fn write(d: &Doc, order: &[usize], path: &str, progress: &mut dyn FnMut(usiz
     let document = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>{body}<w:sectPr><w:pgSz w:w="{tw}" w:h="{th}"{orient}/><w:pgMar w:top="{tm}" w:right="{tm}" w:bottom="{tm}" w:left="{tm}" w:header="360" w:footer="360" w:gutter="0"/></w:sectPr></w:body></w:document>"#
     );
-    let mut files: Vec<(String, Vec<u8>)> = vec![
+    let parts: Vec<(String, Vec<u8>)> = vec![
         (
             "[Content_Types].xml".into(),
             br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#.to_vec(),
@@ -162,8 +163,23 @@ pub fn write(d: &Doc, order: &[usize], path: &str, progress: &mut dyn FnMut(usiz
             format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}</Relationships>"#).into_bytes(),
         ),
     ];
-    files.extend(media);
-    std::fs::write(path, zip(&files)).map_err(|e| format!("Couldn't write {path}: {e}"))
+    // Written beside the chosen name and put in its place when whole.
+    let tmp = format!("{path}.paginaut-tmp");
+    let res = (|| -> Result<(), String> {
+        let file = std::fs::File::create(&tmp).map_err(|e| format!("Couldn't write {path}: {e}"))?;
+        let mut z = Zip::new(std::io::BufWriter::new(file));
+        let io = |e: std::io::Error| format!("Couldn't write {path}: {e}");
+        for (name, data) in &parts {
+            z.add(name, data).map_err(io)?;
+        }
+        for (name, pic) in &media {
+            z.add(name, &pic.read(d)?.0).map_err(io)?;
+        }
+        z.finish().map_err(io)?;
+        std::fs::rename(&tmp, path).or_else(|_| std::fs::copy(&tmp, path).map(drop)).map_err(io)
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    res
 }
 
 #[cfg(test)]

@@ -113,16 +113,25 @@ pub fn write(d: &Doc, order: &[usize], path: &str, progress: &mut dyn FnMut(usiz
     for blocks in &pages {
         for b in blocks {
             match b {
-                Block::Para(p) if !p.t.trim().is_empty() => md.push(paragraph(p, body)),
+                Block::Para(p) if !p.t.trim().is_empty() => {
+                    let line = paragraph(p, body);
+                    // A bullet read as a paragraph of its own (Word's PDFs put it apart from its text): the item is
+                    // the text after it.
+                    match md.last_mut() {
+                        Some(prev) if prev.as_str() == "- " && !line.starts_with(['#', '-', '|', '!']) => prev.push_str(&line),
+                        _ => md.push(line),
+                    }
+                }
                 Block::Para(_) => {}
                 Block::Table(t) => md.push(table(t)),
-                Block::Picture(data, kind, _, _) => {
+                Block::Picture(pic, _, _) => {
+                    let (data, kind) = pic.read(d)?;
                     if pictures == 0 {
                         std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't make {}: {e}", dir.display()))?;
                     }
                     pictures += 1;
-                    let name = format!("picture-{pictures}.{}", if *kind == "png" { "png" } else { "jpg" });
-                    std::fs::write(dir.join(&name), data).map_err(|e| e.to_string())?;
+                    let name = format!("picture-{pictures}.{}", if kind == "png" { "png" } else { "jpg" });
+                    std::fs::write(dir.join(&name), &data).map_err(|e| e.to_string())?;
                     // Angle brackets keep a name with spaces in one link.
                     md.push(format!("![Picture {pictures}](<{folder}/{name}>)"));
                 }

@@ -8347,10 +8347,16 @@ int fo_sig_data(fo_ctx *c, fo_doc *d, int i, unsigned char **data, size_t *len, 
 		*cms_len = pdf_signature_contents(CTX, pdf, sigs[i], &contents);
 		check_byte_range(CTX, pdf, sigs[i], contents, *cms_len);
 		stm = pdf_signature_hash_bytes(CTX, pdf, sigs[i]);
-		buf = fz_read_all(CTX, stm, 1 << 20);
-		l = fz_buffer_storage(CTX, buf, &p);
-		*data = fz_malloc(CTX, l ? l : 1);
-		memcpy(*data, p, l);
+		/* Read at the size the range gives (no growing and copying as it fills), and handed over as it is: a
+		 * copy of everything a signature covers was made here again, per signature (a 900 MB scan: 1.8 GB). */
+		{
+			int64_t want = sig_end(CTX, sigs[i]);
+			buf = fz_read_all(CTX, stm, want > 0 && want < ((int64_t)1 << 31) ? (size_t)want : 1 << 20);
+		}
+		l = fz_buffer_extract(CTX, buf, &p);
+		if (!p)
+			p = fz_malloc(CTX, 1);
+		*data = p;
 		*len = l;
 		*cms = (unsigned char *)contents;
 		contents = NULL;

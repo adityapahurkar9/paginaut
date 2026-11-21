@@ -28,21 +28,27 @@ pub fn latest_path(file: &str) -> String {
 
 /// Checks `data` against a signature made with the release key (`sig`: the base64 .sig file `tauri signer` writes).
 pub fn verify(data: &[u8], sig: &str) -> Result<(), String> {
-    let bad = || "The download's signature didn't match Paginaut's, so it wasn't used.".to_string();
+    let (pk, sig) = key_and_signature(sig)?;
+    pk.verify(data, &sig, true).map_err(|_| bad_signature())
+}
+
+fn bad_signature() -> String {
+    "The download's signature didn't match Paginaut's, so it wasn't used.".to_string()
+}
+
+/// Paginaut's public key and the signature `sig` (both base64 of minisign's text).
+fn key_and_signature(sig: &str) -> Result<(minisign_verify::PublicKey, minisign_verify::Signature), String> {
     let text = |b64: &str| crate::base64::decode(b64.trim()).and_then(|b| String::from_utf8(b).ok());
-    let pk = minisign_verify::PublicKey::decode(&text(PUBKEY).ok_or_else(bad)?).map_err(|_| bad())?;
-    let sig = minisign_verify::Signature::decode(&text(sig).ok_or_else(bad)?).map_err(|_| bad())?;
-    pk.verify(data, &sig, true).map_err(|_| bad())
+    let pk = minisign_verify::PublicKey::decode(&text(PUBKEY).ok_or_else(bad_signature)?).map_err(|_| bad_signature())?;
+    let sig = minisign_verify::Signature::decode(&text(sig).ok_or_else(bad_signature)?).map_err(|_| bad_signature())?;
+    Ok((pk, sig))
 }
 
 /// As `verify`, for a file: read in pieces (an installer can be 400 MB), unless its signature is of the old kind
 /// that signs the bytes themselves.
 pub fn verify_file(path: &Path, sig: &str) -> Result<(), String> {
     use std::io::Read;
-    let bad = || "The download's signature didn't match Paginaut's, so it wasn't used.".to_string();
-    let text = |b64: &str| crate::base64::decode(b64.trim()).and_then(|b| String::from_utf8(b).ok());
-    let pk = minisign_verify::PublicKey::decode(&text(PUBKEY).ok_or_else(bad)?).map_err(|_| bad())?;
-    let signature = minisign_verify::Signature::decode(&text(sig).ok_or_else(bad)?).map_err(|_| bad())?;
+    let (pk, signature) = key_and_signature(sig)?;
     match pk.verify_stream(&signature) {
         Ok(mut v) => {
             let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
@@ -54,10 +60,10 @@ pub fn verify_file(path: &Path, sig: &str) -> Result<(), String> {
                 }
                 v.update(&buf[..n]);
             }
-            v.finalize().map_err(|_| bad())
+            v.finalize().map_err(|_| bad_signature())
         }
         Err(minisign_verify::Error::UnsupportedLegacyMode) => verify(&std::fs::read(path).map_err(|e| e.to_string())?, sig),
-        Err(_) => Err(bad()),
+        Err(_) => Err(bad_signature()),
     }
 }
 

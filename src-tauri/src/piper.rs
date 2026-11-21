@@ -162,7 +162,7 @@ impl Voices {
                 data.extend_from_slice(c);
                 Ok(())
             })?;
-            if git_blob_sha1(&data)? != v.config.1 {
+            if crate::net::git_blob_sha1(&data)? != v.config.1 {
                 return Err("The downloaded voice didn't match the expected one; try again.".into());
             }
             std::fs::write(&config, usable_config(&data)?).map_err(|e| e.to_string())
@@ -358,13 +358,6 @@ fn usable_config(data: &[u8]) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&c).map_err(|e| e.to_string())
 }
 
-/// Git's hash of a file ("blob <size>\0" + contents), as the repository lists it.
-fn git_blob_sha1(data: &[u8]) -> Result<String, String> {
-    let mut h = crate::net::Hasher::new(crate::net::Alg::Sha1)?;
-    h.update(format!("blob {}\0", data.len()).as_bytes())?;
-    h.update(data)?;
-    Ok(crate::net::hex(&h.finish()?))
-}
 
 /// Byte ranges of the sentences (ending at . ! ? … । ॥ and the like, plus closing quotes), blanks left out.
 fn sentences(text: &str) -> Vec<(usize, usize)> {

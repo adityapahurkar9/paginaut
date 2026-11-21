@@ -579,12 +579,7 @@ impl Doc {
         PRIVATE_DOCS.with(|m| {
             let mut m = m.borrow_mut();
             if !m.contains_key(&self.id) {
-                let d = Document::open_private(&self.file())?;
-                if d.needs_password() {
-                    if let Some(pw) = self.password.lock().as_deref() {
-                        d.authenticate(pw);
-                    }
-                }
+                let d = Document::open_private(&self.file())?.unlocked_with(self.password.lock().as_deref());
                 layout_reflowable(&d, &self.path())?;
                 m.insert(self.id, d);
             }
@@ -607,12 +602,7 @@ impl Doc {
         if self.content_edited.load(Ordering::Acquire) {
             return Ok(None);
         }
-        let d = Document::open_private(&self.file())?;
-        if d.needs_password() {
-            if let Some(pw) = self.password.lock().as_deref() {
-                d.authenticate(pw);
-            }
-        }
+        let d = Document::open_private(&self.file())?.unlocked_with(self.password.lock().as_deref());
         layout_reflowable(&d, &self.path())?;
         Ok(Some(d))
     }
@@ -764,12 +754,7 @@ impl Doc {
                 Ok(())
             }
             None => {
-                let fresh = Document::open(&self.file())?;
-                if fresh.needs_password() {
-                    if let Some(pw) = self.password.lock().as_deref() {
-                        fresh.authenticate(pw);
-                    }
-                }
+                let fresh = Document::open(&self.file())?.unlocked_with(self.password.lock().as_deref());
                 inner.doc = fresh;
                 drop(inner);
                 self.prepare()
@@ -1837,12 +1822,7 @@ impl Engine {
             None => d.password.lock().clone(),
         };
         let open_saved = |path: &str| -> Result<Document, String> {
-            let doc = Document::open(path)?;
-            if doc.needs_password() {
-                if let Some(pw) = new_pw.as_deref() {
-                    doc.authenticate(pw);
-                }
-            }
+            let doc = Document::open(path)?.unlocked_with(new_pw.as_deref());
             Ok(doc)
         };
         let mut inner = d.inner.lock();
@@ -1897,12 +1877,7 @@ impl Engine {
             let write = |doc: &Document, path: &str| -> Result<(), String> {
                 let stage = temp_path(id, "save");
                 let res = doc.save_copy(&stage).and_then(|_| {
-                    let s = Document::open(&stage)?;
-                    if s.needs_password() {
-                        if let Some(pw) = pw.as_deref() {
-                            s.authenticate(pw);
-                        }
-                    }
+                    let s = Document::open(&stage)?.unlocked_with(pw.as_deref());
                     if opts.any() { s.save_pdf_with(path, encrypt, compact) } else { s.save_pdf(path, false) }
                 });
                 let _ = std::fs::remove_file(&stage);
@@ -2053,12 +2028,7 @@ impl Engine {
         let _ = std::fs::remove_file(&write_to);
         // Reopen from disk: the signed file, or on failure the untouched original.
         let reopen = if res.is_ok() { out.clone() } else { cur.clone() };
-        let fresh = Document::open(&reopen)?;
-        if fresh.needs_password() {
-            if let Some(pw) = d.password.lock().as_deref() {
-                fresh.authenticate(pw);
-            }
-        }
+        let fresh = Document::open(&reopen)?.unlocked_with(d.password.lock().as_deref());
         inner.doc = fresh;
         drop(inner);
         if let Err(e) = res {
@@ -2162,12 +2132,7 @@ impl Engine {
             .iter()
             .map(|p| {
                 write(&p.path, &|out| {
-                    let doc = Document::open(&copy)?;
-                    if doc.needs_password() {
-                        if let Some(pw) = d.password.lock().as_deref() {
-                            doc.authenticate(pw);
-                        }
-                    }
+                    let doc = Document::open(&copy)?.unlocked_with(d.password.lock().as_deref());
                     doc.apply_page_edits(&rot, &p.pages, file_pages)?;
                     doc.save_pdf(out, false)
                 })
@@ -2302,12 +2267,7 @@ impl Engine {
         let copy_path = temp_path(id, "flatten");
         d.inner.lock().doc.save_copy(&copy_path)?;
         let res = write_beside(&target, |out| {
-            let copy = Document::open(&copy_path)?;
-            if copy.needs_password() {
-                if let Some(pw) = d.password.lock().as_deref() {
-                    copy.authenticate(pw);
-                }
-            }
+            let copy = Document::open(&copy_path)?.unlocked_with(d.password.lock().as_deref());
             copy.apply_page_edits(&rot, &order, d.file_pages.load(Ordering::Relaxed))?;
             copy.bake(annots)?;
             copy.save_pdf(out, false)
