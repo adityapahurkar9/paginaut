@@ -12,7 +12,8 @@ the release that carries it in ROADMAP.md.
       once 0.7 s later; see Fixed below) made it rarer, not gone.
       Likely: the sending app's provider (Gmail, WhatsApp hand attachments over through their own) answers "not
       found" for longer than 0.7 s while it starts or fetches the attachment.
-      Changed for 0.6.7 (not yet on a phone): asked again with growing waits for up to about 8 seconds
+      Changed for 0.6.7 (built 2026-11-21, release/android; on the Pixel 9 emulator a PDF sent while Paginaut
+      was stopped opened 6 times in 6; not yet on a phone): asked again with growing waits for up to about 8 seconds
       (PaginautPlugin.kt openSent, SENT_PATIENCE), once more when the page takes the file (takeIntent), and the
       page shows "Opening…" meanwhile (src/mobile/open.ts, checkIntent). To check on the phone: Gmail and
       WhatsApp, Paginaut closed, several times each. If it still fails, the next thing to look at is whether

@@ -2,7 +2,7 @@
 //! pictures in reading order, without what only makes sense on a printed page (page numbers).
 
 use crate::engine::table::Table;
-use crate::engine::{Doc, Paragraph, Picture};
+use crate::engine::{roman_folio, Doc, Paragraph, Picture};
 
 pub enum Block {
     Para(Paragraph),
@@ -139,34 +139,5 @@ mod tests {
     #[test]
     fn symbol_bullets() {
         assert_eq!(super::clean("\u{f0b7} New office"), "• New office");
-    }
-}
-
-/// A Roman page number as front matter carries them: a real numeral, small (i to lxxxix: only the letters i, v, x
-/// and l, in their proper order), all in one case. Any word made of the Roman letters used to pass, so "CV",
-/// "Civil", "Mid" or "DVD" at the head of a page was dropped as a page number.
-pub fn roman_folio(w: &str) -> bool {
-    if w.is_empty() || !(w.chars().all(|c| c.is_ascii_lowercase()) || w.chars().all(|c| c.is_ascii_uppercase())) {
-        return false;
-    }
-    let w = w.to_ascii_lowercase();
-    // Tens (nothing, x to xxx, xl, l to lxxx), then ones (nothing, i to iii, iv, v to viii, ix).
-    let tens = ["lxxx", "lxx", "lx", "xl", "xxx", "xx", "l", "x", ""];
-    let ones = ["viii", "vii", "vi", "iv", "ix", "iii", "ii", "v", "i", ""];
-    tens.iter().any(|t| w.strip_prefix(t).is_some_and(|rest| ones.contains(&rest)))
-}
-
-#[cfg(test)]
-mod roman_tests {
-    use super::roman_folio;
-
-    #[test]
-    fn roman_page_numbers() {
-        for w in ["i", "iv", "ix", "xii", "XLVIII", "lxxxix", "V", "L"] {
-            assert!(roman_folio(w), "{w}");
-        }
-        for w in ["CV", "Civil", "Mid", "DVD", "mix", "iiii", "vx", "Xi", "c", "m", "ixx", ""] {
-            assert!(!roman_folio(w), "{w}");
-        }
     }
 }
