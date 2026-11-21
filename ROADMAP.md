@@ -895,6 +895,34 @@ only when the user exports it and passes it on themselves (docs/PLAY-DATA-SAFETY
       Windows, Linux (the .deb and the AppImage) and Android; a document's text and a password typed in the session
       checked to be absent
 
+## 0.9.12 (Windows, Linux) and Android 0.6.7: the 2026-11-13 code review fixed
+Versions set 2026-11-21; not built into installers or packages yet (release/v0.9.12 doesn't exist). Tested: the
+TypeScript check, the Rust unit tests on Windows and Linux (WSL), and every engine suite with the Office ones
+(tools/test-all.ps1 -Office), plus pdfa_test and dsc_test. Not tried in the running app, and the Android changes
+weren't built. Every entry of the review in BUGS.md is ticked with what was done, except the update's version
+signature, left open by choice (it needs latest.json signed at every release). Most important:
+- [x] Attachments open only when they're documents, pictures, text, sound or video, read from the name as Windows
+      stores it ("invoice.exe " was opened as a program)
+- [x] Signing writes beside its target and replaces it only when it worked; the replace waits for readers, as saving
+      does; a signature's byte range must cover the file from its start with only the signature left out
+- [x] An update looks for unsaved changes again after its download, before anything quits
+- [x] Saving: one save of a tab at a time; Ctrl+S takes in the field or text box being typed in; the file is written
+      afresh after Sanitize or anything deleted (removed content no longer stays in its earlier bytes; signed files
+      are still only added to)
+- [x] Signatures: one that certifies the document or locks fields is judged by the changes saved after it; an
+      expired certificate is valid only with a trusted timestamp; Linux checks the timestamp answers this request
+- [x] Web links on pages open (http, https, mailto only); Markdown tabs keep what was typed when moved between
+      windows; a Markdown file that isn't UTF-8 opens read-only with "Save a UTF-8 copy"
+- [x] Smaller ones: per-tab timers for Find and saving rotations; Piper, OCR models and LibreOffice set up once at a
+      time; hung Office programs ended; decimal commas stay text in Excel; real Roman numerals only as page numbers;
+      Book mode splits Chinese, Japanese and Thai; page label ranges kept apart; OCR layers survive redaction;
+      inserted pages don't drag their whole file along; Save as Word streams its pictures (Zip64 past 4 GB)
+- [x] Settings › Read aloud (Windows) points to the English (India) speech pack (Heera, Ravi): Piper still has no
+      Indian English voice
+- [ ] Android 0.6.7: a file sent from another app on a cold start still failed at random on a phone (reported
+      2026-11-21): now asked for up to about 8 seconds, once more when the page takes it, with "Opening…" shown.
+      To build and check on a phone (BUGS.md, open)
+
 ## 0.9.11 (Windows, Linux) and Android 0.6.6: the fixes in BUGS.md, tools in the right pane
 Built 2026-11-09: release/v0.9.11 has the Windows installer (+ .sig, latest.json, addons.json), the Linux .deb and
 AppImage; not published. Android 0.6.6 built 2026-11-10: release/android/Paginaut_0.6.6.aab and the four per-ABI
