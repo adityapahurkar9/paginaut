@@ -4,8 +4,13 @@
 # Tauri puts the Rust library into the Gradle project with a symlink, which Windows only allows in
 # Developer Mode; this copies it instead, then runs Gradle without Tauri's own Rust step.
 #
-# Usage: bash tools/android.sh [x86_64|arm64|arm|x86] [--release] [--no-install]
+# Usage: bash tools/android.sh [x86_64|arm64|arm|x86] [--release] [--no-install] [--publish]
 #        bash tools/android.sh all --release      the Play Store bundle (.aab, all four ABIs)
+#        bash tools/android.sh --publish-only     upload what release/android/ has for this version
+# Release builds are copied to release/android/Paginaut_<version>[_<abi>].apk/.aab; only the newest 5 versions
+# stay there (tools/prune-releases.ps1). --publish uploads this version's files to the GitHub release
+# android-v<version> of the releases repository (update.rs: RELEASES), never marked "latest": the desktop
+# app's update check reads the latest release.
 # Release builds are signed with the upload key %USERPROFILE%\.paginaut\android-signing.properties names (or the
 # file PAGINAUT_ANDROID_SIGNING names; see src-tauri/gen/android/app/build.gradle.kts), and stop without it.
 set -euo pipefail
@@ -14,10 +19,14 @@ cd "$(dirname "$0")/.."
 arch=x86_64
 profile=debug
 install=1
+publish=0
+publish_only=0
 for a in "$@"; do
   case "$a" in
     --release) profile=release ;;
     --no-install) install=0 ;;
+    --publish) publish=1 ;;
+    --publish-only) publish=1; publish_only=1 ;;
     x86_64|arm64|arm|x86|all) arch=$a ;;
     *) echo "unknown argument: $a" >&2; exit 1 ;;
   esac
@@ -68,6 +77,34 @@ build_lib() {
 }
 
 Profile="$(tr '[:lower:]' '[:upper:]' <<< "${profile:0:1}")${profile:1}"
+version=$(grep -m1 '"version"' src-tauri/tauri.android.conf.json | sed -E 's/.*"([0-9.]+)".*/\1/')
+
+# A release build's file into release/android/ under its version, then trim to the newest 5 versions.
+keep_release() {
+  [ "$profile" = release ] || return 0
+  mkdir -p release/android
+  cp "$1" "release/android/$2"
+  echo "Copied to release/android/$2"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/prune-releases.ps1
+}
+
+# This version's files in release/android/ as the GitHub release android-v<version> (made, or added to).
+publish_release() {
+  local repo files tag="android-v$version"
+  repo=$(sed -nE 's/.*pub const RELEASES: &str = "([^"]+)".*/\1/p' src-tauri/src/update.rs)
+  files=(release/android/Paginaut_"$version"[._]*)
+  [ -e "${files[0]}" ] || { echo "Nothing in release/android/ for $version to publish." >&2; exit 1; }
+  if gh release view "$tag" --repo "$repo" --json tagName >/dev/null 2>&1; then
+    gh release upload "$tag" "${files[@]}" --repo "$repo" --clobber
+  else
+    gh release create "$tag" "${files[@]}" --repo "$repo" --title "Paginaut for Android $version" \
+      --notes "Paginaut for Android $version" --latest=false
+  fi
+  echo "Published: https://github.com/$repo/releases/tag/$tag"
+}
+
+if [ "$publish_only" = 1 ]; then publish_release; exit 0; fi
+if [ "$publish" = 1 ] && [ "$profile" != release ]; then echo "--publish needs --release." >&2; exit 1; fi
 
 if [ "$arch" = all ]; then
   for a in arm64 arm x86 x86_64; do build_lib "$a"; done
@@ -75,6 +112,8 @@ if [ "$arch" = all ]; then
   (cd src-tauri/gen/android && ./gradlew "bundleUniversal$Profile" -x "rustBuildUniversal$Profile" --console=plain -q)
   aab=$(ls src-tauri/gen/android/app/build/outputs/bundle/universal"$Profile"/*.aab | head -1)
   echo "AAB: $aab ($(du -h "$aab" | cut -f1))"
+  keep_release "$aab" "Paginaut_$version.aab"
+  if [ "$publish" = 1 ]; then publish_release; fi
   exit 0
 fi
 
@@ -85,4 +124,7 @@ rm -rf "src-tauri/gen/android/app/build/outputs/apk/$arch/$profile"
 (cd src-tauri/gen/android && ./gradlew "assemble$Arch$Profile" -x "rustBuild$Arch$Profile" --console=plain -q)
 apk=$(ls src-tauri/gen/android/app/build/outputs/apk/"$arch"/"$profile"/*.apk | head -1)
 echo "APK: $apk ($(du -h "$apk" | cut -f1))"
+case "$arch" in arm) abi_name=arm32 ;; *) abi_name=$arch ;; esac
+keep_release "$apk" "Paginaut_${version}_$abi_name.apk"
+if [ "$publish" = 1 ]; then publish_release; fi
 if [ "$install" = 1 ]; then "$adb" install -r "$apk"; fi

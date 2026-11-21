@@ -601,9 +601,11 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       only saved when they moved
 
 ## Phase 8 (0.8.0): Packaging, updates and signing
-- [ ] GitHub repository hosting releases and update files — built, not yet created: the source repo is private
-      and the app can't read a private repo's releases, so releases go to a public repo
-      (update.rs `RELEASES` = adityapahurkar9/paginaut-releases). Waiting on the user's decision; nothing published
+- [ ] GitHub repository hosting releases and update files — releases go to the source repo itself
+      (update.rs `RELEASES` = adityapahurkar9/paginaut, from 0.9.12; earlier builds looked at an unused
+      paginaut-releases), which must be public for the app to read them (and the AGPL wants the source out
+      anyway). tools/release.ps1 -Publish and tools/android.sh --publish upload; release/ keeps the newest 5.
+      Waiting on the repo being made public; nothing published yet
 - [x] Help › Check for updates and Settings › About › Updates (check, "Update and restart", progress, stop),
       plus a quiet check once a day (on by default, can be turned off; only github.com is asked). Our own updater
       on WinHTTP, no second HTTP stack: reads latest.json (Tauri's format), accepts only installers from the

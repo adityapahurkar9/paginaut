@@ -3,8 +3,10 @@
 #   powershell -File tools/release.ps1 [-Notes "What's new"] [-SkipTests] [-NoBuild] [-Publish]
 #   powershell -File tools/release.ps1 -AddonsOnly [-Publish]   re-sign release/v<version>/addons.json after editing
 #                                                               it, to change add-ons without a new Paginaut
-# -Publish uploads the files as a GitHub release of the releases repository (update.rs: RELEASES) with gh.
-# Nothing is published without it. The update key is %USERPROFILE%\.paginaut\updater.key unless
+# -Publish uploads the files as a GitHub release of the releases repository (update.rs: RELEASES) with gh,
+# Linux files included (it stops if tools/linux.sh release hasn't put them in release/v<version>/ yet; run
+# again with -SkipTests -NoBuild -Publish once it has). Nothing is published without it. Every run keeps
+# only the newest 5 releases in release/ (tools/prune-releases.ps1); older ones live on GitHub. The update key is %USERPROFILE%\.paginaut\updater.key unless
 # TAURI_SIGNING_PRIVATE_KEY_PATH says otherwise (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD if it has one).
 param([string]$Notes = "", [switch]$SkipTests, [switch]$NoBuild, [switch]$Publish, [switch]$AddonsOnly)
 
@@ -38,16 +40,23 @@ if (-not $AddonsOnly) {
       if ($LASTEXITCODE -ne 0) { throw "The build failed." }
     }
     $built = Join-Path $root "src-tauri\target\release\bundle\nsis\$setupName"
-    if (-not (Test-Path $built)) { throw "$setupName wasn't built." }
-    Copy-Item $built $stage -Force
-    Sign (Join-Path $stage $setupName)
+    $staged = Join-Path $stage $setupName
+    # -NoBuild after the build cache was cleared: use the installer already staged (and signed) here.
+    $reuse = $NoBuild -and -not (Test-Path $built) -and (Test-Path $staged) -and (Test-Path "$staged.sig")
+    if (-not $reuse) {
+      if (-not (Test-Path $built)) { throw "$setupName wasn't built." }
+      Copy-Item $built $stage -Force
+      Sign $staged
+    }
 
     # The add-on list this version has built in (edit release\v<version>\addons.json and use -AddonsOnly to change it later).
-    Push-Location src-tauri
-    $cargo = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
-    $json = cmd /c "`"$cargo`" run --release --quiet --example make_addons 2>nul"
-    Pop-Location
-    [IO.File]::WriteAllText((Join-Path $stage "addons.json"), ($json -join "`n"))
+    if (-not ($reuse -and (Test-Path (Join-Path $stage "addons.json")))) {
+      Push-Location src-tauri
+      $cargo = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
+      $json = cmd /c "`"$cargo`" run --release --quiet --example make_addons 2>nul"
+      Pop-Location
+      [IO.File]::WriteAllText((Join-Path $stage "addons.json"), ($json -join "`n"))
+    }
   } finally { Pop-Location }
 
   $latest = [ordered]@{
@@ -71,6 +80,9 @@ Sign $addons
 Write-Host "Ready in $stage :" -ForegroundColor Green
 Get-ChildItem $stage | ForEach-Object { "  {0,-40} {1,10:N0} bytes" -f $_.Name, $_.Length }
 
+# Only this release and the four before it stay in release/ (the rest are on GitHub).
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "prune-releases.ps1")
+
 if (-not $Publish) {
   Write-Host "Not published (add -Publish to upload to github.com/$repo)."
   exit 0
@@ -80,12 +92,24 @@ if ($LASTEXITCODE -ne 0) { throw "github.com/$repo doesn't exist (or gh isn't si
 if ($AddonsOnly) {
   & gh release upload "v$version" $addons "$addons.sig" --repo $repo --clobber
 } else {
-  # The notes go through a file: quotes, & and % in them reach GitHub as written.
-  $notesFile = Join-Path $stage "notes.txt"
-  [IO.File]::WriteAllText($notesFile, $latest.notes)
+  # Every Windows release ships the Linux .deb and AppImage too (tools/linux.sh release puts them here).
+  if (-not (Get-ChildItem $stage -Filter "*.deb") -or -not (Get-ChildItem $stage -Filter "*.AppImage")) {
+    throw "No Linux .deb/AppImage in $stage yet: run tools/linux.sh release in Ubuntu 22.04, then publish with -SkipTests -NoBuild -Publish."
+  }
   $files = Get-ChildItem $stage -Exclude "notes.txt" | ForEach-Object { $_.FullName }
-  & gh release create "v$version" @files --repo $repo --title "Paginaut $version" --notes-file $notesFile
-  Remove-Item $notesFile
+  & gh release view "v$version" --repo $repo --json tagName 2>$null | Out-Null
+  if ($LASTEXITCODE -eq 0) {
+    # Already published (a second run): replace the files in place.
+    & gh release upload "v$version" @files --repo $repo --clobber
+  } else {
+    # The notes go through a file: quotes, & and % in them reach GitHub as written.
+    $notesFile = Join-Path $stage "notes.txt"
+    [IO.File]::WriteAllText($notesFile, $latest.notes)
+    # --latest: the app's update check reads releases/latest, which must stay the desktop release
+    # (Android releases are published with --latest=false).
+    & gh release create "v$version" @files --repo $repo --title "Paginaut $version" --notes-file $notesFile --latest
+    Remove-Item $notesFile
+  }
 }
 if ($LASTEXITCODE -ne 0) { throw "Publishing failed." }
 Write-Host "Published: https://github.com/$repo/releases/tag/v$version" -ForegroundColor Green
