@@ -605,7 +605,8 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       (update.rs `RELEASES` = adityapahurkar9/paginaut, from 0.9.12; earlier builds looked at an unused
       paginaut-releases), which must be public for the app to read them (and the AGPL wants the source out
       anyway). tools/release.ps1 -Publish and tools/android.sh --publish upload; release/ keeps the newest 5.
-      Waiting on the repo being made public; nothing published yet
+      Published 2026-11-22: v0.9.12 (latest), archives v0.9.7–v0.9.11 and android-v0.3.0–v0.6.7 (never "latest").
+      Waiting on the repo being made public; until then the app's update check can't read it
 - [x] Help › Check for updates and Settings › About › Updates (check, "Update and restart", progress, stop),
       plus a quiet check once a day (on by default, can be turned off; only github.com is asked). Our own updater
       on WinHTTP, no second HTTP stack: reads latest.json (Tauri's format), accepts only installers from the
@@ -898,7 +899,8 @@ only when the user exports it and passes it on themselves (docs/PLAY-DATA-SAFETY
       checked to be absent
 
 ## 0.9.12 (Windows, Linux) and Android 0.6.7: the 2026-11-13 code review fixed
-Versions set 2026-11-21; the desktop isn't built into installers or packages yet (release/v0.9.12 doesn't exist).
+Versions set 2026-11-21. Built and published 2026-11-22 as the latest GitHub release (v0.9.12: Windows installer +
+.sig, latest.json, addons.json, Linux .deb and AppImage), the first build whose update check reads adityapahurkar9/paginaut.
 Android 0.6.7 built 2026-11-21: release/android/Paginaut_0.6.7.aab and the four per-ABI APKs (upload-key signed,
 version code 6007); its build caught the Roman numeral check living in desktop-only code (moved into the engine).
 Tested: the

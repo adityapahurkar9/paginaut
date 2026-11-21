@@ -87,7 +87,7 @@ if (-not $Publish) {
   Write-Host "Not published (add -Publish to upload to github.com/$repo)."
   exit 0
 }
-& gh repo view $repo --json name 2>$null | Out-Null
+cmd /c "gh repo view $repo --json name >nul 2>&1"
 if ($LASTEXITCODE -ne 0) { throw "github.com/$repo doesn't exist (or gh isn't signed in): create it as a public repository first." }
 if ($AddonsOnly) {
   & gh release upload "v$version" $addons "$addons.sig" --repo $repo --clobber
@@ -97,7 +97,8 @@ if ($AddonsOnly) {
     throw "No Linux .deb/AppImage in $stage yet: run tools/linux.sh release in Ubuntu 22.04, then publish with -SkipTests -NoBuild -Publish."
   }
   $files = Get-ChildItem $stage -Exclude "notes.txt" | ForEach-Object { $_.FullName }
-  & gh release view "v$version" --repo $repo --json tagName 2>$null | Out-Null
+  # Through cmd: Windows PowerShell stops on gh's "release not found" on stderr otherwise.
+  cmd /c "gh release view v$version --repo $repo --json tagName >nul 2>&1"
   if ($LASTEXITCODE -eq 0) {
     # Already published (a second run): replace the files in place.
     & gh release upload "v$version" @files --repo $repo --clobber
