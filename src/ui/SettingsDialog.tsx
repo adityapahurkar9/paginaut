@@ -8,7 +8,8 @@ import { deleteModel, downloadModel, downloads, loadLangs, ocrLangs, rememberCho
 import { moveOnRail, onRail, openPane, railOrder, railShown, resetRail, setOnRail, setRailShown } from "../panes";
 import { downloadVoice, loadPiperVoices, piperVoices, playSample, removeVoice, samplePlaying, stopSample, stopVoiceDownload, voiceDownloads, type PiperVoice } from "../speech";
 import { VoiceChoices } from "./SpeechBar";
-import { onLinux, settings, settingsOpen, updateSettings, type Settings, type SettingsTab } from "../store";
+import { onLinux, settings, settingsOpen, showToast, updateSettings, type Settings, type SettingsTab } from "../store";
+import { api } from "../api";
 import { About, Shortcuts } from "./HelpDialogs";
 import { OfficeSettings } from "./OfficeUI";
 import { PANES } from "./Rail";
@@ -380,6 +381,20 @@ function ReadAloud() {
           <VoiceChoices />
         </div>
       </Field>
+      {!onLinux && (
+        <div class="tool-field">
+          <label>Indian English voices</label>
+          <span class="hint">
+            Windows has Indian English voices (Heera and Ravi) in its English (India) speech pack. Add it in Windows' speech settings (Add voices › English (India)); the
+            voices then appear in the list above. The natural voices below have no Indian English voice yet.
+          </span>
+          <div class="set-row">
+            <button class="btn sm" onClick={() => void api.speechSettingsOpen().catch((e) => showToast(String(e), 5000))}>
+              Open Windows' speech settings
+            </button>
+          </div>
+        </div>
+      )}
       <div class="tool-field">
         <label>Natural voices</label>
         <span class="hint">Voices from the Piper project that sound more like a person and work offline. Each is a download of about 60–130 MB; the first also gets Piper itself (22 MB).</span>
@@ -395,6 +410,7 @@ function ReadAloud() {
                 </option>
               ))}
             </select>
+            {tag.startsWith("en") && <span class="hint">English voices here are American or British: the Piper project has no Indian English voice yet.</span>}
             {offered.length ? <div class="set-voices">{offered.map((v) => row(v, false))}</div> : <span class="hint">Every voice for this language is downloaded.</span>}
           </>
         )}

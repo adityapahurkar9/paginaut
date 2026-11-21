@@ -1566,6 +1566,17 @@ pub async fn default_apps_open(app: tauri::AppHandle) -> Res<()> {
     app.opener().open_url("ms-settings:defaultapps?registeredAppUser=Paginaut", None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Windows' Settings › Time & language › Speech, where more voices (English (India) among them) are added.
+#[tauri::command]
+pub async fn speech_settings_open(app: tauri::AppHandle) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    if cfg!(windows) {
+        app.opener().open_url("ms-settings:speech", None::<&str>).map_err(|e| e.to_string())
+    } else {
+        Err("Only Windows has speech settings to open.".into())
+    }
+}
+
 /// Opens a file Paginaut just made in the program Windows uses for it.
 #[tauri::command]
 pub fn open_path(app: tauri::AppHandle, path: String) -> Res<()> {

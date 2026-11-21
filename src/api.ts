@@ -619,6 +619,8 @@ export const api = {
   // False: Paginaut stays open while the system's software installer finishes (Linux's .deb).
   updateRun: () => invoke<boolean>("update_run"),
   updateStop: () => invoke<void>("update_stop"),
+  /** Windows' speech settings (more voices are added there). */
+  speechSettingsOpen: () => invoke<void>("speech_settings_open"),
   /** `encoding`: set when the file isn't UTF-8 (it's then shown, not written back); `bom`: it starts with a byte order mark. */
   markdownRead: (path: string) => invoke<{ text: string; bom: boolean; encoding: string | null }>("markdown_read", { path }),
   /** The Markdown file at `path` shown from `text` (a new document; pictures from its folder). */

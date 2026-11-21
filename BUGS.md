@@ -5,6 +5,20 @@ the release that carries it in ROADMAP.md.
 
 ## Open
 
+### Android (0.6.6; reported again 2026-11-21, on a phone)
+
+- [ ] Opening a PDF from another app while Paginaut isn't running still fails at random: sometimes it opens,
+      sometimes "This file isn't there any more (moved or deleted)". The 0.6.6 fix (read at once, asked again
+      once 0.7 s later; see Fixed below) made it rarer, not gone.
+      Likely: the sending app's provider (Gmail, WhatsApp hand attachments over through their own) answers "not
+      found" for longer than 0.7 s while it starts or fetches the attachment.
+      Changed for 0.6.7 (not yet on a phone): asked again with growing waits for up to about 8 seconds
+      (PaginautPlugin.kt openSent, SENT_PATIENCE), once more when the page takes the file (takeIntent), and the
+      page shows "Opening…" meanwhile (src/mobile/open.ts, checkIntent). To check on the phone: Gmail and
+      WhatsApp, Paginaut closed, several times each. If it still fails, the next thing to look at is whether
+      Android's grant for the file reaches Paginaut on those starts (a SecurityException would say "can no
+      longer open", not "isn't there", so the message points at the provider)
+
 ### Code review, whole codebase (found 2026-11-13; read from the code, none checked by running yet)
 
 After five passes everything has been read, native/paginaut.c included (all 14,000 lines, in the fifth pass). Only
@@ -426,12 +440,18 @@ Cleanup:
       clicked again, another sample starts or it finishes. Closing Settings (and leaving the Read aloud tab) should
       stop it. (src/speech.ts, playSample; src/ui/SettingsDialog.tsx, ReadAloud)
       Fixed: the Read aloud tab stops the sample when it goes away (leaving the tab or closing Settings)
-- [ ] Very few Indian English voices. The downloadable list has none: the Piper catalogue has English only for
+- [x] Very few Indian English voices. The downloadable list has none: the Piper catalogue has English only for
       Great Britain (9) and the United States (22), no en_IN, so it's American and British accents only. Windows'
       own voices on the user's PC are David, Zira and Mark (all US); Windows has Indian English voices (Heera, Ravi)
       only with the English (India) speech pack installed. To look at: other en_IN Piper voices or a newer catalogue,
       telling people how to add Windows' English (India) voices, and showing Indian English as its own entry in the
       language list. (src-tauri/src/piper_voices.rs from tools/piper-catalog.py; src/ui/SettingsDialog.tsx)
+      Fixed: checked the Piper catalogue again (2026-11-21): still English only for Great Britain and the United
+      States, no en_IN, and Paginaut's list already has every Indian voice it has (Hindi, Malayalam, Marathi, Telugu).
+      Settings › Read aloud on Windows now says Windows' English (India) speech pack has Heera and Ravi, with a button
+      that opens Windows' speech settings to add it (desk.rs speech_settings_open); once added they're in the voice
+      list. Choosing English among the natural voices says they're American or British only. Not tried with the speech
+      pack installed
 
 ## Fixed
 
