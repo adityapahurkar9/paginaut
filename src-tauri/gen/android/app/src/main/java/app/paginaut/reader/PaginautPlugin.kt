@@ -167,14 +167,22 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
 
   /**
    * Opens a file another app sent. A provider that has only just been asked (the sending app itself still
-   * starting, or busy as Paginaut starts) can answer "not found" for a moment: asked again once before that's
-   * believed.
+   * starting, or fetching the attachment as Paginaut starts: Gmail and WhatsApp hand files over through their
+   * own providers) can answer "not found" for a while: asked again, waiting longer each time, for up to about
+   * 8 seconds before that's believed. (One try 0.7 s later was too short on some cold starts.)
    */
-  private fun openSent(uri: Uri): Opened = try {
-    open(uri)
-  } catch (e: java.io.FileNotFoundException) {
-    Thread.sleep(700)
-    open(uri)
+  private fun openSent(uri: Uri): Opened {
+    val until = android.os.SystemClock.uptimeMillis() + SENT_PATIENCE
+    var wait = 300L
+    while (true) {
+      try {
+        return open(uri)
+      } catch (e: java.io.FileNotFoundException) {
+        if (android.os.SystemClock.uptimeMillis() + wait > until) throw e
+        Thread.sleep(wait)
+        wait = minOf(wait * 2, 2000L)
+      }
+    }
   }
 
   /** The file another app sent ("Open with", Share), once; empty when there's none. */
@@ -193,7 +201,16 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
         try {
           invoke.resolve(read.get())
         } catch (e: ExecutionException) {
-          rejectFor(invoke, uri, e.cause ?: e)
+          val cause = e.cause ?: e
+          if (cause is java.io.FileNotFoundException) {
+            // Read as soon as Android handed it over, the sending app's provider still said "not found". The page
+            // asks seconds later, when that app has usually caught up: one more round before giving up.
+            try {
+              invoke.resolve(openSent(uri).json(uri))
+            } catch (again: Exception) {
+              rejectFor(invoke, uri, again)
+            }
+          } else rejectFor(invoke, uri, cause)
         } catch (e: Exception) {
           rejectFor(invoke, uri, e)
         }
@@ -1153,6 +1170,8 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
   companion object {
+    /** How long a file another app sent is asked for again while its provider says it isn't there (openSent). */
+    const val SENT_PATIENCE = 8000L
     private const val CACHE_LIMIT = 512L shl 20
     /** Files this big are read in place rather than copied into the cache. */
     private const val DIRECT_FROM = CACHE_LIMIT / 4

@@ -408,6 +408,7 @@ fn run_desktop() {
             desk::update_check,
             desk::update_install,
             desk::update_run,
+            desk::speech_settings_open,
             desk::update_stop,
             desk::open_path,
             desk::pkcs11_module,

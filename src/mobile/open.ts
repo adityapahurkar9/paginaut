@@ -186,10 +186,17 @@ export async function openRecent(r: ReadRecord) {
 
 /** Files sent by other apps: at start, and whenever the app comes back to the front. */
 export async function checkIntent() {
+  // A sent file can take seconds to arrive (its app's provider still starting): said, rather than the shelf
+  // showing as if nothing was sent. (Not for an answer that comes at once: nothing sent.)
+  const slow = window.setTimeout(() => (busy.value = "Opening…"), 300);
   try {
     const p = await native.takeIntent();
+    window.clearTimeout(slow);
+    busy.value = null;
     if (p.path) await openPicked(p);
   } catch (e) {
+    window.clearTimeout(slow);
+    busy.value = null;
     say(errorText(e));
   }
 }
