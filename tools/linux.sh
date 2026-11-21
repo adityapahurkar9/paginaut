@@ -30,7 +30,6 @@ sync() {
   rsync -a --delete \
     --exclude '/node_modules/' --exclude '/dist/' --exclude '/src-tauri/target/' --exclude '/src-tauri/gen/android/' \
     --exclude '/native/mupdf/build/' --exclude '/native/mupdf/platform/win32/x64/' --exclude '/.git/' \
-    --exclude '/assets/ChatGPT*' --exclude '/assets/Gemini*' \
     "$src/" "$dir/"
   cd "$dir"
   # Windows' node_modules hold Windows builds of esbuild and Tauri's CLI: Linux gets its own.
@@ -91,7 +90,7 @@ case "$step" in
     fi
     dir="${PAGINAUT_LINUX_DIR:-$HOME/paginaut-release}"
     mkdir -p "$dir"
-    rsync -a --delete       --exclude '/node_modules/' --exclude '/src-tauri/target/' --exclude '/src-tauri/gen/android/'       --exclude '/native/mupdf/build/' --exclude '/native/mupdf/platform/win32/x64/' --exclude '/.git/'       --exclude '/assets/ChatGPT*' --exclude '/assets/Gemini*'       "$src/" "$dir/"
+    rsync -a --delete       --exclude '/node_modules/' --exclude '/src-tauri/target/' --exclude '/src-tauri/gen/android/'       --exclude '/native/mupdf/build/' --exclude '/native/mupdf/platform/win32/x64/' --exclude '/.git/'       "$src/" "$dir/"
     cd "$dir"
     # (A development build's source map left in dist/ would be packed into the app.)
     rm -f dist/*.map
@@ -99,6 +98,12 @@ case "$step" in
     command -v cargo-tauri >/dev/null || cargo install tauri-cli --version "^2" --locked
     APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 cargo tauri build --bundles deb,appimage --config '{"build":{"beforeBuildCommand":""}}'
     ls -la src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bundle/appimage/*.AppImage
+    # Next to the Windows installer, where tools/release.ps1 -Publish uploads them from.
+    version=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"([0-9.]+)".*/\1/')
+    out="$src/release/v$version"
+    mkdir -p "$out"
+    cp src-tauri/target/release/bundle/deb/*_"$version"_*.deb src-tauri/target/release/bundle/appimage/*_"$version"_*.AppImage "$out/"
+    echo "Copied to $out"
     ;;
   *) echo "unknown step: $step" >&2; exit 1 ;;
 esac

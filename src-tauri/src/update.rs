@@ -18,7 +18,7 @@ use std::sync::atomic::AtomicBool;
 const PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM5OTk3ODdGRTQ1N0YwRTMKUldUajhGZmtmM2laT1FjT2xnUG1hYmV2NWlMQ0xYRExRc3hab3hqUkJHY1NIM2Q1T2l4YzliSU4K";
 
 /// Where releases are published: a public repository (the app can't read a private one's releases).
-pub const RELEASES: &str = "adityapahurkar9/paginaut-releases";
+pub const RELEASES: &str = "adityapahurkar9/paginaut";
 pub const HOST: &str = "github.com";
 
 /// A file of the newest release.
@@ -335,14 +335,14 @@ mod tests {
     fn only_our_releases() {
         // This system's package (an .exe on Windows, a .deb or AppImage on Linux), and not the others'.
         let ext = package().ext();
-        assert!(release_url(&format!("https://github.com/adityapahurkar9/paginaut-releases/releases/download/v0.8.0/Paginaut_0.8.0{ext}")).is_some());
+        assert!(release_url(&format!("https://github.com/adityapahurkar9/paginaut/releases/download/v0.8.0/Paginaut_0.8.0{ext}")).is_some());
         if ext != ".exe" {
-            assert!(release_url("https://github.com/adityapahurkar9/paginaut-releases/releases/download/v0.8.0/Paginaut_0.8.0_x64-setup.exe").is_none());
+            assert!(release_url("https://github.com/adityapahurkar9/paginaut/releases/download/v0.8.0/Paginaut_0.8.0_x64-setup.exe").is_none());
         }
         assert!(release_url("https://github.com/someone/else/releases/download/v1/x.exe").is_none());
-        assert!(release_url("http://github.com/adityapahurkar9/paginaut-releases/releases/download/v0.8.0/a.exe").is_none());
-        assert!(release_url("https://evil.example/adityapahurkar9/paginaut-releases/releases/download/v0.8.0/a.exe").is_none());
-        assert!(release_url("https://github.com/adityapahurkar9/paginaut-releases/releases/download/v0.8.0/a.msi").is_none());
+        assert!(release_url("http://github.com/adityapahurkar9/paginaut/releases/download/v0.8.0/a.exe").is_none());
+        assert!(release_url("https://evil.example/adityapahurkar9/paginaut/releases/download/v0.8.0/a.exe").is_none());
+        assert!(release_url("https://github.com/adityapahurkar9/paginaut/releases/download/v0.8.0/a.msi").is_none());
     }
 
     #[test]
