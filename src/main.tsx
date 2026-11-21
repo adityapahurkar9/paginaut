@@ -1,4 +1,5 @@
 import "./preact-px";
+import { catchPageErrors } from "./errors";
 import { render } from "preact";
 import { effect } from "@preact/signals";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -41,6 +42,9 @@ function firstLoad() {
   } catch {}
   return true;
 }
+
+// Script errors and promises nobody caught go to the error log (errors.ts; Settings › About › Report a problem).
+catchPageErrors();
 
 // Before any file opens: which program converts Office files.
 initOffice();

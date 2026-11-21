@@ -930,6 +930,53 @@ class PaginautPlugin(private val activity: Activity) : Plugin(activity) {
     invoke.resolve()
   }
 
+  // ------------------------------------------------------------ reporting a problem (report.rs)
+
+  /** The phone, for a problem report: maker and model, Android, ABI, web view. Nothing that names its owner. */
+  @Command
+  fun deviceDetails(invoke: Invoke) {
+    val rows = JSONArray()
+    fun add(k: String, v: String?) {
+      if (!v.isNullOrBlank()) rows.put(JSONArray().put(k).put(v))
+    }
+    val maker = Build.MANUFACTURER.replaceFirstChar { it.titlecase(Locale.ROOT) }
+    add("Phone", if (Build.MODEL.startsWith(Build.MANUFACTURER, ignoreCase = true)) Build.MODEL else "$maker ${Build.MODEL}")
+    add("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+    add("ABI", Build.SUPPORTED_ABIS.joinToString(", "))
+    if (Build.VERSION.SDK_INT >= 26) {
+      WebView.getCurrentWebViewPackage()?.let { add("WebView", "${it.packageName} ${it.versionName}") }
+    }
+    val o = JSObject()
+    o.put("rows", rows)
+    invoke.resolve(o)
+  }
+
+  /** Shares a problem report as a text file (cache/report/, which FileProvider hands on), with a line of text too. */
+  @Command
+  fun shareReport(invoke: Invoke) {
+    val text = invoke.getArgs().getString("text", null) ?: return invoke.reject("Nothing to share.")
+    val dir = File(activity.cacheDir, "report").apply { mkdirs() }
+    val file = File(dir, "paginaut-report.txt")
+    file.writeText(text)
+    val uri = try {
+      FileProvider.getUriForFile(activity, activity.packageName + ".fileprovider", file)
+    } catch (e: IllegalArgumentException) {
+      return invoke.reject("The report can't be shared.")
+    }
+    val send = Intent(Intent.ACTION_SEND).apply {
+      type = "text/plain"
+      putExtra(Intent.EXTRA_STREAM, uri)
+      putExtra(Intent.EXTRA_SUBJECT, "Paginaut problem report")
+      putExtra(Intent.EXTRA_TEXT, "Paginaut's error log and phone details are in the attached paginaut-report.txt.")
+      clipData = ClipData.newRawUri(file.name, uri)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    val chooser = Intent.createChooser(send, null)
+    chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(ComponentName(activity, MainActivity::class.java)))
+    activity.startActivity(chooser)
+    invoke.resolve()
+  }
+
   /** Shares text (a selection on a page) through Android's share sheet. */
   @Command
   fun shareText(invoke: Invoke) {

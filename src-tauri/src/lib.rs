@@ -1,5 +1,7 @@
 pub mod engine;
 mod app;
+pub mod errlog;
+mod report;
 #[cfg(mobile)]
 mod mobile;
 #[cfg(target_os = "android")]
@@ -420,6 +422,11 @@ fn run_desktop() {
             desk::markdown_save,
             app::cancel,
             desk::system_info,
+            report::log_error,
+            report::error_log,
+            report::error_log_clear,
+            report::system_details,
+            report::report_save,
             appwindows::window_start,
             appwindows::window_new,
             appwindows::window_list,
@@ -435,6 +442,10 @@ fn run_desktop() {
             memory_level,
         ])
         .setup(move |app| {
+            // The error log first, so whatever goes wrong from here is in it (report.rs).
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                errlog::init(&dir.join("logs"), true);
+            }
             // First, as WebView2 takes most of the start-up. Shown by the UI once the first frame is painted, so
             // there's no white flash.
             appwindows::open_main(app.handle(), &launch)?;
@@ -466,6 +477,7 @@ fn run_desktop() {
         .expect("error while running Paginaut")
         .run(|_, event| {
             if let tauri::RunEvent::Exit = event {
+                errlog::closed();
                 clear_temp();
             }
         });

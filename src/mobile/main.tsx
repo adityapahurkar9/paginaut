@@ -15,6 +15,10 @@ import { tidyCache } from "./records";
 import "./theme";
 import { scanIfStale, scanShelf } from "./shelf";
 import { busy, chrome, doc, isDark, look, say, searching, settings, sheet, toast } from "./state";
+import { catchPageErrors } from "../errors";
+
+// Script errors and promises nobody caught go to the error log (Settings › About › Share error log).
+catchPageErrors();
 
 function App() {
   const d = doc.value;

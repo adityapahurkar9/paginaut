@@ -42,6 +42,7 @@ import { officeKind } from "../office";
 import { InsertDialog, MergeDialog, SplitDialog } from "./PagesUI";
 import { HeaderDialog, WatermarkDialog } from "./StampUI";
 import { LabelsDialog, PropertiesDialog } from "./MetaUI";
+import { ReportPane } from "./ReportPane";
 import { SecureDialog } from "./SecureUI";
 import { PicturesDialog } from "./ExtractUI";
 import { TableDialog } from "./TableUI";
@@ -109,6 +110,7 @@ export function App() {
         <LabelsDialog />
         <OcrDialog />
         <TableDialog />
+        <ReportPane />
         <Rail />
       </div>
       <StatusBar />

@@ -1,6 +1,8 @@
 // Help content shown in Settings: keyboard shortcuts, and About (with updates).
 import { useEffect, useState } from "preact/hooks";
 import { getVersion } from "@tauri-apps/api/app";
+import { settingsOpen } from "../store";
+import { openReport } from "./ReportPane";
 import { checkForUpdates, installUpdate, setAutoUpdates, stopUpdate, updatesSetting, updateState } from "../update";
 
 const SHORTCUTS: [string, [string, string][]][] = [
@@ -68,6 +70,21 @@ export function About() {
         <div><span>Licence</span><span>AGPL-3.0 (MuPDF's licence). Notices: THIRD-PARTY-NOTICES.md, installed with the app</span></div>
       </div>
       <Updates />
+      <div class="tool-field">
+        <label>Problems</label>
+        <div class="theme-row">
+          <button
+            class="btn sm"
+            onClick={() => {
+              settingsOpen.value = null;
+              openReport();
+            }}
+          >
+            Report a problem…
+          </button>
+          <span class="hint">Shows the error log and this computer's details, to copy, save or put in a GitHub issue. Nothing is sent by itself.</span>
+        </div>
+      </div>
     </>
   );
 }

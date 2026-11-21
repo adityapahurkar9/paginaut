@@ -43,6 +43,11 @@ export const native = {
   /** Lets go of a file read in place once its document has closed. */
   release: (path: string) => invoke<void>("release", { path }).catch(() => {}),
   shareText: (text: string) => invoke<void>("share_text", { text }),
+  /** Report a problem (report.rs): the phone's details, the error log, sharing it as a text file, clearing it. */
+  deviceDetails: () => invoke<[string, string][]>("device_details"),
+  errorLog: () => invoke<string>("error_log"),
+  clearErrorLog: () => invoke<void>("error_log_clear"),
+  shareReport: (text: string) => invoke<void>("share_report", { text }),
   /** Android's print dialog; documents other than PDFs are written as a PDF first. */
   print: (doc: number, path: string, title: string, pdf: boolean) => invoke<void>("print", { doc, path, title, pdf }),
   setBars: (dark: boolean, immersive: boolean) => invoke<void>("set_bars", { dark, immersive }).catch(() => {}),

@@ -116,7 +116,7 @@ apply(from = file("tauri.build.gradle.kts"))
 //
 // Every build stops if the merged manifest (the app's own plus every library's) asks for a permission
 // Paginaut doesn't use, opens a component to other apps, or shares more than the copies of opened
-// documents. A library update can add any of these without a word; this says so and stops. MainActivity
+// documents and a problem report. A library update can add any of these without a word; this says so and stops. MainActivity
 // checks the permissions again when the app starts, and won't run with extra ones.
 val allowedPermissions = setOf(
     "android.permission.MANAGE_EXTERNAL_STORAGE",
@@ -160,11 +160,13 @@ tasks.configureEach {
             val app = doc.getElementsByTagName("application").item(0) as org.w3c.dom.Element
             if (!debug && app.getAttributeNS(ns, "debuggable") == "true") problems.add("is debuggable")
         }
-        // What Share may hand out: the cache's copies of opened documents, nothing else.
+        // What Share may hand out: the cache's copies of opened documents, and a problem report the user shares
+        // (PaginautPlugin.shareReport, cache/report/): nothing else.
         val paths = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(pathsXml)
         val entries = paths.documentElement.childNodes.let { n -> (0 until n.length).map { n.item(it) }.filterIsInstance<org.w3c.dom.Element>() }
-        if (entries.size != 1 || entries[0].tagName != "cache-path" || entries[0].getAttribute("path") != "docs/") {
-            problems.add("shares more than the copies of opened documents (res/xml/file_paths.xml)")
+        val shared = entries.map { it.tagName + ":" + it.getAttribute("path") }.toSet()
+        if (entries.size != 2 || shared != setOf("cache-path:docs/", "cache-path:report/")) {
+            problems.add("shares more than the copies of opened documents and a problem report (res/xml/file_paths.xml)")
         }
         if (problems.isNotEmpty()) {
             throw GradleException(

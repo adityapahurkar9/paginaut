@@ -12,6 +12,7 @@ import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
+    catchCrashes(applicationContext)
     enableEdgeToEdge()
     applySecure(this, getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("secure", false))
     // Checked before the page starts: a refused copy reads no file (PaginautPlugin checks `refused`)
@@ -31,6 +32,34 @@ class MainActivity : TauriActivity() {
     var refused = false
 
     private const val PREFS = "paginaut"
+
+    @Volatile
+    private var catching = false
+
+    /**
+     * An uncaught Kotlin or Java exception is written down before Android ends the app: raw, into the log folder's
+     * crash-pending.txt, which the Rust side cleans of paths and names into the error log at the next start
+     * (errlog.rs). Then Android's own handler does what it always does.
+     */
+    fun catchCrashes(context: Context) {
+      if (catching) return
+      catching = true
+      val dir = java.io.File(context.applicationInfo.dataDir, "logs")
+      val before = Thread.getDefaultUncaughtExceptionHandler()
+      Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+        try {
+          dir.mkdirs()
+          val pending = java.io.File(dir, "crash-pending.txt")
+          // A few crashes at most: a crash at every start mustn't grow the file without end.
+          if (!pending.exists() || pending.length() < 64 * 1024) {
+            val trace = android.util.Log.getStackTraceString(e).lineSequence().take(40).joinToString("\n")
+            pending.appendText("Uncaught ${e.javaClass.name} on thread ${thread.name}:\n$trace\n\u001e\n")
+          }
+        } catch (_: Throwable) {
+        }
+        before?.uncaughtException(thread, e)
+      }
+    }
 
     /** Hide from screenshots, for the next start (the page's setting is the one shown). */
     fun rememberSecure(context: Context, on: Boolean) {

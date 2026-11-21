@@ -15,6 +15,7 @@ import { PRESETS, lookFor, type Theme as Look } from "../themedata";
 import { displayFont } from "./theme";
 import { startReading } from "./speech";
 import { goTo } from "./views";
+import { pageDetails, reportText } from "../errors";
 
 /** Opens a sheet (replacing one already open; the back button closes it). */
 export function openSheet(s: Exclude<Sheet, null>) {
@@ -486,6 +487,25 @@ function ThemePicker() {
   );
 }
 
+/** The error log and the phone's details, as a text file, through the share sheet. */
+async function shareReport() {
+  try {
+    const [rows, log] = await Promise.all([native.deviceDetails(), native.errorLog()]);
+    await native.shareReport(reportText([...rows, ...pageDetails()], log));
+  } catch (e) {
+    say(errorText(e));
+  }
+}
+
+async function clearLog() {
+  try {
+    await native.clearErrorLog();
+    say("Cleared the error log");
+  } catch (e) {
+    say(errorText(e));
+  }
+}
+
 function SettingsSheet() {
   const [version, setVersion] = useState("");
   useEffect(() => {
@@ -525,6 +545,16 @@ function SettingsSheet() {
         <button class="row link-row" onClick={() => unlistAll()}>
           <span class="row-label">Clear the Recent list</span>
         </button>
+        <button class="row link-row" onClick={() => void shareReport()}>
+          <span class="row-label">Share error log and phone details</span>
+        </button>
+        <button class="row link-row" onClick={() => void clearLog()}>
+          <span class="row-label">Clear the error log</span>
+        </button>
+        <p class="hint">
+          Paginaut keeps a log of errors on this phone: crashes, and files that failed to open. File paths and document names are taken out before anything is written. Sharing
+          sends it, with the phone's model, Android version, processor type, memory, web view, screen and language, only to the app you pick. Nothing is sent by itself.
+        </p>
         <div class="about">
           <strong>Paginaut {version}</strong>
           <p>A quiet reader for PDF, e-books, comics, XPS and Markdown. No account, no ads, no tracking: it doesn't use the internet at all.</p>

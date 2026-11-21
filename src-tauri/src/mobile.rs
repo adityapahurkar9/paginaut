@@ -69,6 +69,11 @@ pub fn run() {
             forget_picked,
             share_text,
             release,
+            crate::report::log_error,
+            crate::report::error_log,
+            crate::report::error_log_clear,
+            device_details,
+            share_report,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Paginaut")
@@ -94,6 +99,11 @@ struct Native<R: Runtime>(PluginHandle<R>);
 fn native<R: Runtime>() -> TauriPlugin<R> {
     PluginBuilder::new("paginaut")
         .setup(|app, api| {
+            // The error log (report.rs): the Kotlin side writes the app's own crashes to the same folder
+            // (MainActivity). Android ending the app is normal, so an unclosed session isn't counted.
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                crate::errlog::init(&dir.join("logs"), false);
+            }
             let dir = app.path().app_cache_dir()?;
             let _ = std::fs::create_dir_all(&dir);
             if let Ok(real) = std::fs::canonicalize(&dir) {
@@ -161,6 +171,28 @@ async fn share(native: State<'_, Native<Wry>>, path: String, source: Option<Stri
 #[tauri::command]
 async fn release(native: State<'_, Native<Wry>>, path: String) -> Res<()> {
     call(&native, "release", json!({ "path": path })).await.map(|_| ())
+}
+
+/// The phone (Kotlin: maker, model, Android, ABI, web view), then what Rust knows (version, memory, processor).
+#[tauri::command]
+async fn device_details(app: tauri::AppHandle, native: State<'_, Native<Wry>>) -> Res<Vec<(String, String)>> {
+    let mut rows = crate::report::system_details(app);
+    let v = call(&native, "deviceDetails", json!({})).await?;
+    if let Some(list) = v["rows"].as_array() {
+        // After "Paginaut": the phone comes before the details Rust has.
+        let phone = list.iter().filter_map(|r| Some((r[0].as_str()?.to_string(), r[1].as_str()?.to_string())));
+        let at = rows.len().min(1);
+        rows.splice(at..at, phone);
+    }
+    // Rust's "System" on Android is the kernel's Linux: the Kotlin rows say which Android.
+    rows.retain(|(k, _)| k != "System");
+    Ok(rows)
+}
+
+/// The report handed on through the share sheet, as a text file (and a line of text for apps that take only that).
+#[tauri::command]
+async fn share_report(native: State<'_, Native<Wry>>, text: String) -> Res<()> {
+    call(&native, "shareReport", json!({ "text": text })).await.map(|_| ())
 }
 
 #[tauri::command]

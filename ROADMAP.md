@@ -872,31 +872,56 @@ app's feature names).
 - [ ] Tests: untagged documents of rising difficulty (letter, report, two columns, tables, forms, a scanned book):
       add tags, then the checker; compared with Acrobat's results on the same files (installed on the user's PC)
 
-## Error logs (planned; Windows, Linux and Android)
-Today a failure is only what the app shows at the moment: the engine's eprintln! output goes nowhere in a release
-build (no console on Windows, none on Android), and nothing is kept for a bug report. Every version writes a log of
-its own on the device and lets the user export it. Nothing is ever sent anywhere by the app: the log leaves the device
-only when the user exports it and passes it on themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
-- [ ] Backend error logging (src-tauri, shared by all three): one logger for the engine and the app (the log crate
-      with a small file writer, or tauri-plugin-log), errors and warnings always, more detail when turned on in
-      Settings. Each command that fails logs what it was asked and why it failed; the eprintln! calls become log
-      calls. A panic hook writes the panic, its thread and a backtrace before the process ends, so a crash leaves
-      a trace; MuPDF's own warnings and errors (fz_set_warning_callback / fz_set_error_callback) go into the same log
-- [ ] Front-end errors in the same log: window.onerror and unhandled promise rejections in the page, and the errors
-      the UI already shows the user, sent to the backend's logger with the window they came from
-- [ ] Where it lives: the app's log folder (Windows %LOCALAPPDATA%\app.paginaut.reader\logs, Linux ~/.local/share/app.paginaut.reader/logs,
-      Android the app's private files). Rolled over at a few MB, the last few files kept, so it never grows without end
-- [ ] What it never holds: the text of documents, passwords, signature certificates or their PINs, saved
-      signatures, form entries. File paths shortened to the file's name; the user's home folder never written out
-- [ ] Each log starts with the version, the platform (Windows build, Linux distribution and desktop, Android version
-      and device model), the engine's MuPDF and Tesseract versions, and the date the session began
-- [ ] Export error logs: Help › Export error logs… and Settings › About (desktop: saved as a .zip where the user picks,
-      with "Open log folder" beside it; Android: the share sheet, or saved through the system's file picker). The
-      dialog says what the logs hold and what they don't before saving; Clear logs beside it
-- [ ] After a crash: the next start says the app closed unexpectedly last time and offers to export the logs
-- [ ] Tests: a forced command error, a forced panic and a front-end exception each found in the exported logs on
-      Windows, Linux (the .deb and the AppImage) and Android; a document's text and a password typed in the session
-      checked to be absent
+## Error logs (Windows, Linux and Android; first part in 0.9.13 and Android 0.6.8)
+Before 0.9.13 a failure was only what the app showed at the moment: the engine's eprintln! output goes nowhere in a
+release build (no console on Windows, none on Android), and nothing was kept for a bug report. Now every version writes
+a log of its own on the device and lets the user hand it over. Nothing is ever sent anywhere by the app: the log leaves
+the device only when the user copies, saves or shares it, or opens a GitHub issue in the browser and posts it
+themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
+- [x] One log for all three (src-tauri/src/errlog.rs, std only, no log crate): `logs/paginaut.log` in the app's local
+      data folder (Windows %LOCALAPPDATA%\app.paginaut.reader\logs, Linux ~/.local/share/app.paginaut.reader/logs,
+      Android the app's private data folder), rolled over to paginaut.1.log at 256 KB, so never more than 512 KB.
+      Lines are `time [kind] message`, UTC; a message repeated within a minute is written once, with a count
+- [x] A panic hook writes the panic, where in the code, and its thread before the process ends (release builds abort
+      on panic: the hook runs first). Desktop: a "running" marker; found at the next start, the log says the last
+      session ended without closing (a MuPDF crash, which no panic hook sees, or the app being stopped)
+- [x] Android: the engine stopping, being started again, not starting, being stopped for hanging or filling the phone,
+      and a document refused for stopping it twice (engine_link.rs; the engine's own process is isolated and can't
+      write files). Uncaught Kotlin/Java exceptions (MainActivity.catchCrashes) are written raw to
+      logs/crash-pending.txt and cleaned into the log at the next start, so there's one way of cleaning
+- [x] Front-end errors: window.onerror and unhandled promise rejections (src/errors.ts, both pages), and the commands
+      whose failures the user sees (opening, saving, converting, printing, OCR, downloads: api.ts LOGGED), at most 60
+      lines a window
+- [x] What it never holds: the home folder becomes ~, a path or a document's name becomes `<file>.pdf` (the extension
+      kept), quoted names too; web addresses and source-code file names (a panic's place) stay. Unit tests in errlog.rs
+      cover the cleaning, the roll-over and the dates
+- [ ] Cleaning: a document's name with spaces, written without its folder and without quotes ("couldn't open Tax
+      Return.pdf"), loses only its last word ("Tax <file>.pdf"). Messages from the app carry full paths or quote
+      names, so none is known to do this; a message that does should quote the name
+- [x] Report a problem (desktop: Settings › About › Report a problem…, and the command palette; a tool in the right
+      pane, src/ui/ReportPane.tsx). Shows exactly the text that would be shared: system details (version, system and
+      kernel, architecture, processor, memory, WebView2 or WebKitGTK, graphics from WebGL, screen, language; on Linux
+      the session and .deb or AppImage) and the log. "Open a GitHub issue with these details" (a new issue at
+      adityapahurkar9/paginaut, filled in, with as much of the log's end as fits in the address), "Copy error log and
+      system details", "Save error log and system details…", "Clear the error log"
+- [x] Android: Settings › "Share error log and phone details" (a text file through the share sheet: phone maker and
+      model, Android version and API level, ABIs, web view, memory, screen, language, and the log) and "Clear the
+      error log". No GitHub link: the app has no internet permission and says it doesn't use the internet
+- [ ] MuPDF's own warnings and errors (fz_set_warning_callback / fz_set_error_callback) into the same log, and the
+      eprintln! calls becoming log lines; more detail when turned on in Settings
+- [ ] After a crash: the next start says the app closed unexpectedly last time and offers Report a problem
+- [ ] Tests in the running app: a forced command error, a forced panic and a front-end exception each found in the
+      report on Windows, Linux (the .deb and the AppImage) and Android; a document's text and a password typed in the
+      session checked to be absent
+
+## 0.9.13 (Windows, Linux) and Android 0.6.8: error log and Report a problem
+Versions set 2026-11-22; not built into installers or packages yet. What's in it: "Error logs" above (the ticked
+items). Tested: the TypeScript check, both pages built, the Rust unit tests on Windows and Linux (WSL), the Android
+debug build (x86_64). In the running Windows app (dev build): Settings › About › Report a problem opens the pane with
+the right details; a thrown error, an unhandled rejection, a repeated line and a failed open with a full path all
+reached the log cleaned; a clean quit removed the "running" marker. The GitHub issue address was checked apart from
+the app (the newest lines kept, under 7,500 characters), not opened. Not run on Linux or Android yet; the Kotlin crash
+handler and the share sheet are untried.
 
 ## 0.9.12 (Windows, Linux) and Android 0.6.7: the 2026-11-13 code review fixed
 Versions set 2026-11-21. Built and published 2026-11-22 as the latest GitHub release (v0.9.12: Windows installer +

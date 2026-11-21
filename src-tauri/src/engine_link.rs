@@ -694,6 +694,8 @@ impl Remote {
             let stuck = r.waiting.lock().values().any(|(at, cmd, g)| *g == gen && at.elapsed() > Remote::patience(cmd))
                 || r.streams.lock().values().any(|s| s.gen == gen && !s.starting && s.last.elapsed() > STREAM_SILENCE);
             if stuck || r.filling() {
+                let what = r.waiting.lock().values().filter(|(_, _, g)| *g == gen).map(|(_, cmd, _)| *cmd).next().unwrap_or("reading");
+                crate::errlog::write("engine", &if stuck { format!("Engine {gen} stopped answering ({what}): stopped and started again.") } else { format!("Engine {gen} was filling the phone's storage: stopped.") });
                 link.close();
                 if !stuck {
                     let _ = std::fs::remove_dir_all(&r.files_dir);
@@ -738,10 +740,11 @@ impl Remote {
                 return Ok((l.clone(), *g));
             }
         }
-        if let Some((old, _)) = cur.take() {
+        if let Some((old, g)) = cur.take() {
             old.close();
+            crate::errlog::write("engine", &format!("Engine {g} had stopped (a damaged file, or Android reclaiming memory): starting another."));
         }
-        let fd = (self.connect)()?;
+        let fd = (self.connect)().inspect_err(|e| crate::errlog::write("engine", &format!("The engine didn't start: {e}")))?;
         // SAFETY: the plugin detached this handle for us.
         let sock = unsafe { UnixStream::from_raw_fd(fd) };
         let gen = self.gen.fetch_add(1, Ordering::SeqCst) + 1;
@@ -893,6 +896,7 @@ impl Remote {
         drop(strikes);
         let newly = twice && self.docs.lock().get_mut(&doc).is_some_and(|o| !std::mem::replace(&mut o.refused, true));
         if newly {
+            crate::errlog::write("engine", "A document stopped the engine twice within two minutes: refused.");
             (self.on_refused)(doc);
         }
     }

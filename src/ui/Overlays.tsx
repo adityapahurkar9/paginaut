@@ -20,6 +20,7 @@ import { addPicture, toggleTextEdit } from "../textedit";
 import { isMarkdown, openMdPane } from "../markdown";
 import { startRedact } from "../redact";
 import { pickAndConvert } from "./OfficeUI";
+import { openReport } from "./ReportPane";
 import { openCompareSetup } from "../compare";
 import { railShown, setRailShown, togglePane } from "../panes";
 import { addBookmarkHere, bookmarksFromHeadings } from "./Sidebar";
@@ -232,6 +233,7 @@ function commands(): Item[] {
     c("Office suite choices: programs that open Office files, get LibreOffice…", () => openSettings("office"), ""),
     c("Compare files (PDF with PDF, Word, PowerPoint, Excel or Markdown)…", () => openCompareSetup(), ""),
     c("Settings…", () => openSettings(), "Ctrl+,"),
+    c("Report a problem: error log and system details", () => openReport(), ""),
     c("Organize pane: pages, page numbers, watermark, protect, pictures out", () => togglePane("organize"), ""),
     c("Sign pane: signatures, Fill & Sign, certificates", () => togglePane("sign"), ""),
     c("Convert pane", () => togglePane("convert"), ""),

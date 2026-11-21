@@ -1,6 +1,21 @@
 // Typed wrappers over the Rust backend.
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, invoke as call, type InvokeArgs } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { logFailure } from "./errors";
+
+/** Commands whose failures the user sees as something going wrong (not "no such page", not a stopped job): they go
+ *  to the error log (errors.ts), cleaned of paths and names. */
+const LOGGED = new Set([
+  "open_document", "save_document", "save_with", "save_parts", "save_flattened", "save_repaired", "insert_pages", "merge_files", "split_by_size",
+  "stamp_pages", "edit_text", "picture_save", "save_pictures", "table_save", "attachment_save", "redact_apply", "sanitize", "pdfa_save",
+  "office_convert", "office_install", "convert_from_pdf", "compare_run", "print_doc", "markdown_save", "ocr_run", "ocr_download", "piper_download",
+  "update_install", "font_add", "skin_set",
+]);
+
+function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
+  const p = call<T>(cmd, args);
+  return LOGGED.has(cmd) ? p.catch((e) => { logFailure(cmd, e); throw e; }) : p;
+}
 
 export type Quad = [number, number, number, number, number, number, number, number];
 
