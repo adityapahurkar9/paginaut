@@ -7,8 +7,30 @@ use crate::engine::{Doc, Paragraph, Picture};
 pub enum Block {
     Para(Paragraph),
     Table(Table),
-    /// Picture bytes, their kind ("png" or "jpeg"), and size in points.
-    Picture(Vec<u8>, &'static str, f32, f32),
+    /// A picture (read when it's written: a long colour scan's pictures don't all fit in memory), and its size in
+    /// points.
+    Picture(PicRef, f32, f32),
+}
+
+/// Picture `n` of page `page`, as picture_data counts them.
+pub struct PicRef {
+    page: usize,
+    n: usize,
+    /// "jpeg" when the file holds it as JPEG (kept as it is), else "png" (made into one).
+    pub kind: &'static str,
+}
+
+impl PicRef {
+    /// Its bytes and kind: as it is in the file when that's JPEG, else as PNG.
+    pub fn read(&self, d: &Doc) -> Result<(Vec<u8>, &'static str), String> {
+        if self.kind == "jpeg" {
+            let (data, ext) = d.picture_data(self.page, self.n, 0)?;
+            if ext == "jpg" {
+                return Ok((data, "jpeg"));
+            }
+        }
+        Ok((d.picture_data(self.page, self.n, 1)?.0, "png")) // as PNG
+    }
 }
 
 /// What's on page `index`, in reading order: paragraphs as MuPDF reads them, each table where its first
@@ -35,17 +57,12 @@ pub fn blocks(d: &Doc, index: usize) -> Result<Vec<Block>, String> {
     let mut pictures: Vec<(f32, Block)> = Vec::new();
     // Numbered as picture_data counts them (the page with its comments' pictures).
     for (n, p) in d.pictures(index, false)?.into_iter().enumerate() {
-        let Picture { r, w, h, .. } = p;
+        let Picture { r, w, h, k, .. } = p;
         // Rules, dots and bullets drawn as pictures aren't worth keeping.
         if w < 24 || h < 24 || (r[2] - r[0]) < 12.0 || (r[3] - r[1]) < 12.0 {
             continue;
         }
-        let (mut data, mut ext) = d.picture_data(index, n, 0)?;
-        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
-            (data, ext) = d.picture_data(index, n, 1)?; // as PNG
-        }
-        let ext = if ext == "png" { "png" } else { "jpeg" };
-        pictures.push((r[1], Block::Picture(data, ext, r[2] - r[0], r[3] - r[1])));
+        pictures.push((r[1], Block::Picture(PicRef { page: index, n, kind: if k == "jpg" { "jpeg" } else { "png" } }, r[2] - r[0], r[3] - r[1])));
     }
     pictures.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut pictures = pictures.into_iter().peekable();

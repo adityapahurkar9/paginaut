@@ -486,6 +486,17 @@ impl Document {
         })
     }
 
+    /// The document, unlocked with `password` when it needs one (a wrong or missing one leaves it locked). Every
+    /// open of a file whose password was given goes through here.
+    pub fn unlocked_with(self, password: Option<&str>) -> Self {
+        if self.needs_password() {
+            if let Some(pw) = password {
+                self.authenticate(pw);
+            }
+        }
+        self
+    }
+
     pub fn can_save_incrementally(&self) -> bool {
         with_kind(self.1, |c| unsafe { fo_pdf_can_save_incrementally(c, self.0) } != 0)
     }

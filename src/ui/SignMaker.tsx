@@ -264,8 +264,16 @@ function Photo({ ink, width, make, onChange }: Omit<Part, "kind" | "ink"> & { in
     if (!blob.type.startsWith("image/")) return showToast("That isn't a picture.");
     const url = URL.createObjectURL(blob);
     const im = new Image();
-    im.onload = () => setImg(im);
-    im.onerror = () => showToast("That picture couldn't be read.");
+    // The picture is read once loaded (it's drawn from the element, not the address): the address goes then, or
+    // the photo stayed in memory until the window closed.
+    im.onload = () => {
+      URL.revokeObjectURL(url);
+      setImg(im);
+    };
+    im.onerror = () => {
+      URL.revokeObjectURL(url);
+      showToast("That picture couldn't be read.");
+    };
     im.src = url;
   };
 
