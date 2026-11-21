@@ -896,7 +896,10 @@ only when the user exports it and passes it on themselves (docs/PLAY-DATA-SAFETY
       checked to be absent
 
 ## 0.9.12 (Windows, Linux) and Android 0.6.7: the 2026-11-13 code review fixed
-Versions set 2026-11-21; not built into installers or packages yet (release/v0.9.12 doesn't exist). Tested: the
+Versions set 2026-11-21; the desktop isn't built into installers or packages yet (release/v0.9.12 doesn't exist).
+Android 0.6.7 built 2026-11-21: release/android/Paginaut_0.6.7.aab and the four per-ABI APKs (upload-key signed,
+version code 6007); its build caught the Roman numeral check living in desktop-only code (moved into the engine).
+Tested: the
 TypeScript check, the Rust unit tests on Windows and Linux (WSL), and every engine suite with the Office ones
 (tools/test-all.ps1 -Office), plus pdfa_test and dsc_test. Not tried in the running app, and the Android changes
 weren't built. Every entry of the review in BUGS.md is ticked with what was done, except the update's version
@@ -921,7 +924,8 @@ signature, left open by choice (it needs latest.json signed at every release). M
       Indian English voice
 - [ ] Android 0.6.7: a file sent from another app on a cold start still failed at random on a phone (reported
       2026-11-21): now asked for up to about 8 seconds, once more when the page takes it, with "Opening…" shown.
-      To build and check on a phone (BUGS.md, open)
+      Opens on a cold start on the Pixel 9 emulator (6 of 6); to check on a phone with Gmail and WhatsApp (BUGS.md,
+      open). The engine-crash suite (tools/android-engine-test.sh) needs a debug build and wasn't run
 
 ## 0.9.11 (Windows, Linux) and Android 0.6.6: the fixes in BUGS.md, tools in the right pane
 Built 2026-11-09: release/v0.9.11 has the Windows installer (+ .sig, latest.json, addons.json), the Linux .deb and
