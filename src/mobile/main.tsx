@@ -16,6 +16,8 @@ import "./theme";
 import { scanIfStale, scanShelf } from "./shelf";
 import { busy, chrome, doc, isDark, look, say, searching, settings, sheet, toast } from "./state";
 import { catchPageErrors } from "../errors";
+import { afterCrash, crashedLastTime } from "./ReportSheet";
+import { openSheet } from "./Sheets";
 
 // Script errors and promises nobody caught go to the error log (Settings › About › Share error log).
 catchPageErrors();
@@ -119,6 +121,12 @@ effect(() => {
 // Android hands one over while it's open (PaginautPlugin.onNewIntent calls this).
 void checkIntent();
 void scanShelf();
+// The last session crashed: Report a problem is offered once (nothing is sent unless the user sends it).
+void crashedLastTime().then((crashed) => {
+  if (!crashed || sheet.value) return;
+  afterCrash.value = true;
+  openSheet("report");
+});
 (window as unknown as { paginautIntent: () => void }).paginautIntent = () => void checkIntent();
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {

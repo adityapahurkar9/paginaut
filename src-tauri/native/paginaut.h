@@ -24,6 +24,8 @@ typedef struct fo_text fo_text;
 typedef struct fo_cookie fo_cookie;
 
 int fo_global_init(size_t store_bytes);
+/* Where MuPDF's error messages go (the app's error log); NULL for nowhere. Call before fo_global_init. */
+void fo_set_error_log(void (*f)(const char *msg));
 fo_ctx *fo_ctx_new(void);
 /* A fully independent context (own store, font engine and glyph cache, no locks).
  * Everything created with it must stay on the thread that created it. */

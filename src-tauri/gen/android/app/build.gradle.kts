@@ -25,6 +25,9 @@ val signingProperties = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
+/** A release is being built (bundle or APK): its native libraries are stripped and their symbol tables kept for Play. */
+val releasing = gradle.startParameter.taskNames.any { it.contains("Release") }
+
 android {
     compileSdk = 37
     if (signingProperties.getProperty("storeFile") != null) {
@@ -38,6 +41,8 @@ android {
         }
     }
     namespace = "app.paginaut.reader"
+    // The NDK tools/android.sh builds with: Gradle strips the libraries and takes their symbols out with it.
+    ndkVersion = "29.0.14206865"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "app.paginaut.reader"
@@ -52,15 +57,26 @@ android {
             isDebuggable = true
             isJniDebuggable = true
             isMinifyEnabled = false
-            packaging {
-                jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
-                jniLibs.keepDebugSymbols.add("*/armeabi-v7a/*.so")
-                jniLibs.keepDebugSymbols.add("*/x86/*.so")
-                jniLibs.keepDebugSymbols.add("*/x86_64/*.so")
+            // Packaging is one setting for every build type, not this one's: kept only when no release is being
+            // built, or a release would ship its libraries unstripped and Play would get no symbol tables (Gradle
+            // takes those only from libraries it strips; see release below).
+            if (!releasing) {
+                packaging {
+                    jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
+                    jniLibs.keepDebugSymbols.add("*/armeabi-v7a/*.so")
+                    jniLibs.keepDebugSymbols.add("*/x86/*.so")
+                    jniLibs.keepDebugSymbols.add("*/x86_64/*.so")
+                }
             }
         }
         getByName("release") {
             signingConfigs.findByName("release")?.let { signingConfig = it }
+            // The Play bundle carries the native libraries' symbol tables (function names, not the code's lines), so
+            // Play Console's crash reports name the function a native crash was in. Play keeps them; the APKs it
+            // makes, and ours, are stripped. tools/android.sh builds the release library with its symbols for this.
+            ndk {
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
             optimization {
                enable = true
             }

@@ -72,6 +72,7 @@ pub fn run() {
             crate::report::log_error,
             crate::report::error_log,
             crate::report::error_log_clear,
+            crate::report::crash_notice,
             device_details,
             share_report,
         ])

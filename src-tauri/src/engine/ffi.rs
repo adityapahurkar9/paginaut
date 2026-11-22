@@ -35,6 +35,7 @@ pub struct fo_cookie {
 
 extern "C" {
     pub fn fo_global_init(store_bytes: usize) -> c_int;
+    pub fn fo_set_error_log(f: Option<unsafe extern "C" fn(msg: *const std::os::raw::c_char)>);
     pub fn fo_ctx_new() -> *mut fo_ctx;
     pub fn fo_ctx_new_private(store_bytes: usize) -> *mut fo_ctx;
     pub fn fo_ctx_drop(c: *mut fo_ctx);

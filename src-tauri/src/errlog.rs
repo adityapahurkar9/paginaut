@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +39,12 @@ struct Log {
 }
 
 static LOG: OnceLock<Mutex<Log>> = OnceLock::new();
+/// Set at start when the last session ended in a crash (or without closing, on the desktop): the page offers a report
+/// once (`take_crash_notice`).
+static CRASHED: AtomicBool = AtomicBool::new(false);
+/// Lines `write_limited` takes a minute, per kind; the rest are counted.
+const BURST: u32 = 20;
+static BURSTS: Mutex<Vec<(String, Instant, u32, u32)>> = Mutex::new(Vec::new());
 
 /// Starts the log in `dir` (made if missing) and catches Rust panics into it. Returns true when the last session
 /// ended without closing (only when `watch_exit`: the desktop, where the app closing is something it sees).
@@ -64,6 +71,7 @@ pub fn init(dir: &Path, watch_exit: bool) -> bool {
         let _ = fs::remove_file(dir.join(PENDING));
         for crash in raw.split(PENDING_SEP).filter(|c| !c.trim().is_empty()) {
             write("android", crash.trim());
+            CRASHED.store(true, Ordering::Relaxed);
         }
     }
     if !watch_exit {
@@ -72,10 +80,47 @@ pub fn init(dir: &Path, watch_exit: bool) -> bool {
     let marker = dir.join(RUNNING);
     let unclean = marker.exists();
     if unclean {
+        CRASHED.store(true, Ordering::Relaxed);
         write("start", "The last session ended without closing (a crash, or the app was stopped).");
     }
     let _ = fs::write(&marker, std::process::id().to_string());
     unclean
+}
+
+/// True once, when the last session crashed or ended without closing: the page then offers Report a problem.
+pub fn take_crash_notice() -> bool {
+    CRASHED.swap(false, Ordering::Relaxed)
+}
+
+/// `write`, but at most `BURST` lines of this kind a minute (MuPDF's errors: a damaged file can give hundreds); what's
+/// left out is counted in one line when the next minute begins.
+pub fn write_limited(kind: &str, message: &str) {
+    let dropped = {
+        let mut b = BURSTS.lock();
+        let i = match b.iter().position(|e| e.0 == kind) {
+            Some(i) => i,
+            None => {
+                b.push((kind.to_string(), Instant::now(), 0, 0));
+                b.len() - 1
+            }
+        };
+        let e = &mut b[i];
+        let mut dropped = 0;
+        if e.1.elapsed() >= REPEAT {
+            dropped = e.3;
+            *e = (kind.to_string(), Instant::now(), 0, 0);
+        }
+        if e.2 >= BURST {
+            e.3 += 1;
+            return;
+        }
+        e.2 += 1;
+        dropped
+    };
+    if dropped > 0 {
+        write(kind, &format!("({dropped} more lines of this kind in the minute before were left out)"));
+    }
+    write(kind, message);
 }
 
 /// The app is closing normally.

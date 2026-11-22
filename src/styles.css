@@ -970,6 +970,9 @@ body.text-edit .pg { cursor: default; }
 .toolpane .ins-file-row .ins-range { order: 10; flex: 1 0 100% !important; width: auto; }
 /* Report a problem: the exact text that would be shared, then what can be done with it, one action a line. */
 .report-pane .report-text { width: 100%; min-height: 260px; resize: vertical; box-sizing: border-box; padding: 8px; border: 1px solid var(--bd2); border-radius: 6px; background: var(--panel); color: var(--tx); font: 11.5px/1.45 "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace; white-space: pre; overflow: auto; }
+.report-pane .check-row { align-items: flex-start; }
+.report-pane .check-row input { margin-top: 3px; }
+.report-pane .check-row small { display: block; margin-top: 2px; font-size: 12px; color: var(--tx3); line-height: 1.4; }
 .report-pane .report-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding-bottom: 16px; }
 .report-pane .report-actions .hint { font-size: 12px; color: var(--tx3); margin: -2px 0 6px; line-height: 1.4; }
 .toolpane .ps-panel { max-height: none; overflow: visible; gap: 12px; }

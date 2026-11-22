@@ -36,7 +36,14 @@ Things that might look like collection or sharing, and why they aren't:
   whether Android's own backup needs declaring. Our reading is that it doesn't, because the developer doesn't
   receive the data. **Confirm this with Play Console's help or policy support before submitting.**
 - **Crash reports.** Paginaut has no crash reporting library. Android's own reports, which users opt into, go to
-  Google under Google's terms, not the app's.
+  Google under Google's terms, not the app's. The Play bundle carries the native libraries' symbol tables
+  (build.gradle.kts, debugSymbolLevel) so those reports name functions; that adds nothing to what is sent.
+- **Report a problem** (Settings, from 0.6.8; offered once after a crash). Paginaut keeps an error log in its
+  private storage (`errlog.rs`: what failed and when, paths and document names replaced with `<file>.pdf`). It
+  never leaves the phone by itself. The user may share a report through the share sheet (an app they pick) or
+  open a pre-filled GitHub issue in their browser (they post it themselves). They choose whether it includes the
+  phone's details and the log, and see the exact text first. Both are user-initiated transfers the user expects,
+  made by another app; Paginaut still has no internet permission.
 
 ## All files access (MANAGE_EXTERNAL_STORAGE) declaration
 
@@ -78,7 +85,8 @@ Points that can be checked in the source:
    (`PaginautPlugin.sharedBook`).
 6. **Other apps can't reach the app's files.** Copies and covers live in the app's private storage, which
    Android keeps apart from every other app. The only shared component is the FileProvider for Share,
-   limited to the copies of opened documents and handing out one-time read grants.
+   limited to the copies of opened documents and a problem report the user shares (`cache/report/`), handing
+   out one-time read grants.
 7. **No scripts from documents.** JavaScript in PDFs is off on Android. Book text is shown as text, never run
    as a web page.
 8. **The reading engine is sealed off.** MuPDF, the code that reads every document, runs in its own Android
@@ -112,6 +120,11 @@ once the releases page or repository is public.
 >
 > **Read aloud** uses your phone's own text-to-speech voice. **Share** and **Print** send a document only where
 > you choose.
+>
+> **Problem reports:** Paginaut keeps a log of its own errors on your phone, with file paths and document names
+> removed. It's sent only if you choose to, from Settings › Report a problem: you see exactly what it contains,
+> choose whether to include your phone's details (model, Android version, memory, screen) and the log, and send it
+> yourself through another app or as a public GitHub issue in your browser.
 >
 > **Questions:** [contact email].
 >

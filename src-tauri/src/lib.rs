@@ -425,6 +425,7 @@ fn run_desktop() {
             report::log_error,
             report::error_log,
             report::error_log_clear,
+            report::crash_notice,
             report::system_details,
             report::report_save,
             appwindows::window_start,

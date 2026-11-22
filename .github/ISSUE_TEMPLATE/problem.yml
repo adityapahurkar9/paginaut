@@ -1,0 +1,61 @@
+# Problem reports. Paginaut's "Report a problem" (desktop: Settings › About; Android: Settings) opens this form
+# with `platform`, `system` and `log` filled in from the address (src/errors.ts, issueUrl): keep those ids.
+name: Report a problem
+description: Something went wrong in Paginaut (a crash, a file that won't open, a wrong result).
+title: "Problem: "
+labels: ["bug", "from-app"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. If you came here from Paginaut's **Report a problem**, the system details and error log
+        below were filled in by the app from what you chose to include. Read them before posting: **issues here are public**.
+        Paths and document names in the log are already replaced with `<file>.pdf`. Never attach a document that is private.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+      placeholder: "I opened a scanned PDF from my email and Paginaut closed while showing page 3."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to make it happen again
+      description: If you know them. Say whether it happens every time.
+      placeholder: |
+        1. Open …
+        2. Click …
+    validations:
+      required: false
+  - type: input
+    id: platform
+    attributes:
+      label: Where
+      description: Windows, Linux (.deb or AppImage), or Android.
+    validations:
+      required: true
+  - type: textarea
+    id: system
+    attributes:
+      label: System details
+      description: Filled in by Paginaut when you include them (Report a problem). Otherwise the version (Settings › About) and your system.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: log
+    attributes:
+      label: Error log
+      description: Filled in by Paginaut when you include it. The whole log is in the report you can save or share from the app; attach it below if this was shortened.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: files
+    attributes:
+      label: Anything else
+      description: Screenshots, the saved report (paginaut-report.txt), or a sample file that shows the problem (only one you're happy to make public).
+    validations:
+      required: false

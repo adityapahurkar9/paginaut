@@ -46,6 +46,17 @@ static fz_locks_context g_locks_ctx = { NULL, lock_fn, unlock_fn };
 
 static void quiet(void *user, const char *msg) { (void)user; (void)msg; }
 
+/* MuPDF's errors go to the app's error log (errlog.rs) once the app has said where; its warnings stay quiet
+ * (a damaged file gives hundreds). Set once at start, before any context exists. */
+static void (*g_error_log)(const char *msg) = NULL;
+void fo_set_error_log(void (*f)(const char *msg)) { g_error_log = f; }
+static void logged(void *user, const char *msg)
+{
+	(void)user;
+	if (g_error_log && msg)
+		g_error_log(msg);
+}
+
 #define CTX (c->ctx)
 #define FAIL() snprintf(c->err, sizeof c->err, "%s", fz_caught_message(CTX))
 
@@ -58,7 +69,7 @@ int fo_global_init(size_t store_bytes)
 	if (!g_base)
 		return -1;
 	fz_set_warning_callback(g_base, quiet, NULL);
-	fz_set_error_callback(g_base, quiet, NULL);
+	fz_set_error_callback(g_base, logged, NULL);
 	fz_try(g_base)
 	{
 		fz_register_document_handlers(g_base);
@@ -103,7 +114,7 @@ fo_ctx *fo_ctx_new_private(size_t store_bytes)
 		return NULL;
 	}
 	fz_set_warning_callback(c->ctx, quiet, NULL);
-	fz_set_error_callback(c->ctx, quiet, NULL);
+	fz_set_error_callback(c->ctx, logged, NULL);
 	fz_try(c->ctx)
 	{
 		fz_register_document_handlers(c->ctx);

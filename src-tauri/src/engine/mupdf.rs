@@ -84,11 +84,27 @@ fn take_string(c: *mut fo_ctx, p: *mut c_char) -> Option<String> {
 }
 
 pub fn init(store_bytes: usize) -> Result<()> {
+    // SAFETY: a plain function that lives as long as the program, set before any context exists.
+    unsafe { fo_set_error_log(Some(mupdf_error)) };
     if unsafe { fo_global_init(store_bytes) } == 0 {
         Ok(())
     } else {
         Err("could not initialise MuPDF".into())
     }
+}
+
+/// MuPDF's error messages, to the error log (errlog.rs, which does nothing in a process that hasn't started one: the
+/// Android engine's). Not every one: a page drawing stopped part-way, or a format tried and passed over, is no fault.
+unsafe extern "C" fn mupdf_error(msg: *const std::os::raw::c_char) {
+    if msg.is_null() {
+        return;
+    }
+    // SAFETY: MuPDF passes a NUL-terminated message, valid for this call.
+    let text = unsafe { std::ffi::CStr::from_ptr(msg) }.to_string_lossy();
+    if text.contains("aborted") || text.contains("cancelled") {
+        return;
+    }
+    crate::errlog::write_limited("mupdf", &text);
 }
 
 /// Frees `percent`% of the shared resource store (100 = empty it).

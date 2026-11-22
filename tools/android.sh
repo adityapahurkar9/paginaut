@@ -40,6 +40,10 @@ sdk=$(cygpath -u "$ANDROID_HOME")
 ndk=$(cygpath -u "$NDK_HOME")
 adb="$sdk/platform-tools/adb"
 flag=$([ "$profile" = debug ] && echo --debug || echo "")
+# Release: the library keeps its symbol table (Cargo.toml's release profile strips it, right for the desktop), so the
+# Play bundle can carry it (build.gradle.kts, debugSymbolLevel) and Play Console's crash reports name functions.
+# Gradle strips the libraries it packs, so the app isn't bigger for it.
+[ "$profile" = release ] && export CARGO_PROFILE_RELEASE_STRIP=false
 
 # Gradle would quietly make an unsigned release, which only shows when Play turns it down.
 if [ "$profile" = release ]; then

@@ -31,6 +31,7 @@ import { printTab } from "./print";
 import { attachTab, stripIndexAt, type TabTransfer } from "./windows";
 import { switcherKey } from "./ui/TabSwitcher";
 import { dropAt } from "./ui/TabDrag";
+import { offerReportAfterCrash } from "./ui/ReportPane";
 
 let dropTimer = 0;
 
@@ -59,6 +60,9 @@ render(<App />, document.getElementById("app")!);
 
 // Comments are signed with the Windows user name.
 api.userName().then(setAuthor).catch(() => {});
+
+// The last session crashed or ended without closing: offered a report once (the first window to ask), after the start.
+setTimeout(() => void offerReportAfterCrash(), 1500);
 
 // Diagnostics hook for tools/cdp.mjs.
 (window as unknown as { paginaut: unknown }).paginaut = { openFiles, tabs, activeTab, renderer, actions: A, pages: P, compare: C };

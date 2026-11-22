@@ -72,49 +72,59 @@ export function pageDetails(): Rows {
   return rows;
 }
 
-/** The report as plain text: the details, then the log. */
-export function reportText(details: Rows, log: string): string {
-  const w = Math.max(...details.map(([k]) => k.length));
-  const lines = details.map(([k, v]) => `${k.padEnd(w)}  ${v}`);
-  return [
-    "Paginaut problem report",
-    "",
-    "System details",
-    ...lines,
-    "",
-    "Error log (file paths and document names removed)",
-    log.trim() || "(empty: nothing has been logged)",
-    "",
-  ].join("\n");
+/** What goes in a report: each part is the user's choice (null: left out). */
+export interface ReportParts {
+  details: Rows | null;
+  log: string | null;
 }
 
+export type Platform = "Windows" | "Linux" | "Android";
+
+/** What the system details hold, said before anything is shared. */
+export function detailsHold(p: Platform): string {
+  const common = "Paginaut's version; processor type and threads; memory; the web view's version; graphics card; screen size and scale; language";
+  if (p === "Android") return `The phone's maker and model, Android version and ABIs; ${common}.`;
+  if (p === "Linux") return `The Linux distribution and kernel version; the desktop session; how Paginaut was installed (.deb or AppImage); ${common}.`;
+  return `The Windows edition and version; ${common}.`;
+}
+
+/** What the other parts hold, said before anything is shared (desktop and Android say the same). */
+export const REPORT_HOLDS = {
+  log: "When something went wrong and what the app said about it (crashes, files that failed to open, save or convert, errors in the app itself). Paths become <file>.pdf and the home folder ~.",
+  never: "Not in it: your documents or their text, file and folder names, passwords, signatures or certificates, form entries, your user name or accounts. The text below is exactly what would be shared: read it first.",
+};
+
+const rowsText = (rows: Rows) => {
+  const w = Math.max(...rows.map(([k]) => k.length));
+  return rows.map(([k, v]) => `${k.padEnd(w)}  ${v}`).join("\n");
+};
+
+/** The report as plain text, with only the parts chosen. */
+export function reportText(p: ReportParts): string {
+  const out = ["Paginaut problem report", ""];
+  if (p.details) out.push("System details", rowsText(p.details), "");
+  if (p.log !== null) out.push("Error log (file paths and document names removed)", p.log.trim() || "(empty: nothing has been logged)", "");
+  if (!p.details && p.log === null) out.push("(Nothing chosen to include.)", "");
+  return out.join("\n");
+}
+
+/** The issue form in the repository (.github/ISSUE_TEMPLATE/problem.yml): its field ids are filled from the address. */
 const ISSUES = "https://github.com/adityapahurkar9/paginaut/issues/new";
+const FORM = "problem.yml";
 /** Kept under what browsers and GitHub take in an address. */
 const MOST_URL = 7500;
 
-/** A new GitHub issue with the details and as much of the log's end as fits; `cut` when some of the log was left out. */
-export function issueUrl(details: Rows, log: string): { url: string; cut: boolean } {
-  const w = Math.max(...details.map(([k]) => k.length));
-  const sys = details.map(([k, v]) => `${k.padEnd(w)}  ${v}`).join("\n");
-  const make = (tail: string, cut: boolean) => {
-    const body = [
-      "**What happened**",
-      "",
-      "<!-- What you did, what you expected, and what happened instead. -->",
-      "",
-      "**System details**",
-      "```",
-      sys,
-      "```",
-      "",
-      `**Error log${cut ? " (its last lines: the whole log is in the saved report, which you can attach here)" : ""}**`,
-      "```",
-      tail || "(empty)",
-      "```",
-    ].join("\n");
-    return `${ISSUES}?${new URLSearchParams({ title: "Problem: ", body }).toString()}`;
+/** A new issue on GitHub's form, filled with the chosen parts and as much of the log's end as fits; `cut` when some of
+ *  the log was left out. */
+export function issueUrl(p: ReportParts, platform: Platform): { url: string; cut: boolean } {
+  const make = (tail: string | null, cut: boolean) => {
+    const q: Record<string, string> = { template: FORM, title: "Problem: ", platform };
+    if (p.details) q.system = rowsText(p.details);
+    if (tail !== null) q.log = cut ? `(The last lines only: the whole log is in the saved report, which can be attached below.)\n${tail}` : tail || "(empty)";
+    return `${ISSUES}?${new URLSearchParams(q).toString()}`;
   };
-  const lines = log.trim().split("\n");
+  if (p.log === null) return { url: make(null, false), cut: false };
+  const lines = p.log.trim().split("\n");
   let url = make(lines.join("\n"), false);
   if (url.length <= MOST_URL) return { url, cut: false };
   // The newest lines are the ones that matter: as many of them as fit.

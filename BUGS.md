@@ -4,8 +4,8 @@ Open bugs, newest first. Features and plans stay in ROADMAP.md; a fixed bug is t
 the release that carries it in ROADMAP.md.
 
 From 0.9.13 and Android 0.6.8, a report from someone else can come with the app's error log and their system details
-(desktop: Settings › About › Report a problem; Android: Settings › Share error log and phone details), often as a
-GitHub issue. The log's paths and document names are already replaced with `<file>.ext`; its kinds are `panic`,
+(desktop: Settings › About › Report a problem; Android: Settings › Report a problem), often as a GitHub issue
+from the "Report a problem" form (labels bug and from-app), with only the parts the user chose to include. The log's paths and document names are already replaced with `<file>.ext`; its kinds are `panic`,
 `start` (the last session ended without closing), `engine` (Android's engine process), `android` (a Kotlin crash),
 `script` and `promise` (the page), and `failed` (a command the user saw fail). See ROADMAP.md, "Error logs".
 

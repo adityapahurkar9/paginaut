@@ -18,6 +18,12 @@ pub fn error_log() -> String {
     crate::errlog::read()
 }
 
+/// True once, when the last session crashed (or, on the desktop, ended without closing): the page offers a report.
+#[tauri::command]
+pub fn crash_notice() -> bool {
+    crate::errlog::take_crash_notice()
+}
+
 /// Empties the error log.
 #[tauri::command]
 pub fn error_log_clear() {

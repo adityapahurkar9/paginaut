@@ -898,30 +898,42 @@ themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
 - [ ] Cleaning: a document's name with spaces, written without its folder and without quotes ("couldn't open Tax
       Return.pdf"), loses only its last word ("Tax <file>.pdf"). Messages from the app carry full paths or quote
       names, so none is known to do this; a message that does should quote the name
-- [x] Report a problem (desktop: Settings › About › Report a problem…, and the command palette; a tool in the right
-      pane, src/ui/ReportPane.tsx). Shows exactly the text that would be shared: system details (version, system and
-      kernel, architecture, processor, memory, WebView2 or WebKitGTK, graphics from WebGL, screen, language; on Linux
-      the session and .deb or AppImage) and the log. "Open a GitHub issue with these details" (a new issue at
-      adityapahurkar9/paginaut, filled in, with as much of the log's end as fits in the address), "Copy error log and
-      system details", "Save error log and system details…", "Clear the error log"
-- [x] Android: Settings › "Share error log and phone details" (a text file through the share sheet: phone maker and
-      model, Android version and API level, ABIs, web view, memory, screen, language, and the log) and "Clear the
-      error log". No GitHub link: the app has no internet permission and says it doesn't use the internet
-- [ ] MuPDF's own warnings and errors (fz_set_warning_callback / fz_set_error_callback) into the same log, and the
-      eprintln! calls becoming log lines; more detail when turned on in Settings
-- [ ] After a crash: the next start says the app closed unexpectedly last time and offers Report a problem
-- [ ] Tests in the running app: a forced command error, a forced panic and a front-end exception each found in the
-      report on Windows, Linux (the .deb and the AppImage) and Android; a document's text and a password typed in the
-      session checked to be absent
+- [x] Report a problem, the same on all three: the user picks what to include (system details, the error log: each a
+      switch, both on to start), the page says what each holds and what's never in it, and shows exactly the text
+      that would be shared. Nothing leaves the device unless the user sends it; Paginaut itself sends nothing.
+      Desktop (Settings › About › Report a problem…, the command palette; a tool in the right pane,
+      src/ui/ReportPane.tsx): "Open a GitHub issue with this report", "Copy this report", "Save this report as a
+      text file…", "Clear the error log". Android (Settings › Report a problem, src/mobile/ReportSheet.tsx): "Share
+      this report as a file…" (share sheet), "Open a GitHub issue with this report" (the browser: no internet
+      permission is needed, and none was added), "Clear the error log"
+- [x] GitHub: an issue form, .github/ISSUE_TEMPLATE/problem.yml ("Report a problem", labels bug and from-app). The app
+      fills its `platform`, `system` and `log` fields from the address (src/errors.ts issueUrl, as much of the log's
+      end as fits in 7,500 characters); the user writes what happened and posts it. Needs the repository public
+      (a private one takes issues only from its collaborators) and the from-app label made
+- [x] MuPDF's errors into the log (paginaut.c `logged`, mupdf.rs `mupdf_error`): at most 20 lines a minute, the rest
+      counted; "aborted" (a page drawing stopped) left out. Its warnings stay off: a damaged file gives hundreds. On
+      Android the engine's own process can't write, so its MuPDF errors aren't logged; its stops are. The two
+      eprintln! calls (appwindows.rs) are log lines now
+- [x] After a crash: the next start offers Report a problem once (desktop: a question, "Report a problem…" or "Not
+      now"; Android: the sheet opens with "Paginaut closed unexpectedly last time"). Rust's `crash_notice`
+- [x] Android's Play bundle carries the native libraries' symbol tables (build.gradle.kts debugSymbolLevel
+      SYMBOL_TABLE, ndkVersion set; tools/android.sh builds the release library unstripped, Gradle strips what it
+      packs), so Play Console stops asking for native debug symbols and its crash reports name functions
+- [ ] More detail in the log when turned on in Settings
+- [ ] On Linux, tried in the running app (WebKitGTK): the pane, the crash offer, the issue form filled in
 
 ## 0.9.13 (Windows, Linux) and Android 0.6.8: error log and Report a problem
-Versions set 2026-11-22; not built into installers or packages yet. What's in it: "Error logs" above (the ticked
-items). Tested: the TypeScript check, both pages built, the Rust unit tests on Windows and Linux (WSL), the Android
-debug build (x86_64). In the running Windows app (dev build): Settings › About › Report a problem opens the pane with
-the right details; a thrown error, an unhandled rejection, a repeated line and a failed open with a full path all
-reached the log cleaned; a clean quit removed the "running" marker. The GitHub issue address was checked apart from
-the app (the newest lines kept, under 7,500 characters), not opened. Not run on Linux or Android yet; the Kotlin crash
-handler and the share sheet are untried.
+Versions set 2026-11-22; desktop not built into installers or packages yet. What's in it: "Error logs" above (the
+ticked items). Tested: the TypeScript check, both pages built, the Rust unit tests on Windows and Linux (WSL).
+In the running Windows app (dev build): Report a problem opens from Settings › About with the right details; a
+thrown error, an unhandled rejection, a repeated line, a failed open with a full path and a MuPDF error on a
+broken PDF all reached the log cleaned; unticking a part takes it out of the text; a forced stop made the next start
+ask "Paginaut closed unexpectedly last time", and its button opened the pane; a clean quit removed the marker.
+On Android (debug build, Small_Tablet emulator, Android 11): `am crash` on the app's process was written by the
+Kotlin handler and cleaned into the log at the next start, which opened the report sheet; the switches change the
+text; "Share this report as a file…" handed paginaut-report.txt to the share sheet. On the engine's process it
+crashed only the engine, which the app started again. The GitHub issue address was checked apart from the app,
+not opened: the form isn't on GitHub until it's pushed. Not run on Linux.
 
 ## 0.9.12 (Windows, Linux) and Android 0.6.7: the 2026-11-13 code review fixed
 Versions set 2026-11-21. Built and published 2026-11-22 as the latest GitHub release (v0.9.12: Windows installer +

@@ -81,7 +81,7 @@ pub fn window_ready(win: &WebviewWindow) {
             crate::enable_touchpad_pinch(&w);
             if let Ok(hwnd) = w.hwnd() {
                 if let Err(e) = crate::snap::install(w.app_handle(), hwnd.0 as isize, w.label()) {
-                    eprintln!("snap layouts: {e}");
+                    crate::errlog::write("app", &format!("Snap layouts: {e}"));
                 }
             }
         });
@@ -173,7 +173,7 @@ pub fn open_window(app: &AppHandle, at: Option<PhysicalPosition<f64>>, start: Wi
 pub fn forward_files(app: &AppHandle, files: Vec<String>) {
     if files.is_empty() {
         if let Err(e) = open_window(app, None, WindowStart::default()) {
-            eprintln!("new window: {e}");
+            crate::errlog::write("app", &format!("A new window didn't open: {e}"));
         }
         return;
     }

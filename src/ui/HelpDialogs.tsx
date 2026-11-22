@@ -82,7 +82,7 @@ export function About() {
           >
             Report a problem…
           </button>
-          <span class="hint">Shows the error log and this computer's details, to copy, save or put in a GitHub issue. Nothing is sent by itself.</span>
+          <span class="hint">Shows the error log and this computer's details, and lets you choose what to share: copy, save, or a GitHub issue you post yourself. Nothing is sent by itself.</span>
         </div>
       </div>
     </>

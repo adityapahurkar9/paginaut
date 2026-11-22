@@ -222,6 +222,18 @@ input { font: inherit; }
 .sheet h3 { margin: 2px 0 0; font-size: 18px; }
 .sheet-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 -18px; padding: 0 18px; }
 .hint { margin: 0; font-size: 13.5px; color: var(--tx2); }
+/* Report a problem: what each part holds under its switch, then exactly the text that would be shared. */
+.report-sheet { display: flex; flex-direction: column; gap: 10px; }
+/* The list scrolls: nothing in it is squeezed to fit. */
+.report-sheet > * { flex-shrink: 0; }
+.report-sheet .report-part { padding: 6px 0; text-align: left; }
+.report-sheet .report-part .row-label { flex: 1; min-width: 0; }
+.report-sheet .report-part .switch { flex: none; margin-top: 2px; }
+.report-sheet .report-part { align-items: flex-start; }
+.report-sheet .report-part .row-label small { display: block; margin-top: 3px; font-size: 12.5px; color: var(--tx3, var(--tx2)); line-height: 1.4; }
+.report-sheet .report-text { margin: 0; max-height: 40vh; overflow: auto; padding: 10px; border-radius: 10px; background: var(--hover); font: 11px/1.45 monospace; white-space: pre; user-select: text; }
+.report-sheet .report-crash { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--hover); font-size: 14px; color: var(--tx); }
+.report-sheet .link-row:disabled .row-label { opacity: 0.45; }
 
 /* Settings › Colour theme: the desktop's presets, a strip of little previews. */
 .settings-scroll { display: flex; flex-direction: column; gap: 12px; }

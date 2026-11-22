@@ -121,7 +121,7 @@ export const layout = signal<Layout>("paged");
 /** The reader's bars are shown (a tap toggles them). */
 export const chrome = signal(true);
 
-export type Sheet = "view" | "contents" | "info" | "more" | "settings" | "storage" | "shelf" | null;
+export type Sheet = "view" | "contents" | "info" | "more" | "settings" | "storage" | "shelf" | "report" | null;
 export const sheet = signal<Sheet>(null);
 export const searching = signal(false);
 export const busy = signal<string | null>(null);
