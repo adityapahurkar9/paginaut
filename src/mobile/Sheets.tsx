@@ -320,7 +320,8 @@ function TocItem({ it, depth, onPick }: { it: OutlineItem; depth: number; onPick
         )}
         <button class="toc-link" disabled={it.p < 0} onClick={() => onPick(it.p, it.y)}>
           <span class="toc-t">{it.t}</span>
-          {it.p >= 0 && <span class="toc-p">{it.p + 1}</span>}
+          {/* Read and Book number their own pages: the document's numbers would disagree with the bar. */}
+          {it.p >= 0 && mode.value === "pages" && <span class="toc-p">{it.p + 1}</span>}
         </button>
       </div>
       {kids && open && (

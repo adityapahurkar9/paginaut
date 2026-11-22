@@ -1332,9 +1332,9 @@ impl List {
         serde_json::from_str(&json).map_err(|e| e.to_string())
     }
 
-    /// Page content for reflowing, as JSON (see fo_reflow_json).
-    pub fn reflow(&self, bounds: &[f32; 4]) -> Result<String> {
-        with_kind(self.1, |c| take_string(c, unsafe { fo_reflow_json(c, self.0, bounds.as_ptr()) }).ok_or_else(|| last_error(c)))
+    /// Page content for reflowing, as JSON (see fo_reflow_json). `flowing`: the page is an e-book's, laid out by MuPDF.
+    pub fn reflow(&self, bounds: &[f32; 4], flowing: bool) -> Result<String> {
+        with_kind(self.1, |c| take_string(c, unsafe { fo_reflow_json(c, self.0, bounds.as_ptr(), flowing as c_int) }).ok_or_else(|| last_error(c)))
     }
 
     /// Share of the page (per 10,000) drawn but not text: pictures, text turned into outlines.

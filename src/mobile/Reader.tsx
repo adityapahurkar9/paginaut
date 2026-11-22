@@ -128,6 +128,20 @@ function Pages({ d }: { d: OpenDoc }) {
       },
     });
     const unwatch = chrome.subscribe((c) => c && (shownAt = performance.now()));
+    // A whole page (fitted by height: square and wide screens) stays clear of the bars floating over it. Its slot
+    // centres it, so the taller bar's room is kept at both ends (less the viewer's own 20 px padding).
+    const reader = host.current!.closest(".reader");
+    const bars = () => [...(reader?.querySelectorAll<HTMLElement>(".bar.top, .bar.bottom") ?? [])];
+    const reserve = () => viewer.setFitReserve(2 * Math.max(0, ...bars().map((b) => b.offsetHeight)) - 40);
+    const barsRo = new ResizeObserver(reserve);
+    const watchBars = () => {
+      barsRo.disconnect();
+      bars().forEach((b) => barsRo.observe(b));
+      reserve();
+    };
+    watchBars();
+    const barsMo = reader ? new MutationObserver(watchBars) : null;
+    barsMo?.observe(reader!, { childList: true });
     views.viewer = viewer;
     const L = docLayout.value;
     viewer.setLayoutMode(spreadFor(L, innerWidth > innerHeight));
@@ -141,6 +155,8 @@ function Pages({ d }: { d: OpenDoc }) {
     setV(viewer);
     return () => {
       unwatch();
+      barsRo.disconnect();
+      barsMo?.disconnect();
       views.viewer = null;
       viewer.destroy();
     };

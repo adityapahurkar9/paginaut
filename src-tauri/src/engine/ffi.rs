@@ -181,7 +181,7 @@ extern "C" {
     pub fn fo_pdf_insert_blank(c: *mut fo_ctx, d: *mut fo_doc, w: c_float, h: c_float, count: c_int) -> c_int;
 
     pub fn fo_image_rects_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
-    pub fn fo_reflow_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float) -> *mut c_char;
+    pub fn fo_reflow_json(c: *mut fo_ctx, l: *mut fo_list, bounds: *const c_float, flowing: c_int) -> *mut c_char;
 
     pub fn fo_pdf_forms_init(c: *mut fo_ctx, d: *mut fo_doc, xfa: *mut c_int) -> c_int;
     pub fn fo_widgets_json(c: *mut fo_ctx, p: *mut fo_page, bounds: *const c_float) -> *mut c_char;

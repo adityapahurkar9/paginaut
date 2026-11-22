@@ -660,16 +660,30 @@ static void outline_rec(fz_context *ctx, fz_document *doc, fz_buffer *b, fz_outl
 	for (; o; o = o->next)
 	{
 		int page = -1;
+		float y = o->y;
 		if (!first)
 			fz_append_byte(ctx, b, ',');
 		first = 0;
 		fz_try(ctx)
-			page = fz_page_number_from_location(ctx, doc, o->page);
+		{
+			fz_location loc = o->page;
+			/* EPUB (and other reflowable) outlines carry only a link: MuPDF leaves the
+			   page at -1 and expects the reader to resolve the uri. */
+			if (loc.page < 0 && o->uri)
+			{
+				fz_link_dest dest = fz_resolve_link_dest(ctx, doc, o->uri);
+				loc = dest.loc;
+				if (dest.type == FZ_LINK_DEST_XYZ || dest.type == FZ_LINK_DEST_FIT_H || dest.type == FZ_LINK_DEST_FIT_BH)
+					y = dest.y;
+			}
+			if (loc.page >= 0)
+				page = fz_page_number_from_location(ctx, doc, loc);
+		}
 		fz_catch(ctx)
 			page = -1;
 		fz_append_string(ctx, b, "{\"t\":");
 		json_str(ctx, b, o->title ? o->title : "");
-		json_printf(ctx, b, ",\"p\":%d,\"y\":%g", page, o->y);
+		json_printf(ctx, b, ",\"p\":%d,\"y\":%g", page, y);
 		if (o->down)
 		{
 			fz_append_string(ctx, b, ",\"k\":");
@@ -1165,7 +1179,18 @@ static void reflow_line(fz_context *ctx, fz_buffer *buf, fz_buffer *span, fz_ste
 	fz_append_string(ctx, buf, "]}");
 }
 
-static void reflow_blocks(fz_context *ctx, fz_buffer *buf, fz_buffer *span, fz_stext_block *b, const float o[4], int *n)
+/* In an e-book, a filled shape that's nearly white is a background (a book's CSS often gives pictures a white
+ * one, drawn where the picture's box starts: at the foot of a page whose picture moved on to the next). It's
+ * not a figure. */
+static int background_shape(fz_stext_block *b)
+{
+	uint32_t c = b->u.v.argb;
+	if (b->u.v.flags & FZ_STEXT_VECTOR_IS_STROKED)
+		return 0;
+	return ((c >> 16) & 0xff) >= 0xf0 && ((c >> 8) & 0xff) >= 0xf0 && (c & 0xff) >= 0xf0;
+}
+
+static void reflow_blocks(fz_context *ctx, fz_buffer *buf, fz_buffer *span, fz_stext_block *b, const float o[4], int flowing, int *n)
 {
 	for (; b; b = b->next)
 	{
@@ -1198,6 +1223,8 @@ static void reflow_blocks(fz_context *ctx, fz_buffer *buf, fz_buffer *span, fz_s
 		case FZ_STEXT_BLOCK_VECTOR:
 			if (b->u.v.flags & (FZ_STEXT_VECTOR_IS_HIGHLIGHT | FZ_STEXT_VECTOR_IS_UNDERLINE | FZ_STEXT_VECTOR_IS_STRIKEOUT))
 				break;
+			if (flowing && background_shape(b))
+				break;
 			fz_append_string(ctx, buf, (*n)++ ? ",{\"t\":\"v\",\"x\":" : "{\"t\":\"v\",\"x\":");
 			put_bbox(ctx, buf, b->bbox, o);
 			fz_append_byte(ctx, buf, '}');
@@ -1214,7 +1241,7 @@ static void reflow_blocks(fz_context *ctx, fz_buffer *buf, fz_buffer *span, fz_s
 				fz_append_byte(ctx, buf, '}');
 			}
 			else
-				reflow_blocks(ctx, buf, span, s->first_block, o, n);
+				reflow_blocks(ctx, buf, span, s->first_block, o, flowing, n);
 			break;
 		}
 		default:
@@ -1223,7 +1250,7 @@ static void reflow_blocks(fz_context *ctx, fz_buffer *buf, fz_buffer *span, fz_s
 	}
 }
 
-char *fo_reflow_json(fo_ctx *c, fo_list *l, const float b[4])
+char *fo_reflow_json(fo_ctx *c, fo_list *l, const float b[4], int flowing)
 {
 	fz_stext_page *t = NULL;
 	fz_buffer *buf = NULL, *span = NULL;
@@ -1244,7 +1271,7 @@ char *fo_reflow_json(fo_ctx *c, fo_list *l, const float b[4])
 		buf = fz_new_buffer(CTX, 4096);
 		span = fz_new_buffer(CTX, 256);
 		fz_append_printf(CTX, buf, "{\"w\":%.1f,\"h\":%.1f,\"b\":[", b[2] - b[0], b[3] - b[1]);
-		reflow_blocks(CTX, buf, span, t->first_block, b, &n);
+		reflow_blocks(CTX, buf, span, t->first_block, b, flowing, &n);
 		fz_append_string(CTX, buf, "]}");
 		s = buffer_to_string(CTX, buf);
 	}

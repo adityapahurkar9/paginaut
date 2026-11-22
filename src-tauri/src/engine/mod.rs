@@ -620,6 +620,11 @@ impl Doc {
         self.page_count.load(Ordering::Relaxed)
     }
 
+    /// An e-book or other flowing document MuPDF lays out into pages itself (EPUB, FB2, HTML…).
+    pub fn is_reflowable(&self) -> bool {
+        self.inner.lock().doc.is_reflowable()
+    }
+
     fn check(&self, index: usize) -> Result<(), String> {
         if index >= self.page_count() {
             Err(format!("page {index} out of range"))
@@ -2510,12 +2515,13 @@ impl Engine {
         page: impl Fn(usize, String) + Send + Sync + 'static,
         finished: impl FnOnce(bool, Option<String>) + Send + 'static,
     ) -> Result<(), String> {
+        let flowing = self.doc(doc)?.is_reflowable();
         self.scan_pages(
             doc,
             start,
             sid,
             move |i, src| {
-                let json = src.list(i).and_then(|(list, b)| list.reflow(&b))?;
+                let json = src.list(i).and_then(|(list, b)| list.reflow(&b, flowing))?;
                 page(i, json);
                 Ok(true)
             },

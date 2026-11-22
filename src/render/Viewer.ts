@@ -247,6 +247,8 @@ export class Viewer {
   private contentH = 0;
   private zoom = 1;
   private fit: FitMode = "width";
+  /** Height kept clear by "page" fit, for bars floating over the pages (mobile); 0 on the desktop. */
+  private fitReserveY = 0;
   private mounted = new Map<number, PageView>();
   private group: string;
   private raf = 0;
@@ -663,7 +665,7 @@ export class Viewer {
     if (!this.pages.length) return 1;
     const i = Math.min(Math.max(0, page), this.pages.length - 1);
     const vw0 = this.el.clientWidth - PAD_X * 2 - 4;
-    const vh = this.el.clientHeight - PAD_Y * 2;
+    const vh = Math.max(this.el.clientHeight / 2, this.el.clientHeight - PAD_Y * 2 - this.fitReserveY);
     if (this.layoutMode === "single") {
       const { w, h } = this.pages[i];
       const byWidth = vw0 / (w * PT_TO_CSS);
@@ -687,6 +689,17 @@ export class Viewer {
     const n = rowEnd(r) - this.rowFirst[r];
     const byWidth = (vw0 - (n - 1) * GAP) / (w * PT_TO_CSS);
     return clampZoom(fit === "width" ? Math.min(byWidth, 4) : Math.min(byWidth, vh / (h * PT_TO_CSS)));
+  }
+
+  /**
+   * Keeps `px` of height clear when fitting a whole page, so bars floating over the pages (centred in
+   * their slot) don't cover its top and bottom. Re-fits when it changes.
+   */
+  setFitReserve(px: number) {
+    px = Math.max(0, Math.round(px));
+    if (px === this.fitReserveY) return;
+    this.fitReserveY = px;
+    if (this.fit === "page") this.setFit("page");
   }
 
   setFit(fit: FitMode) {

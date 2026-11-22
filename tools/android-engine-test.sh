@@ -37,7 +37,11 @@ js "window.T = {
 }; 1" >/dev/null
 
 # 1. A call after the engine stopped: it starts again and the document opens there again.
-d=$(js "T.open('$(uri nse.pdf)')")
+d=$(js "T.open('$(uri nse.pdf)').catch(e => 'error: ' + e)")
+# Without the shelf's Books folder (a fresh install or cleared data) every open fails and later calls wait forever.
+case "$d" in
+  ''|*[!0-9]*) echo "Couldn't open Books/nse.pdf ($d). Add /sdcard/Books as the shelf's folder in the app first." >&2; exit 1 ;;
+esac
 check "draw before" "$(js "T.draw($d, 0)")" 200
 before=$(engine_pid)
 kill_engine

@@ -232,7 +232,8 @@ char *fo_image_rects_json(fo_ctx *c, fo_list *l, const float bounds[4]);
  *   {"t":"v","x":[bbox]}   vector graphics (lines, fills)
  * style bits: 1 bold, 2 italic, 4 monospace, 8 superscript. Coordinates are
  * relative to the page origin. "j" marks a line joined to the next (dehyphenated). */
-char *fo_reflow_json(fo_ctx *c, fo_list *l, const float bounds[4]);
+/* flowing: an e-book laid out by MuPDF (white background shapes are left out: they aren't figures). */
+char *fo_reflow_json(fo_ctx *c, fo_list *l, const float bounds[4], int flowing);
 
 /* Forms. fo_pdf_forms_init turns on the undo journal (and form scripts when
  * there are fields); returns the number of fields, -1 on error. */

@@ -920,6 +920,25 @@ themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
 - [ ] More detail in the log when turned on in Settings
 - [ ] On Linux, tried in the running app (WebKitGTK): the pane, the crash offer, the issue form filled in
 
+## 0.9.15 (Windows, Linux) and Android 0.6.9: fixes found while taking the Play Store screenshots
+Versions set 2026-11-23. Built, not published. Details in BUGS.md ("Found while taking the Play Store screenshots").
+- [x] E-book Contents entries have their page (all platforms): MuPDF gives EPUB outline entries only a link, so
+      paginaut.c outline_rec resolves it (fz_resolve_link_dest). Android shows the numbers in Pages mode only
+- [x] No empty white boxes in place of e-book pictures in Read/Book mode (all platforms): white background shapes
+      in a MuPDF-laid-out e-book aren't figures (paginaut.c background_shape; fo_reflow_json gained `flowing`)
+- [x] Android: "Open with" works after a display-size or font-size change (MainActivity handles density/fontScale
+      itself, so the plugin's WebView isn't orphaned)
+- [x] Android: a page fitted to the screen's height leaves room for the top and bottom bars (Viewer.setFitReserve)
+- [x] Windows: tools/test-all.ps1 passed on this code before the versions were set
+- [x] Built 2026-11-23: release/v0.9.15 (Windows installer, Linux .deb and AppImage, each with its .sig; latest.json
+      lists all three; addons.json); staged_release passed on it. Linux: tools/linux.sh test passed (60, the token
+      ones included). Android: release/android/Paginaut_0.6.9.aab and the four per-ABI APKs
+- [x] tools/android-engine-test.sh on the Pixel 9 emulator (debug 0.6.9): 21 pass; the 5 that don't need
+      businessplans.epub (not on this PC; a stand-in ran). A first run lost its DevTools connection midway and
+      passed on a clean restart. The AVD's app data had been cleared, so Books had to be picked again; the script now
+      stops at once with a message when it can't open the test files (it used to wait forever)
+- [ ] Published (GitHub v0.9.15 and android-v0.6.9), Play upload
+
 ## 0.9.14 (Windows, Linux): updates for Linux, update versions checked, Tauri 2.12.7 and rustls 0.23.46
 Version set 2026-11-22. Built and published 2026-11-22 as the latest GitHub release (v0.9.14): the Windows installer,
 the Linux .deb and AppImage, each with its .sig, latest.json listing all three (checked as published: every entry's

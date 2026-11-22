@@ -464,6 +464,26 @@ Cleanup:
 
 ## Fixed
 
+### Found while taking the Play Store screenshots (2026-11-22, Android 0.6.8; fixed the same day, not released)
+
+- [x] An EPUB's Contents can't be tapped: every entry is greyed out, with no page number (Standard Ebooks' books,
+      EPUB 3 nav and NCX alike). MuPDF gives an e-book's outline entries only a link and leaves their page at -1;
+      outline_rec read only the page. (src-tauri/native/paginaut.c, outline_rec) Windows and Linux too.
+      Fixed: an entry without a page has its link resolved (fz_resolve_link_dest), with its place on the page.
+      On Android, Contents leaves page numbers out in Read and Book, which number their own pages
+- [x] Book and Read mode show an empty white box where an e-book's picture should be (Alice, Standard Ebooks).
+      The book's CSS gives pictures a white background; MuPDF fills it where the picture's box starts, at the foot
+      of a page whose picture moved on to the next, and the reflow took that white shape for a figure.
+      (src-tauri/native/paginaut.c, reflow_blocks) Windows and Linux too.
+      Fixed: in e-books, nearly white filled shapes are left out of the reflow (background_shape)
+- [x] Android: after a display-size or font-size change, files sent from another app ("Open with", Share) are
+      ignored until Paginaut is restarted. The change recreated the activity, and the plugin kept the old WebView.
+      Fixed: MainActivity handles density, font scale and the other remaining changes itself
+      (AndroidManifest.xml configChanges), so it isn't recreated
+- [x] Android: a whole page fitted by height (comics and PDFs on square or wide screens) is partly covered by the
+      bars floating over it. Fixed: "page" fit keeps room for the bars (Viewer.setFitReserve, from the bars' heights
+      in Reader.tsx); tall pages on phones are fitted by width and look as before
+
 ### Found while adding the watermark preview (2026-11-09, Windows and Linux; fixed the same day, next release 0.9.11)
 
 - [x] A text watermark is drawn solid whatever its opacity (20% came out as full red). fo_stamp_text wrapped the
