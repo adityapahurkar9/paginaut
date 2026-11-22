@@ -101,8 +101,9 @@ Points that can be checked in the source:
 
 ## Privacy policy (draft)
 
-Play needs a privacy policy link even for apps that collect nothing. It has to be a public web page: host this
-once the releases page or repository is public.
+Play needs a privacy policy link even for apps that collect nothing. It has to be a public web page: PRIVACY.md at
+the repository's root (all three apps), https://github.com/adityapahurkar9/paginaut/blob/main/PRIVACY.md, which
+works once the repository is public. The draft below was its start; PRIVACY.md is the one to keep current.
 
 > **Paginaut privacy policy**
 >
@@ -133,7 +134,7 @@ once the releases page or repository is public.
 ## Before submitting
 
 - [ ] Confirm the backup point above with Play's help or policy support.
-- [ ] Host the privacy policy and put its link in the store listing.
+- [ ] Make the repository public, so PRIVACY.md can be read, and put its link in the store listing (docs/PLAY-LISTING.md).
 - [ ] Fill the All files access declaration (or remove the permission).
 - [ ] Recheck after any new permission, library or network feature: the build check will stop a new
       permission, and this page should change with it.

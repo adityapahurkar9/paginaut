@@ -691,6 +691,8 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       with it when the file is there. `bash tools/android.sh all --release` makes the Play bundle (.aab, all ABIs)
 - [ ] Store listing, AAB upload (a personal Play account must run a closed test with 12 testers for 14 days
       first); source made public first (AGPL); 1.0 for the store release
+      Listing drafted 2026-11-22: docs/PLAY-LISTING.md (name, short and full description, category, App content
+      answers), assets/play/ (512 px icon, feature graphic; render.mjs remakes them), PRIVACY.md. Screenshots to take
 - [x] 0.6.5 (6005) uploaded to Play (2026-10-27), internal testing draft. Automatic protection (App integrity) is
       turned off and the bundle lists three permissions again: its installer check added
       com.android.vending.CHECK_LICENSE, which MainActivity.extraPermissions() doesn't allow, so every Play copy
@@ -708,13 +710,9 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       - worth considering: reading on with the screen off or from the notification (a media session; a
         foreground service adds permissions, so the manifest check in build.gradle.kts and
         MainActivity.extraPermissions() must allow them), and stopping after a set time
-- [ ] **Next to do** (Android 0.6.7): native debug symbols for Play, so its crash reports name functions and lines
-      instead of addresses (Play warned on 6005 and 6006 that none were uploaded; 0.6.6 went to internal testing
-      without them, as its libraries are stripped and a zip has to come from the same build). Android release builds keep them
-      (CARGO_PROFILE_RELEASE_STRIP=false in tools/android.sh; the desktop stays stripped), the app still ships
-      the stripped library (llvm-strip as now), and the unstripped one per ABI goes into
-      native-debug-symbols.zip beside the .aab, uploaded on the bundle's Downloads tab. Symbols only match the
-      build they came from, so every release needs its own zip
+- [x] Native debug symbols for Play (Android 0.6.8): the Play bundle carries the symbol tables itself
+      (build.gradle.kts debugSymbolLevel SYMBOL_TABLE; tools/android.sh builds the release library unstripped and
+      Gradle strips what it packs), so no zip to upload by hand. See "Error logs" below
 - [ ] README.md: the Play app signing certificate's SHA-256 (App integrity › App signing) in place of
       PLAY_APP_SIGNING_FINGERPRINT
 - [x] LICENSE file (the AGPL 3.0 text) at the repo root before the repo goes public; package.json already says
