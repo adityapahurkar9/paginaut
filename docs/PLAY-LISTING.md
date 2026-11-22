@@ -102,8 +102,9 @@ tablet; a comic; search; Settings with the themes; Report a problem.
 - App access: All functionality is available without special access (no login)
 - Content rating questionnaire: a utility/reader with no user-generated content shown to others, no sharing between
   users, no location, no purchases. Expected rating: Everyone / PEGI 3
-- Target audience: 18 and over is simplest (13+ also possible); not made for children, so the Families policy
-  doesn't apply
+- Target audience: 13 and over (chosen 2026-11-22); not made for children, so the Families policy doesn't apply.
+  Before adding younger ages: the Families policy and its review apply, and Report a problem on Android should
+  drop the GitHub route (GitHub's terms require 13+) and keep only the share sheet. No age check is needed then.
 - Data safety: "No data collected, no data shared": see docs/PLAY-DATA-SAFETY.md
 - All files access (MANAGE_EXTERNAL_STORAGE): the declaration in docs/PLAY-DATA-SAFETY.md
 - Government app: No. Financial features: None. Health: No. News: No
