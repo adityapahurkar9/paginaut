@@ -67,6 +67,22 @@ pub fn verify_file(path: &Path, sig: &str) -> Result<(), String> {
     }
 }
 
+/// The version a signature vouches for: `tauri signer` puts the signed file's name in the signature's trusted
+/// comment (`timestamp:…\tfile:Paginaut_0.9.13_x64-setup.exe`), which the release key signs too, so once the file
+/// checks out (`verify_file`) the name can be believed. latest.json itself isn't signed: without this, an old signed
+/// installer could be offered as a newer version.
+fn signed_version(sig: &str) -> Option<String> {
+    let (_, signature) = key_and_signature(sig).ok()?;
+    version_in_comment(signature.trusted_comment())
+}
+
+/// The version in a trusted comment's `file:Paginaut_<version>_…` (None for any other name).
+fn version_in_comment(comment: &str) -> Option<String> {
+    let file = comment.split('\t').find_map(|f| f.strip_prefix("file:"))?;
+    let v = file.strip_prefix("Paginaut_")?.split('_').next()?;
+    (!v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')).then(|| v.to_string())
+}
+
 /// A small file of the newest release (None when nothing has been published yet).
 pub fn latest_text(file: &str, cancel: &AtomicBool) -> Result<Option<String>, String> {
     match crate::net::text(HOST, &latest_path(file), cancel) {
@@ -210,6 +226,13 @@ pub fn download(dir: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u
     let get = crate::net::Get { host, path, cancel, progress, expect: None, max: 400 << 20, from: 0, min_rate: 0 };
     let res = crate::net::to_file(get, &part, None).and_then(|_| {
         verify_file(&part, &p.signature)?;
+        // The signed file name must be the version latest.json offered (checked after the signature, so it's ours).
+        let offered = version.trim_start_matches('v');
+        match signed_version(&p.signature) {
+            Some(signed) if signed.trim_start_matches('v') == offered => {}
+            Some(signed) => return Err(format!("The download is Paginaut {signed}, not {offered} as the update said, so it wasn't installed.")),
+            None => return Err("The download's signature doesn't say which version it is, so it wasn't installed.".to_string()),
+        }
         let _ = std::fs::remove_file(&dest);
         std::fs::rename(&part, &dest).map_err(|e| e.to_string())
     });
@@ -346,6 +369,18 @@ mod tests {
     }
 
     #[test]
+    fn version_from_signed_name() {
+        assert_eq!(version_in_comment("timestamp:1795322277\tfile:Paginaut_0.9.13_x64-setup.exe").as_deref(), Some("0.9.13"));
+        assert_eq!(version_in_comment("timestamp:1\tfile:Paginaut_0.9.14_amd64.AppImage").as_deref(), Some("0.9.14"));
+        assert_eq!(version_in_comment("timestamp:1\tfile:Paginaut_0.9.14_amd64.deb").as_deref(), Some("0.9.14"));
+        assert_eq!(version_in_comment("timestamp:1\tfile:signed.txt"), None);
+        assert_eq!(version_in_comment("timestamp:1"), None);
+        assert_eq!(version_in_comment("timestamp:1\tfile:Paginaut__x.exe"), None);
+        // The test fixture's signature names no version.
+        assert_eq!(signed_version(include_str!("../tests/fixtures/signed.txt.sig")), None);
+    }
+
+    #[test]
     fn rejects_bad_signatures() {
         assert!(verify(b"data", "bm90IGEgc2lnbmF0dXJl").is_err());
     }
@@ -357,11 +392,14 @@ mod tests {
     fn staged_release() {
         let dir = std::path::PathBuf::from(std::env::var("PAGINAUT_RELEASE_DIR").expect("PAGINAUT_RELEASE_DIR"));
         let latest: Latest = serde_json::from_str(&std::fs::read_to_string(dir.join("latest.json")).unwrap()).unwrap();
-        let p = &latest.platforms["windows-x86_64"];
-        assert!(release_url(&p.url).is_some(), "{}", p.url);
-        let file = p.url.rsplit('/').next().unwrap();
-        verify(&std::fs::read(dir.join(file)).unwrap(), &p.signature).unwrap();
-        verify_file(&dir.join(file), &p.signature).unwrap();
+        // Every package: Windows' installer and Linux's .deb and AppImage, each signed for this version.
+        for key in ["windows-x86_64", "linux-x86_64-deb", "linux-x86_64-appimage"] {
+            let p = latest.platforms.get(key).unwrap_or_else(|| panic!("latest.json has no {key}"));
+            let file = p.url.rsplit('/').next().unwrap();
+            assert!(p.url.contains(&format!("/releases/download/v{}/", latest.version)), "{}", p.url);
+            verify_file(&dir.join(file), &p.signature).unwrap();
+            assert_eq!(signed_version(&p.signature).as_deref(), Some(latest.version.trim_start_matches('v')), "{key}");
+        }
         let json = std::fs::read(dir.join("addons.json")).unwrap();
         verify(&json, &std::fs::read_to_string(dir.join("addons.json.sig")).unwrap()).unwrap();
     }

@@ -920,8 +920,20 @@ themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
 - [ ] More detail in the log when turned on in Settings
 - [ ] On Linux, tried in the running app (WebKitGTK): the pane, the crash offer, the issue form filled in
 
-## Next release: Tauri 2.12.7 and rustls 0.23.46
-Not versioned or built for release yet. 2026-11-22, before the repo goes public: trivy flagged rustls 0.23.45
+## 0.9.14 (Windows, Linux): updates for Linux, update versions checked, Tauri 2.12.7 and rustls 0.23.46
+Version set 2026-11-22; not built for release yet.
+- [x] Linux is offered updates: tools/release.ps1 signs the .deb and the AppImage with the update key and lists them in
+      latest.json (linux-x86_64-deb, linux-x86_64-appimage), which update.rs has looked for since 0.8.10 but no
+      release ever listed, so Linux was never offered one. Publishing stops if they're missing. Linux users on
+      0.9.12 and 0.9.13 (the builds that read this repository) are offered 0.9.14; older ones read an unused repo
+- [x] An update's version is checked (BUGS.md, security, low): the signed file name in the installer's signature
+      (`file:Paginaut_0.9.14_x64-setup.exe`, signed by the release key with the file) must be the version latest.json
+      offers, or nothing is installed (update.rs signed_version). An old signed installer can't be passed off as a
+      newer one; the release process is unchanged. Unit tests; staged_release (--ignored) checks all three packages
+      of a staged release. Tried on the 0.9.13 files with the Linux ones signed by the new release.ps1 step
+- [ ] Tried in the running app: a Linux 0.9.13 offered 0.9.14 once it's published (the .deb and the AppImage)
+
+Dependencies, 2026-11-22, before the repo goes public: trivy flagged rustls 0.23.45
 (four advisories, low/medium; used only by ureq for update checks and timestamps), so it moved to 0.23.46.
 Tauri moved within 2.x: crates 2.12.1 → 2.12.7 (tauri-build/codegen/macros 2.7.6, runtime-wry 2.12.5), plugins
 opener 2.7.3, dialog 2.8.4 (rfd 0.16 → 0.17), fs 2.7.1, single-instance 2.5.5; npm CLI 2.12.6, API 2.12.5.

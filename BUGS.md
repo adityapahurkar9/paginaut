@@ -94,9 +94,11 @@ PaginautPlugin.kt.
       clearSearch doesn't stop runSearch's timer; the timer is also one for all tabs, so typing in another tab's Find
       drops the first tab's search. (src/search.ts)
       Fixed: clearSearch stops the waiting search; each tab has its own timer
-- [ ] Security, low: an update's version isn't signed. latest.json is read as it comes and only the installer is
+- [x] Security, low: an update's version isn't signed. latest.json is read as it comes and only the installer is
       checked against the key, so an old signed installer can be offered as a newer version (and apt is run with
       --allow-downgrades). Needs someone who can change the release's files but not the key. (src-tauri/src/update.rs)
+      Fixed for 0.9.14: the version in the signed file name (the signature's trusted comment) must be the one
+      latest.json offers (update.rs signed_version).
 - [x] Clicking a voice's sample twice while it loads plays it twice over itself; the first can't be stopped.
       (src/speech.ts, playSample; see also the open sample bug below)
       Fixed: each sample asked for is counted and only the latest plays; a second click on a loading sample stops it

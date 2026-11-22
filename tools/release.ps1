@@ -70,6 +70,25 @@ if (-not $AddonsOnly) {
       }
     }
   }
+  # Linux's .deb and AppImage (tools/linux.sh release puts them here), signed with the same key, so the Linux app's
+  # update check finds them (update.rs Package::platforms; before 0.9.14 they were never listed, and Linux was never
+  # offered an update). Not there yet on the first run: the publish run (-SkipTests -NoBuild -Publish) writes
+  # latest.json again with them, and publishing stops without them.
+  $linux = @(
+    @{ key = "linux-x86_64-deb"; filter = "Paginaut_${version}_*.deb" },
+    @{ key = "linux-x86_64-appimage"; filter = "Paginaut_${version}_*.AppImage" }
+  )
+  foreach ($kind in $linux) {
+    $f = Get-ChildItem $stage -Filter $kind.filter | Select-Object -First 1
+    if (-not $f) { continue }
+    $sig = "$($f.FullName).sig"
+    # A signature older than its file is of an earlier build: signed again.
+    if (-not (Test-Path $sig) -or (Get-Item $sig).LastWriteTime -lt $f.LastWriteTime) { Sign $f.FullName }
+    $latest.platforms[$kind.key] = [ordered]@{
+      signature = (Get-Content $sig -Raw).Trim()
+      url = "https://github.com/$repo/releases/download/v$version/$($f.Name)"
+    }
+  }
   [IO.File]::WriteAllText((Join-Path $stage "latest.json"), ($latest | ConvertTo-Json -Depth 5))
 }
 
@@ -95,6 +114,11 @@ if ($AddonsOnly) {
   # Every Windows release ships the Linux .deb and AppImage too (tools/linux.sh release puts them here).
   if (-not (Get-ChildItem $stage -Filter "*.deb") -or -not (Get-ChildItem $stage -Filter "*.AppImage")) {
     throw "No Linux .deb/AppImage in $stage yet: run tools/linux.sh release in Ubuntu 22.04, then publish with -SkipTests -NoBuild -Publish."
+  }
+  # ...and lists them in latest.json, or Linux users are never offered the update.
+  $listed = (Get-Content (Join-Path $stage "latest.json") -Raw | ConvertFrom-Json).platforms
+  if (-not $listed."linux-x86_64-deb" -or -not $listed."linux-x86_64-appimage") {
+    throw "latest.json doesn't list the Linux files: run again with -SkipTests -NoBuild -Publish (it rewrites latest.json)."
   }
   $files = Get-ChildItem $stage -Exclude "notes.txt" | ForEach-Object { $_.FullName }
   # Through cmd: Windows PowerShell stops on gh's "release not found" on stderr otherwise.
