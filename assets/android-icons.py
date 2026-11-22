@@ -5,7 +5,7 @@ Writes into src-tauri/gen/android/app/src/main/res:
   mipmap-<dpi>/ic_launcher_foreground.png               adaptive layer: the mark inside the 66dp safe zone
   mipmap-<dpi>/ic_launcher_monochrome.png               themed icons (Android 13+): the navy parts, the rest cut out
   mipmap-anydpi-v26/ic_launcher(.xml, _round.xml)       adaptive icon: white background + layers
-Usage: E:/Anaconda/python.exe assets/android-icons.py
+Usage: python assets/android-icons.py
 """
 from pathlib import Path
 from PIL import Image, ImageDraw

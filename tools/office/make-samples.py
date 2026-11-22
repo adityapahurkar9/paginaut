@@ -1,6 +1,6 @@
 # Makes the Office quality-test files with Microsoft Office itself (through COM), plus Office's own PDF of each
 # (the reference). Output: testfiles/office/*.docx|xlsx|pptx and testfiles/office/ref/*.pdf.
-# Run: E:/Anaconda/python.exe tools/office/make-samples.py   (needs Word, Excel and PowerPoint)
+# Run: python tools/office/make-samples.py   (needs Word, Excel and PowerPoint)
 import os
 import sys
 import win32com.client as com

@@ -6,7 +6,7 @@ param([Parameter(Mandatory)][string]$VeraPdf, [Parameter(Mandatory)][string]$Fol
 
 $ErrorActionPreference = "Stop"
 if ($Java) { $env:JAVACMD = $Java }
-elseif (-not $env:JAVACMD -and (Test-Path "E:\Android Studio\jbr\bin\java.exe")) { $env:JAVACMD = "E:\Android Studio\jbr\bin\java.exe" }
+elseif (-not $env:JAVACMD -and $env:JAVA_HOME -and (Test-Path "$env:JAVA_HOME\bin\java.exe")) { $env:JAVACMD = "$env:JAVA_HOME\bin\java.exe" }
 $failed = 0
 $files = @(Get-ChildItem (Join-Path $Folder "*(PDF-A*).pdf"))
 # Nothing checked isn't a pass (a wrong folder, or files not made yet).

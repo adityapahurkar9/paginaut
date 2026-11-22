@@ -33,7 +33,8 @@ for a in "$@"; do
 done
 
 # Windows paths: Tauri's NDK check fails on some targets with /c/... ones.
-export JAVA_HOME="${JAVA_HOME:-E:\Android Studio\jbr}"
+# JAVA_HOME: a JDK 17 or later, such as Android Studio's bundled one (its jbr folder).
+export JAVA_HOME="${JAVA_HOME:?set JAVA_HOME to a JDK, such as the jbr folder in Android Studio}"
 export ANDROID_HOME="${ANDROID_HOME:-$LOCALAPPDATA\Android\Sdk}"
 export NDK_HOME="${NDK_HOME:-$ANDROID_HOME\ndk\29.0.14206865}"
 sdk=$(cygpath -u "$ANDROID_HOME")

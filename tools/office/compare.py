@@ -10,7 +10,7 @@
 #
 # Engine PDFs live in testfiles/office/<engine>/<name>.pdf (mupdf: office_convert convert; lo, word: the app's
 # converters). Pages are rendered by the office_convert example (MuPDF), so all engines are seen the same way.
-#   E:/Anaconda/python.exe tools/office/compare.py [--check | --save-baseline] [engine...]
+#   python tools/office/compare.py [--check | --save-baseline] [engine...]
 import difflib
 import html
 import json

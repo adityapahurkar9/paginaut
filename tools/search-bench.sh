@@ -3,7 +3,7 @@
 #   bash tools/search-bench.sh "<file>" [policies...]   (policies: keep now idle)
 FILE="$1"; shift
 POLICIES="${*:-keep now idle}"
-EXE="E:\\Projects\\PDF-Reader-Editor\\src-tauri\\target\\release\\paginaut.exe"
+EXE="$(cygpath -w "$(dirname "$0")/../src-tauri/target/release/paginaut.exe")"
 TERMS=(Company Offer SEBI risk financial Company)
 
 for P in $POLICIES; do

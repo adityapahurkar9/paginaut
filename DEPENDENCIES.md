@@ -30,7 +30,7 @@ compatible with it (no RarLab unRAR code, for one: its licence forbids rebuildin
 | AndroidX (`webkit` 1.17.1, `appcompat` 1.8.0, `activity-ktx` 1.13.0, `material` 1.14.0, `lifecycle-process` 2.11.0) | as listed | `src-tauri/gen/android/app/build.gradle.kts` | Edit the versions; build and test on the oldest emulator (Android 7, API 24). |
 | Jackson (used by Tauri's Android side) | pinned to 2.13.5 | same file, `resolutionStrategy` | Pinned because 2.15 crashes on Android 7. Only raise it with a test on API 24. |
 | Android SDK / NDK | compile and target SDK 37, min SDK 24 / NDK 29.0.14206865 | Android Studio's SDK Manager | Google Play requires a recent target SDK every year (usually by August). New NDK: rebuild MuPDF for Android. |
-| JDK | Android Studio's bundled JBR | `E:/Android Studio/jbr` | Comes with Android Studio updates. |
+| JDK | Android Studio's bundled JBR | `$JAVA_HOME` (Android Studio's `jbr` folder) | Comes with Android Studio updates. |
 
 ## Data the apps ship or download
 
@@ -38,7 +38,7 @@ compatible with it (no RarLab unRAR code, for one: its licence forbids rebuildin
 |---|---|---|---|
 | Tesseract OCR models (English, Hindi, Marathi ship; others download on request) | tessdata_fast 4.1.0 | `native/tessdata` (fetched by `native/get-tessdata.ps1`) | Change the tag in the script; downloads are checked against hashes in the app. |
 | Piper (natural voices for Read aloud, Windows) | piper 2023.11.14-2; voices from rhasspy/piper-voices at one commit | Downloaded on request (`src-tauri/src/piper.rs`, `piper_voices.rs`) | Update the release and the voice commit together with their hashes. |
-| App icons | drawn in `assets/icon.svg` | `src-tauri/icons`, Android mipmaps | `node assets/render-icon.mjs`, `npx tauri icon`, `E:/Anaconda/python.exe assets/android-icons.py`. |
+| App icons | drawn in `assets/icon.svg` | `src-tauri/icons`, Android mipmaps | `node assets/render-icon.mjs`, `npx tauri icon`, `python assets/android-icons.py`. |
 
 ## Tools for testing (not shipped)
 

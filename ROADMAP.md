@@ -717,7 +717,7 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       build they came from, so every release needs its own zip
 - [ ] README.md: the Play app signing certificate's SHA-256 (App integrity › App signing) in place of
       PLAY_APP_SIGNING_FINGERPRINT
-- [ ] LICENSE file (the AGPL 3.0 text) at the repo root before the repo goes public; package.json already says
+- [x] LICENSE file (the AGPL 3.0 text) at the repo root before the repo goes public; package.json already says
       AGPL-3.0-or-later
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
 - [x] 0.3.1, 0.4.0 (2026-10-13): Paginaut's Standard theme, then the desktop's 16 colour themes (src/themedata.ts shared by
