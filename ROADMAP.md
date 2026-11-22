@@ -924,8 +924,9 @@ themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
 
 ## 0.9.13 (Windows, Linux) and Android 0.6.8: error log and Report a problem
 Versions set 2026-11-22. Built and published 2026-11-22 as the latest GitHub release (v0.9.13: Windows installer +
-.sig, latest.json, addons.json, the Linux .deb and AppImage; tools/test-all.ps1 passed first). Android 0.6.8's Play
-bundle is built (release/android/Paginaut_0.6.8.aab, with native symbols), not uploaded or published. What's in it: "Error logs" above (the
+.sig, latest.json, addons.json, the Linux .deb and AppImage; tools/test-all.ps1 passed first). Android 0.6.8 published
+the same day as android-v0.6.8 (the Play bundle, with native symbols, and the four per-ABI APKs; not latest);
+not uploaded to Play yet. What's in it: "Error logs" above (the
 ticked items). Tested: the TypeScript check, both pages built, the Rust unit tests on Windows and Linux (WSL).
 In the running Windows app (dev build): Report a problem opens from Settings › About with the right details; a
 thrown error, an unhandled rejection, a repeated line, a failed open with a full path and a MuPDF error on a
