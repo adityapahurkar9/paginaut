@@ -920,6 +920,21 @@ themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
 - [ ] More detail in the log when turned on in Settings
 - [ ] On Linux, tried in the running app (WebKitGTK): the pane, the crash offer, the issue form filled in
 
+## Next release: Tauri 2.12.7 and rustls 0.23.46
+Not versioned or built for release yet. 2026-11-22, before the repo goes public: trivy flagged rustls 0.23.45
+(four advisories, low/medium; used only by ureq for update checks and timestamps), so it moved to 0.23.46.
+Tauri moved within 2.x: crates 2.12.1 → 2.12.7 (tauri-build/codegen/macros 2.7.6, runtime-wry 2.12.5), plugins
+opener 2.7.3, dialog 2.8.4 (rfd 0.16 → 0.17), fs 2.7.1, single-instance 2.5.5; npm CLI 2.12.6, API 2.12.5.
+glib 0.18.5 (one medium advisory, Linux only) stays: Tauri 2 pins gtk 0.18.
+- [x] Windows: tools/test-all.ps1 passed (TypeScript, Rust unit tests, all engine suites)
+- [x] Android: debug x86_64 APK builds (tools/android.sh x86_64 --no-install); not run on an emulator
+- [x] Linux: tools/linux.sh test passed (59 tests, the SoftHSM token one included). WSL first had no network:
+      mirrored networking left in ~/.wslconfig from a lancache setup failed (0x8007054f); back on NAT now
+- Once, tauri was found back at 2.12.1 in Cargo.lock after the update (plugins kept theirs); not reproduced
+  through cargo check, test-all, the Android build or the Linux tests. Check Cargo.lock before a release
+- [ ] File dialogs (open, save, pick folder) tried by hand on Windows and Linux: rfd 0.17 draws them, and the
+      tests answer dialogs through window.paginautTest instead of opening them
+
 ## 0.9.13 (Windows, Linux) and Android 0.6.8: error log and Report a problem
 Versions set 2026-11-22. Built and published 2026-11-22 as the latest GitHub release (v0.9.13: Windows installer +
 .sig, latest.json, addons.json, the Linux .deb and AppImage; tools/test-all.ps1 passed first). Android 0.6.8 published
