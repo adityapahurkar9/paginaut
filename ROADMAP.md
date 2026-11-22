@@ -937,7 +937,9 @@ Versions set 2026-11-23. Built, not published. Details in BUGS.md ("Found while 
       businessplans.epub (not on this PC; a stand-in ran). A first run lost its DevTools connection midway and
       passed on a clean restart. The AVD's app data had been cleared, so Books had to be picked again; the script now
       stops at once with a message when it can't open the test files (it used to wait forever)
-- [ ] Published (GitHub v0.9.15 and android-v0.6.9), Play upload
+- [x] Published 2026-11-23: v0.9.15 as the latest GitHub release (releases/latest/download/latest.json checked:
+      0.9.15, all three platforms), android-v0.6.9 (the Play bundle and the four APKs; not latest)
+- [ ] Play upload of 0.6.9
 
 ## 0.9.14 (Windows, Linux): updates for Linux, update versions checked, Tauri 2.12.7 and rustls 0.23.46
 Version set 2026-11-22. Built and published 2026-11-22 as the latest GitHub release (v0.9.14): the Windows installer,
