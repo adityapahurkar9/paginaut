@@ -921,7 +921,13 @@ themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
 - [ ] On Linux, tried in the running app (WebKitGTK): the pane, the crash offer, the issue form filled in
 
 ## 0.9.14 (Windows, Linux): updates for Linux, update versions checked, Tauri 2.12.7 and rustls 0.23.46
-Version set 2026-11-22; not built for release yet.
+Version set 2026-11-22. Built and published 2026-11-22 as the latest GitHub release (v0.9.14): the Windows installer,
+the Linux .deb and AppImage, each with its .sig, latest.json listing all three (checked as published: every entry's
+signed file name is 0.9.14), addons.json. tools/test-all.ps1 passed first; staged_release passed on the staged files.
+Building from the Claude desktop app: the new Tauri CLI wanted a newer NSIS and failed deleting the old one
+("reparse point", os error 4395), because Windows gives a packaged app its own copy of %LOCALAPPDATA%\tauri. The
+app's copy was moved aside (Packages\Claude_*\LocalCache\Local\tauri\NSIS.old-2026-09-28), and the real NSIS 3.13
+in %LOCALAPPDATA%\tauri was used. A build from an ordinary terminal never sees this.
 - [x] Linux is offered updates: tools/release.ps1 signs the .deb and the AppImage with the update key and lists them in
       latest.json (linux-x86_64-deb, linux-x86_64-appimage), which update.rs has looked for since 0.8.10 but no
       release ever listed, so Linux was never offered one. Publishing stops if they're missing. Linux users on
