@@ -1,7 +1,7 @@
 // Play store graphics from assets/icon.svg, with Edge headless (as assets/render-icon.mjs):
 // assets/play/icon-512.png (on white, as the launcher's adaptive icon; Play draws it as a full square) and
 // assets/play/feature-graphic.png (1024 x 500, opaque). Edge's viewport is smaller than its window, so each is drawn
-// in a bigger window and cut to size with Pillow (E:/Anaconda/python.exe has it).
+// in a bigger window and cut to size with Pillow (python with PIL; PYTHON names another one).
 //   node assets/play/render.mjs
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -15,7 +15,7 @@ const edge = ["ProgramFiles(x86)", "ProgramFiles"]
 if (!edge) throw new Error("Microsoft Edge not found");
 const icon = pathToFileURL(path.resolve("assets/icon.svg")).href;
 
-const python = process.env.PYTHON || "E:/Anaconda/python.exe";
+const python = process.env.PYTHON || "python";
 
 function shot(name, w, h, html, bg) {
   const page = path.join(os.tmpdir(), `paginaut-${name}.html`);
