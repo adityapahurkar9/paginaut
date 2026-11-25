@@ -65,6 +65,8 @@ jobs:
         shell: pwsh
         run: |
           git init native/mupdf
+          # As the release tarball has it (LF): build-mupdf.ps1's patches match the text with LF line endings.
+          git -C native/mupdf config core.autocrlf false
           git -C native/mupdf remote add origin https://github.com/ArtifexSoftware/mupdf.git
           git -C native/mupdf fetch --depth 1 origin $env:MUPDF_COMMIT
           git -C native/mupdf checkout --quiet FETCH_HEAD

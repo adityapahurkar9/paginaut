@@ -18,7 +18,8 @@ if (-not $msbuild) { throw "MSBuild not found. Install Visual Studio Build Tools
 # MSVC 17.10+ no longer treats NAN as a compile-time constant in C.
 $geometry = Join-Path $root "source\fitz\geometry.c"
 $src = Get-Content $geometry -Raw
-if ($src -match "\{NAN, NAN\}") { Set-Content $geometry ($src -replace "NAN", "(0.0/0.0)") -NoNewline }
+# Only the constant NAN, in capitals: -replace ignores case, and would turn isnan( into is(0.0/0.0)( as well.
+if ($src -cmatch "\{NAN, NAN\}") { Set-Content $geometry ($src -creplace "NAN", "(0.0/0.0)") -NoNewline }
 
 # Saving a gray or RGB picture with an ICC profile as JPEG converted it to RGB, while the
 # image rewriter (Reduce file size) kept the gray colour space: scans came out garbled.
