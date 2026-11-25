@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paginaut: free, open-source PDF reader and editor for Windows and Linux</title>
+<meta name="description" content="Paginaut is a free, open-source PDF reader and editor for Windows and Linux, with an offline reader for Android. Annotate, fill and sign, redact, organise pages, OCR and convert. Opens PDF, EPUB, comics, XPS and Markdown. No ads, no account.">
+<link rel="canonical" href="https://adityapahurkar9.github.io/paginaut/">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#0f2a5c">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Paginaut">
+<meta property="og:title" content="Paginaut: free, open-source PDF reader and editor">
+<meta property="og:description" content="Read, annotate, sign, redact and convert PDFs on Windows and Linux; an offline reader on Android. No ads, no account.">
+<meta property="og:url" content="https://adityapahurkar9.github.io/paginaut/">
+<meta property="og:image" content="https://adityapahurkar9.github.io/paginaut/og.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Paginaut",
+  "description": "Free, open-source PDF reader and editor for Windows and Linux, with an offline reader for Android. Opens PDF, EPUB, comics, XPS and Markdown.",
+  "applicationCategory": "BusinessApplication",
+  "applicationSubCategory": "PDF reader and editor",
+  "operatingSystem": "Windows 10, Windows 11, Linux, Android",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+  "url": "https://adityapahurkar9.github.io/paginaut/",
+  "downloadUrl": "https://github.com/adityapahurkar9/paginaut/releases/latest",
+  "codeRepository": "https://github.com/adityapahurkar9/paginaut",
+  "image": "https://adityapahurkar9.github.io/paginaut/og.png"
+}
+</script>
+<style>
+  :root {
+    --bg: #ffffff; --bg2: #f4f6fb; --tx: #14182a; --tx2: #4a5170; --bd: #e0e4ef; --acc: #2a56c6; --acc2: #1d3f8f; --on-acc: #fff;
+    --hero1: #0f2a5c; --hero2: #2a56c6;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0e1220; --bg2: #151a2c; --tx: #e8ebf5; --tx2: #a6adc6; --bd: #262d45; --acc: #6f94ff; --acc2: #a9bfff; --on-acc: #0e1220; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--tx); font: 16px/1.6 "Segoe UI", system-ui, -apple-system, Roboto, Ubuntu, sans-serif; }
+  a { color: var(--acc); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+  header.hero { background: linear-gradient(135deg, var(--hero1) 0%, #1d3f8f 55%, var(--hero2) 100%); color: #fff; }
+  .hero .wrap { display: flex; align-items: center; gap: 48px; padding-top: 72px; padding-bottom: 80px; }
+  .logo { flex: none; width: 168px; height: 168px; border-radius: 40px; background: #fff; display: grid; place-items: center; box-shadow: 0 14px 36px rgba(0, 0, 0, .35); }
+  .logo img { width: 136px; height: 136px; }
+  .hero h1 { margin: 0; font-size: clamp(40px, 6vw, 60px); line-height: 1.05; letter-spacing: -1px; }
+  .hero p.lead { margin: 16px 0 0; font-size: clamp(18px, 2.2vw, 22px); line-height: 1.45; opacity: .95; max-width: 640px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 10px; font-weight: 600; text-decoration: none; }
+  .btn.pri { background: #fff; color: #0f2a5c; }
+  .btn.sec { color: #fff; border: 1px solid rgba(255, 255, 255, .5); }
+  .btn:hover { filter: brightness(1.06); }
+  .btn:focus-visible { outline: 3px solid #ffd666; outline-offset: 2px; }
+  .facts { margin: 22px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 15px; opacity: .9; }
+  .facts li::before { content: "✓ "; }
+
+  section { padding: 64px 0; }
+  section.alt { background: var(--bg2); }
+  h2 { font-size: 30px; line-height: 1.2; margin: 0 0 10px; letter-spacing: -.3px; }
+  .sub { color: var(--tx2); margin: 0 0 32px; max-width: 720px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
+  .card { background: var(--bg); border: 1px solid var(--bd); border-radius: 14px; padding: 20px 22px; }
+  section.alt .card { background: var(--bg); }
+  .card h3 { margin: 0 0 6px; font-size: 18px; }
+  .card p { margin: 0; color: var(--tx2); font-size: 15px; }
+
+  .dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+  .dl .card { display: flex; flex-direction: column; gap: 10px; }
+  .dl .card .btn { align-self: flex-start; background: var(--acc); color: var(--on-acc); margin-top: auto; }
+  .dl .card small { color: var(--tx2); }
+
+  .formats { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .formats li { padding: 6px 12px; border: 1px solid var(--bd); border-radius: 999px; font-size: 14px; background: var(--bg); }
+
+  footer { border-top: 1px solid var(--bd); padding: 28px 0 40px; color: var(--tx2); font-size: 14px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: space-between; }
+  footer nav { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+
+  @media (max-width: 720px) {
+    .hero .wrap { flex-direction: column; align-items: flex-start; gap: 28px; padding-top: 48px; padding-bottom: 56px; }
+    .logo { width: 112px; height: 112px; border-radius: 28px; }
+    .logo img { width: 90px; height: 90px; }
+    section { padding: 48px 0; }
+  }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <div class="logo"><img src="icon.svg" alt="Paginaut logo" width="136" height="136"></div>
+    <div>
+      <h1>Paginaut</h1>
+      <p class="lead">A free, open-source PDF reader and editor for Windows and Linux, with an offline reader for Android.</p>
+      <div class="cta">
+        <a class="btn pri" href="https://github.com/adityapahurkar9/paginaut/releases/latest">Download</a>
+        <a class="btn sec" href="https://github.com/adityapahurkar9/paginaut">Source code on GitHub</a>
+      </div>
+      <ul class="facts">
+        <li>Free and open source (AGPL)</li>
+        <li>No ads, no account, no tracking</li>
+        <li>Works offline</li>
+      </ul>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="wrap">
+      <h2>Everything you do with a PDF, in one app</h2>
+      <p class="sub">Paginaut opens big documents fast and keeps your files on your computer. The tools sit in a pane beside the page, so the page stays in view while you work.</p>
+      <div class="grid">
+        <div class="card"><h3>Read</h3><p>Smooth scrolling and zoom, two-page and book views, Read mode that reflows text to fit the window, dark pages, and themes.</p></div>
+        <div class="card"><h3>Annotate</h3><p>Highlight, underline, notes, text boxes, shapes, drawings and stamps, saved into the PDF so other readers see them.</p></div>
+        <div class="card"><h3>Fill and sign</h3><p>Fill in forms, add your handwritten or typed signature, or sign digitally with a certificate or USB token, with a trusted timestamp.</p></div>
+        <div class="card"><h3>Redact and clean up</h3><p>Black out text and areas for good, find phone numbers and ID numbers to mark, and remove hidden data, scripts and metadata.</p></div>
+        <div class="card"><h3>Organise pages</h3><p>Reorder, rotate, delete, insert, merge and split; crop and resize pages; add page numbers, headers and watermarks.</p></div>
+        <div class="card"><h3>Text recognition</h3><p>Make scanned documents searchable and selectable, in English, Hindi and Marathi out of the box and many more languages on request.</p></div>
+        <div class="card"><h3>Convert</h3><p>Save as Word, Excel (tables), Markdown, pictures or PDF/A for archiving; turn Word, Excel and PowerPoint files into PDF.</p></div>
+        <div class="card"><h3>Compare and read aloud</h3><p>See what changed between two versions of a document, and have any document read to you with natural voices that run on your PC.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap">
+      <h2>Opens more than PDF</h2>
+      <p class="sub">One reader for documents, books and comics.</p>
+      <ul class="formats">
+        <li>PDF</li><li>EPUB</li><li>FB2 and MOBI e-books</li><li>CBZ and CBR comics</li><li>XPS and OXPS</li><li>Markdown</li><li>Word, Excel and PowerPoint (converted)</li><li>Pictures</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="download">
+    <div class="wrap">
+      <h2>Download</h2>
+      <p class="sub">Paginaut is published only on its GitHub releases page and on Google Play. A copy from anywhere else may have been changed.</p>
+      <div class="dl">
+        <div class="card">
+          <h3>Windows</h3>
+          <p>Windows 10 and 11, 64-bit. Installs for your user account, no administrator needed, and keeps itself up to date.</p>
+          <a class="btn" href="https://github.com/adityapahurkar9/paginaut/releases/latest">Windows installer</a>
+        </div>
+        <div class="card">
+          <h3>Linux</h3>
+          <p>A .deb package for Debian and Ubuntu, or an AppImage for other distributions. 64-bit.</p>
+          <a class="btn" href="https://github.com/adityapahurkar9/paginaut/releases/latest">.deb and AppImage</a>
+        </div>
+        <div class="card">
+          <h3>Android</h3>
+          <p>A reader for PDF, e-books and comics, with no internet access at all. In testing on Google Play; APKs are on GitHub.</p>
+          <a class="btn" href="https://github.com/adityapahurkar9/paginaut/releases">Android APKs</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap">
+      <h2>Private by design</h2>
+      <p class="sub">Your documents never leave your device. The desktop app goes online only for what you ask of it (downloading an extra language or voice) and, if you leave it on, a daily check for a new version. The Android app has no internet access. Read the <a href="https://github.com/adityapahurkar9/paginaut/blob/main/PRIVACY.md">privacy policy</a>.</p>
+      <p class="sub">Code signing for Windows: free code signing provided by <a href="https://about.signpath.io">SignPath.io</a>, certificate by <a href="https://signpath.org">SignPath Foundation</a>, is being set up. See the <a href="https://github.com/adityapahurkar9/paginaut/blob/main/CODE_SIGNING_POLICY.md">code signing policy</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Paginaut is free software under the GNU AGPL 3.0. The name and logo are not part of that licence.</span>
+    <nav>
+      <a href="https://github.com/adityapahurkar9/paginaut">Source</a>
+      <a href="https://github.com/adityapahurkar9/paginaut/releases">Releases</a>
+      <a href="https://github.com/adityapahurkar9/paginaut/issues">Report a problem</a>
+      <a href="https://github.com/adityapahurkar9/paginaut/blob/main/PRIVACY.md">Privacy</a>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>

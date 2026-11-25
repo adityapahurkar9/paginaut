@@ -2,6 +2,8 @@
 
 Free, open-source PDF reader and editor for Windows and Linux, with an offline reader for Android. Opens PDF, EPUB, comics, XPS and Markdown.
 
+Website: [adityapahurkar9.github.io/paginaut](https://adityapahurkar9.github.io/paginaut/)
+
 ## Official builds
 
 Paginaut is only published in these places:

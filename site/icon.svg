@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Paginaut: a P that is also a page, with an astronaut's helmet looking out of the bowl. -->
+  <defs>
+    <linearGradient id="navy" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a2c63"/>
+      <stop offset="1" stop-color="#0d1a40"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f7bff"/>
+      <stop offset="1" stop-color="#0a4ad8"/>
+    </linearGradient>
+    <clipPath id="above-page">
+      <path d="M0 0H1024V600L0 432Z"/>
+    </clipPath>
+  </defs>
+  <!-- The P: stem and bowl in one piece, its foot cut along the page's fold. -->
+  <path fill="url(#navy)" d="M210 112H578A278 278 0 0 1 623 664L392 912H210Q181 912 181 883V141Q181 112 210 112Z"/>
+  <!-- Helmet, its lower edge hidden behind the page. -->
+  <g clip-path="url(#above-page)">
+    <circle cx="474" cy="390" r="177" fill="#ffffff"/>
+  </g>
+  <circle cx="521" cy="372" r="110" fill="#0a1433"/>
+  <path d="M498 286A88 88 0 0 1 600 344" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="370" cy="412" r="52" fill="#ffffff"/>
+  <circle cx="370" cy="412" r="36" fill="none" stroke="#0d1a40" stroke-width="10"/>
+  <!-- Star. -->
+  <path fill="#ffffff" d="M684 185Q690 225 730 231Q690 237 684 277Q678 237 638 231Q678 225 684 185Z"/>
+  <!-- The page, its corner turning over. -->
+  <path fill="#ffffff" d="M282 497L607 555Q623 558 623 574V648Q566 650 515 664L328 865H282Q252 865 252 835V527Q252 497 282 497Z"/>
+  <path fill="url(#fold)" d="M515 664Q566 650 623 648V664L436 865H328Z"/>
+  <path d="M306 576H480M306 628H466M306 680H440" fill="none" stroke="#8a98c0" stroke-width="24" stroke-linecap="round"/>
+</svg>
