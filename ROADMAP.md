@@ -926,6 +926,22 @@ themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
 - [ ] More detail in the log when turned on in Settings
 - [ ] On Linux, tried in the running app (WebKitGTK): the pane, the crash offer, the issue form filled in
 
+## 0.9.16 (Windows, Linux): reading width, panes that fit the window, sharper pages
+Versions set 2026-11-25. Details in BUGS.md ("Windows (0.9.15; reported 2026-11-25)").
+- [x] Documents open at a new fit, Reading width: the page's width up to 940 px or half the view, whichever is
+      wider (Viewer.ts READ_W). Its own button beside fit width and fit page, Ctrl+3, the zoom menu and the
+      command list; changing fit is animated like zoom steps. Files in Recent open as they were left
+- [x] The panes on the right are one width that follows the window (28%, 320 to 440 px; the Markdown pane was
+      wider than the rest), and slide in and out (PaneSlot.tsx)
+- [x] Sharper pages: placed on whole device pixels, and the sharp bitmap shown at its own pixels (Viewer.ts place,
+      sizeHi); text was softened by a hair of resampling, most visible on small text (Markdown files)
+- [x] Settings › Keyboard shortcuts in one column (two didn't fit the dialog)
+- [x] native/build-mupdf.ps1 replaces NAN case-sensitively: on a fresh MuPDF source it also broke isnan(
+- [x] Windows: tools/test-all.ps1 passed on this code (TypeScript, Rust unit tests, the 10 engine suites)
+- [x] Built 2026-11-25: release/v0.9.16 (Windows installer, Linux .deb and AppImage from Ubuntu 22.04, each with its
+      .sig; latest.json; addons.json)
+- [ ] Published as the latest GitHub release
+
 ## 0.9.15 (Windows, Linux) and Android 0.6.9: fixes found while taking the Play Store screenshots
 Versions set 2026-11-23. Built, not published. Details in BUGS.md ("Found while taking the Play Store screenshots").
 - [x] E-book Contents entries have their page (all platforms): MuPDF gives EPUB outline entries only a link, so
