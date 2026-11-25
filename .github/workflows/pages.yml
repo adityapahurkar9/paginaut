@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: read
+  # deploy-pages looks the uploaded site up among the run's artifacts.
+  actions: read
   pages: write
   id-token: write
 
