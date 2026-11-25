@@ -1,18 +1,14 @@
 # Makes a release: tests, builds the installer, signs it and the add-on list with the update key, and writes
 # latest.json (the file the app's update check reads), all into release/v<version>/.
-#   powershell -File tools/release.ps1 [-Notes "What's new"] [-SkipTests] [-NoBuild] [-FromCI] [-Publish]
+#   powershell -File tools/release.ps1 [-Notes "What's new"] [-SkipTests] [-NoBuild] [-Publish]
 #   powershell -File tools/release.ps1 -AddonsOnly [-Publish]   re-sign release/v<version>/addons.json after editing
 #                                                               it, to change add-ons without a new Paginaut
-# -FromCI takes the installer from the "Windows release" workflow (.github/workflows/release-windows.yml) instead of
-# building it here: built on GitHub from the commit pushed, and code-signed by SignPath. Run the workflow for this
-# version first (gh workflow run release-windows.yml --ref main) and approve its signing requests; this fetches its
-# signed installer, checks the signature, and goes on as usual (update key, add-on list, latest.json).
 # -Publish uploads the files as a GitHub release of the releases repository (update.rs: RELEASES) with gh,
 # Linux files included (it stops if tools/linux.sh release hasn't put them in release/v<version>/ yet; run
 # again with -SkipTests -NoBuild -Publish once it has). Nothing is published without it. Every run keeps
 # only the newest 5 releases in release/ (tools/prune-releases.ps1); older ones live on GitHub. The update key is %USERPROFILE%\.paginaut\updater.key unless
 # TAURI_SIGNING_PRIVATE_KEY_PATH says otherwise (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD if it has one).
-param([string]$Notes = "", [switch]$SkipTests, [switch]$NoBuild, [switch]$FromCI, [switch]$Publish, [switch]$AddonsOnly)
+param([string]$Notes = "", [switch]$SkipTests, [switch]$NoBuild, [switch]$Publish, [switch]$AddonsOnly)
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
@@ -39,38 +35,14 @@ if (-not $AddonsOnly) {
   }
   Push-Location $root
   try {
-    $builtFromCI = $null
-    if ($FromCI) {
-      # The newest successful run that kept this version's signed installer.
-      $name = "windows-signed-v$version"
-      $runs = gh run list --repo $repo --workflow release-windows.yml --status success --limit 20 --json databaseId,headSha | ConvertFrom-Json
-      if ($LASTEXITCODE -ne 0) { throw "Couldn't list the workflow's runs (is gh signed in?)." }
-      $run = $null
-      foreach ($r in $runs) {
-        $arts = gh api "repos/$repo/actions/runs/$($r.databaseId)/artifacts" --jq ".artifacts[] | select(.name == `"$name`" and (.expired | not)) | .name"
-        if ($arts) { $run = $r; break }
-      }
-      if (-not $run) { throw "No successful Windows release run has ${name}: run the workflow (gh workflow run release-windows.yml --ref main) and approve its signing in SignPath." }
-      $head = (git rev-parse HEAD).Trim()
-      if ($run.headSha -ne $head) { Write-Warning "The installer was built from $($run.headSha); this checkout is at $head." }
-      $ci = Join-Path ([IO.Path]::GetTempPath()) "paginaut-ci-$version"
-      if (Test-Path $ci) { Remove-Item $ci -Recurse -Force }
-      gh run download $run.databaseId --repo $repo --name $name --dir $ci
-      if ($LASTEXITCODE -ne 0) { throw "Couldn't download $name from run $($run.databaseId)." }
-      $builtFromCI = Join-Path $ci $setupName
-      $code = Get-AuthenticodeSignature $builtFromCI
-      if ($code.Status -ne "Valid") { throw "$setupName from the workflow isn't validly code-signed: $($code.StatusMessage)" }
-      Write-Host "Code-signed by $($code.SignerCertificate.Subject)"
-      # Staged as if just built (an update-key signature of an earlier copy is dropped; it's signed again below).
-      Remove-Item (Join-Path $stage "$setupName.sig") -ErrorAction SilentlyContinue
-    } elseif (-not $NoBuild) {
+    if (-not $NoBuild) {
       cmd /c "npx tauri build 2>&1" | Select-String "error|Finished|setup.exe|sign.ps1"
       if ($LASTEXITCODE -ne 0) { throw "The build failed." }
     }
-    $built = if ($builtFromCI) { $builtFromCI } else { Join-Path $root "src-tauri\target\release\bundle\nsis\$setupName" }
+    $built = Join-Path $root "src-tauri\target\release\bundle\nsis\$setupName"
     $staged = Join-Path $stage $setupName
     # -NoBuild after the build cache was cleared: use the installer already staged (and signed) here.
-    $reuse = $NoBuild -and -not $FromCI -and -not (Test-Path $built) -and (Test-Path $staged) -and (Test-Path "$staged.sig")
+    $reuse = $NoBuild -and -not (Test-Path $built) -and (Test-Path $staged) -and (Test-Path "$staged.sig")
     if (-not $reuse) {
       if (-not (Test-Path $built)) { throw "$setupName wasn't built." }
       Copy-Item $built $stage -Force

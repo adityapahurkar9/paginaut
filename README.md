@@ -27,11 +27,6 @@ can't be updated from a GitHub APK, or the other way round: uninstall one before
 The desktop app installs only updates signed with Paginaut's update key, so its built-in updater can't be handed a
 changed copy.
 
-Code signing for Windows: free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org), is being set up; releases before it are unsigned, and Windows may warn
-before installing them. Signed releases name SignPath Foundation as the publisher. See the
-[code signing policy](CODE_SIGNING_POLICY.md) for what is signed, how, and by whom.
-
 A copy that asks Android for more permissions than Paginaut uses (the internet, for one: official builds have no
 internet access) refuses to start and says so.
 
