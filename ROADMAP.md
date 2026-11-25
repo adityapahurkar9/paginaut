@@ -940,7 +940,9 @@ Versions set 2026-11-25. Details in BUGS.md ("Windows (0.9.15; reported 2026-11-
 - [x] Windows: tools/test-all.ps1 passed on this code (TypeScript, Rust unit tests, the 10 engine suites)
 - [x] Built 2026-11-25: release/v0.9.16 (Windows installer, Linux .deb and AppImage from Ubuntu 22.04, each with its
       .sig; latest.json; addons.json)
-- [ ] Published as the latest GitHub release
+- [x] Published 2026-11-25: v0.9.16 as the latest GitHub release (releases/latest/download/latest.json checked:
+      0.9.16, all three platforms). GitHub answered several calls with 500/502 that day: release.ps1 -Publish
+      stopped twice, the files were uploaded one by one with retries and the draft published through the API
 
 ## 0.9.15 (Windows, Linux) and Android 0.6.9: fixes found while taking the Play Store screenshots
 Versions set 2026-11-23. Built, not published. Details in BUGS.md ("Found while taking the Play Store screenshots").
