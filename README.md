@@ -1,6 +1,6 @@
 # Paginaut
 
-A fast PDF reader, annotator and toolkit for Windows and Linux, and a quiet reader for Android.
+Free, open-source PDF reader and editor for Windows and Linux, with an offline reader for Android. Opens PDF, EPUB, comics, XPS and Markdown.
 
 ## Official builds
 
