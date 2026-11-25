@@ -43,8 +43,10 @@ export const zoomIn = () => (reflowing() ? zoomText(1) : viewer()?.zoomBy(1.2));
 export const zoomOut = () => (reflowing() ? zoomText(-1) : viewer()?.zoomBy(1 / 1.2));
 export const zoomTo = (z: number) => (reflowing() ? zoomText(0) : viewer()?.setZoom(z));
 export const textSize = (px: number) => updateReflow({ size: px });
-export const fitWidth = () => viewer()?.setFit("width");
-export const fitPage = () => viewer()?.setFit("page");
+export const fitWidth = () => viewer()?.setFit("width", true);
+export const fitPage = () => viewer()?.setFit("page", true);
+/** The width, up to a comfortable reading width: how documents open. */
+export const fitRead = () => viewer()?.setFit("read", true);
 export const goToPage = (p: number) => {
   const t = activeTab.value;
   if (t?.reflowView) t.reflowView.goToPage(p);

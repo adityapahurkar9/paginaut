@@ -13,8 +13,8 @@ import { Maker } from "./SignMaker";
 import { DocSigs } from "./SigPanel";
 import { closePane, pane } from "../panes";
 
-/** Inner width of the pane (its CSS width less padding), for the drawing pad. */
-const INNER = 292;
+/** The pane's width less its padding and the drawing pad's border: the drawing pad's width. */
+const PAD_LESS = 68;
 
 export function SignPane() {
   const tab = activeTab.value;
@@ -85,6 +85,12 @@ function Library({ kind, tab }: { kind: SigKind; tab: Tab | null }) {
   const items = sigsOf(kind);
   const tool = annotTool.value;
   const making = creating.value === kind;
+  // The pane's width follows the window's (--pane-w): the pad takes the width it has when it opens, and keeps it,
+  // so strokes already drawn stay where they were if the window is resized meanwhile.
+  const lib = useRef<HTMLDivElement>(null);
+  const padW = useRef(0);
+  if (!making) padW.current = 0;
+  else if (!padW.current) padW.current = Math.max(240, (lib.current?.closest<HTMLElement>(".signpane")?.offsetWidth ?? Math.min(440, Math.max(320, innerWidth * 0.28))) - PAD_LESS);
   const label = kind === "initials" ? "Initials" : "Signatures";
   const remove = async (e: SigEntry) => {
     const r = await ask(`Delete ${e.name}?`, "It's removed from this PC. Signatures already placed in documents stay.", [
@@ -94,7 +100,7 @@ function Library({ kind, tab }: { kind: SigKind; tab: Tab | null }) {
     if (r === "delete") void deleteSig(e.id).catch((x) => showToast(String(x)));
   };
   return (
-    <div class="lib">
+    <div class="lib" ref={lib}>
       <div class="lib-head">
         <span>{label}</span>
         {!making && (
@@ -103,7 +109,7 @@ function Library({ kind, tab }: { kind: SigKind; tab: Tab | null }) {
           </button>
         )}
       </div>
-      {making && <Maker key={kind} kind={kind} width={INNER} />}
+      {making && <Maker key={kind} kind={kind} width={padW.current} />}
       {items.length > 0 && (
         <div class={`lib-grid ${kind}`}>
           {items.map((e) => (

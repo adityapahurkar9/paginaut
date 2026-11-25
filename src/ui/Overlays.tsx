@@ -211,6 +211,7 @@ function commands(): Item[] {
     c("Open file…", A.openDialog, "Ctrl+O"),
     c("Find in document", A.openFind, "Ctrl+F", hasDoc),
     c("Go to page…", () => setTimeout(() => (document.getElementById("page-input") as HTMLInputElement | null)?.focus(), 0), "Ctrl+G", hasDoc),
+    c("Reading width", A.fitRead, "Ctrl+3", hasDoc),
     c("Fit width", A.fitWidth, "Ctrl+2", hasDoc),
     c("Fit page", A.fitPage, "Ctrl+1", hasDoc),
     c("Actual size (100%)", () => A.zoomTo(1), "Ctrl+0", hasDoc),

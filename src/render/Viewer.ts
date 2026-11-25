@@ -23,11 +23,21 @@ const PAD_Y = 20;
 const PAD_X = 16;
 export const LO_SCALE = 0.4;
 const MAX_FULL_PX = 12_000_000;
+/** Zoom steps and fit changes: a quick scale of what's drawn, then the real layout. */
+const ZOOM_MS = 160;
+const ZOOM_EASE = "cubic-bezier(0.2, 0.8, 0.2, 1)";
+const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const TILE = 1024;
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 32;
 
-export type FitMode = "none" | "width" | "page";
+/** "read": the width, up to a comfortable reading width (wide screens keep room on both sides). */
+export type FitMode = "none" | "width" | "page" | "read";
+
+/** Widest a page (or spread) is shown by the "read" fit, in CSS px: about a page at 117% on a 1920-wide window, and
+ *  half the view on wider ones. The same whatever panes are open, so opening one needn't zoom the page again. */
+const READ_W = 940;
+const readWidth = (vw: number, pages: number) => Math.min(vw, Math.max(READ_W * pages, vw / 2));
 export type LayoutMode = "single" | "spread" | "spread-cover";
 export type PageAction = "rotate-left" | "rotate-right" | "delete";
 
@@ -246,7 +256,7 @@ export class Viewer {
   private contentW = 0;
   private contentH = 0;
   private zoom = 1;
-  private fit: FitMode = "width";
+  private fit: FitMode = "read";
   /** Height kept clear by "page" fit, for bars floating over the pages (mobile); 0 on the desktop. */
   private fitReserveY = 0;
   private mounted = new Map<number, PageView>();
@@ -668,8 +678,8 @@ export class Viewer {
     const vh = Math.max(this.el.clientHeight / 2, this.el.clientHeight - PAD_Y * 2 - this.fitReserveY);
     if (this.layoutMode === "single") {
       const { w, h } = this.pages[i];
-      const byWidth = vw0 / (w * PT_TO_CSS);
-      return clampZoom(fit === "width" ? Math.min(byWidth, 4) : Math.min(byWidth, vh / (h * PT_TO_CSS)));
+      const byWidth = (fit === "read" ? readWidth(vw0, 1) : vw0) / (w * PT_TO_CSS);
+      return clampZoom(fit === "page" ? Math.min(byWidth, vh / (h * PT_TO_CSS)) : Math.min(byWidth, 4));
     }
     // Two-page layouts: fit the spread you're on. A lone page (the cover, or an
     // odd last page) is fitted like its neighbouring spread, so the pairs next
@@ -687,8 +697,8 @@ export class Viewer {
       h = Math.max(h, this.pages[k].h);
     }
     const n = rowEnd(r) - this.rowFirst[r];
-    const byWidth = (vw0 - (n - 1) * GAP) / (w * PT_TO_CSS);
-    return clampZoom(fit === "width" ? Math.min(byWidth, 4) : Math.min(byWidth, vh / (h * PT_TO_CSS)));
+    const byWidth = ((fit === "read" ? readWidth(vw0, n) : vw0) - (n - 1) * GAP) / (w * PT_TO_CSS);
+    return clampZoom(fit === "page" ? Math.min(byWidth, vh / (h * PT_TO_CSS)) : Math.min(byWidth, 4));
   }
 
   /**
@@ -702,15 +712,39 @@ export class Viewer {
     if (this.fit === "page") this.setFit("page");
   }
 
-  setFit(fit: FitMode) {
+  /** `animate`: a quick GPU scale to the new size first (the buttons and keys), as zoom steps have. */
+  setFit(fit: FitMode, animate = false) {
     const live = this.live();
     const st = this.viewState();
-    this.fit = fit;
-    if (!live) this.waiting = { ...st, fit };
-    else if (fit !== "none") {
-      st.fit = fit;
-      this.restore(st);
+    if (!live) {
+      this.fit = fit;
+      this.waiting = { ...st, fit };
+      return;
     }
+    if (fit === "none") {
+      this.fit = fit;
+      return;
+    }
+    st.fit = fit;
+    const k = this.fitZoom(fit, st.page) / this.zoom;
+    if (!animate || this.animating || this.pinch || Math.abs(k - 1) < 1e-3 || reducedMotion()) {
+      this.fit = fit;
+      this.restore(st);
+      return;
+    }
+    // Scaled about the top of the view, where the page you're on stays once laid out again.
+    this.animating = true;
+    this.sizer.style.transformOrigin = `${this.el.scrollLeft + this.el.clientWidth / 2}px ${this.el.scrollTop}px`;
+    this.sizer.style.transition = `transform ${ZOOM_MS}ms ${ZOOM_EASE}`;
+    this.sizer.style.transform = `scale(${k})`;
+    setTimeout(() => {
+      this.sizer.style.transition = "";
+      this.sizer.style.transform = "";
+      this.animating = false;
+      if (this.destroyed) return;
+      this.fit = fit;
+      this.restore(st);
+    }, ZOOM_MS + 5);
   }
 
   /** Zooms to `z`, keeping the document point under (ax, ay) (viewport px) fixed. */
@@ -752,19 +786,20 @@ export class Viewer {
     }
     const target = clampZoom(this.zoom * factor);
     if (Math.abs(target - this.zoom) < 1e-4) return;
+    if (reducedMotion()) return this.setZoom(target);
     const k = target / this.zoom;
     const ox = this.el.scrollLeft + this.el.clientWidth / 2;
     const oy = this.el.scrollTop + this.el.clientHeight / 2;
     this.animating = true;
     this.sizer.style.transformOrigin = `${ox}px ${oy}px`;
-    this.sizer.style.transition = "transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1)";
+    this.sizer.style.transition = `transform ${ZOOM_MS}ms ${ZOOM_EASE}`;
     this.sizer.style.transform = `scale(${k})`;
     setTimeout(() => {
       this.sizer.style.transition = "";
       this.sizer.style.transform = "";
       this.animating = false;
       this.setZoom(target);
-    }, 145);
+    }, ZOOM_MS + 5);
   }
 
   /** Night mode inverts pages; photos and figures are patched back to their real colours. */
@@ -1333,10 +1368,30 @@ export class Viewer {
   private place(pv: PageView) {
     const r = this.pageRect(pv.index);
     const st = pv.el.style;
-    st.transform = `translate(${r.x}px, ${r.y}px)`;
+    // On whole device pixels: a page placed at a fraction of one has its bitmap resampled, which softens text.
+    const dpr = this.dpr;
+    st.transform = `translate(${Math.round(r.x * dpr) / dpr}px, ${Math.round(r.y * dpr) / dpr}px)`;
     st.width = `${r.w}px`;
     st.height = `${r.h}px`;
+    this.sizeHi(pv);
     this.placeLayers(pv);
+  }
+
+  /**
+   * The sharp bitmap drawn for this zoom is shown at exactly its own pixels. Stretched to the page's size (a
+   * fraction of a pixel more or less, as the page's size in CSS px rarely comes out whole) it would be resampled,
+   * and text drawn soft. Any other bitmap (from before a zoom, or the base under tiles) is stretched to the page.
+   */
+  private sizeHi(pv: PageView) {
+    const st = pv.hi.style;
+    if (pv.hiScale > 0 && pv.hi.width && pv.hiScale === quantize(this.cssScale * this.dpr)) {
+      const dpr = this.dpr;
+      st.width = `${pv.hi.width / dpr}px`;
+      st.height = `${pv.hi.height / dpr}px`;
+    } else {
+      st.width = "";
+      st.height = "";
+    }
   }
 
   // ------------------------------------------------------------ layers
@@ -1479,6 +1534,7 @@ export class Viewer {
               pv.hiKey = hiKey;
               pv.hiScale = s;
               drawBitmap(pv.hi, b);
+              this.sizeHi(pv);
               releaseCanvas(pv.lo);
               pv.loKey = undefined;
               pv.hiImage = b;
@@ -1559,6 +1615,7 @@ export class Viewer {
           pv.hiKey = baseKey;
           pv.hiScale = baseScale;
           drawBitmap(pv.hi, b);
+          this.sizeHi(pv);
           pv.hiImage = b;
           if (this.night) this.drawPhotos(pv);
         },

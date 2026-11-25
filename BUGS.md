@@ -11,6 +11,62 @@ from the "Report a problem" form (labels bug and from-app), with only the parts 
 
 ## Open
 
+### Windows (0.9.15; reported 2026-11-25; fixed the same day, not released; not tried in the running app yet)
+
+- [x] The Markdown pane is wider than the other panes on the right (Organize, Sign, Redact, Convert, Reading).
+      Wanted: the others made as wide as Markdown, not Markdown made narrower.
+      Cause: every pane is .signpane, 360 px wide; .mdpane alone overrides it to 440 px (src/styles.css, .mdpane).
+      Fix: .signpane 440 px and the .mdpane override gone. Things sized for 360: SignPane.tsx INNER = 292 (the
+      drawing pad, 360 less padding) has to follow, and the tool panes (toolpanes.ts) share .signpane, so they widen
+      too (as panes-one-width wants)
+      Fixed: every pane is 440 px; the drawing pad is 372. Panes now slide in from the side bar and back out to it
+      (styles.css pane-in and pane-out; src/ui/PaneSlot.tsx keeps a closed pane a moment to show it go)
+      Then (same day): 440 px took too much of a window that isn't maximized. The width follows the window now:
+      28% of it, between 320 and 440 px (styles.css --pane-w); the drawing pad takes the pane's width when it opens
+- [x] Clicking a side bar button feels slow the first time (the pane opens late); later clicks are quick.
+      Likely cause: a document fitted to the width (the default, below) is zoomed again whenever the space beside it
+      changes. Opening a pane narrows the viewer, Viewer.onResize fits it again at a new zoom, and every page in view
+      is drawn anew at that zoom, sharp pass and all. The second time, those bitmaps are still in the render
+      cache (kept by zoom), so it's quick. Some panes also ask the engine for something when they first show
+      (Convert: api.convertOptions; Markdown: reads the file). Not measured yet. The opening size below would help
+      too: a page narrower than the window doesn't have to zoom when a pane opens
+      Fixed by the reading width below: it doesn't change while there's room for 940 px beside a pane (from about a
+      1440-wide window up), so opening a pane draws nothing anew. Fit width still zooms; not measured
+- [x] A document opens fitted to the window's width, which is too big on wide screens (16:9, 16:10 and wider).
+      Wanted: it opens with room on both sides, about as a Markdown file's page shows at 117% on a 1920-wide window
+      (the page roughly half the window's width, the rest left empty); the zoom that gives will differ by document.
+      Plus one button that comes back to this size.
+      Cause: a file with no place kept in Recent opens at { fit: "width" } (src/ui/App.tsx, TabView: v.restore); the
+      viewer has only "width" and "page" fits (src/render/Viewer.ts, FitMode and fitZoom), and "width" goes up to
+      400%. Needs a third fit, the width up to a comfortable reading width (a share of the view, or a most-width in
+      px), as the default for new files, kept like the others (tab.fit, Recent), with its own button beside fit width
+      and fit page in the status bar, and a shortcut (Ctrl+1 and Ctrl+2 are taken by fit page and fit width)
+      Fixed: a third fit, "read" (Reading width): the width, up to 940 px or half the view, whichever is wider
+      (Viewer.ts READ_W, readWidth; a spread gets that per page). New files open with it; a file in Recent opens as it
+      was left, so files opened before keep fit width until it's pressed. Its button is beside fit width and fit page
+      (status bar and View), in the zoom menu and the command list, Ctrl+3. Changing fit is animated as zoom steps are
+- [x] Settings › Keyboard shortcuts: its two columns are wider than the dialog, so the second is cut off and the
+      dialog scrolls sideways; long names ("Switch tab (last used first)") wrap onto four lines beside their keys.
+      Wanted: one column.
+      Cause: .keys is a grid of two 1fr columns, and every kbd has white-space: nowrap (styles.css, the kbd rule), so
+      the longest keys ("Ctrl+= / Ctrl+− · Ctrl+wheel · pinch") set a column's least width and push the second past
+      the dialog's 760 px. The @media (max-width: 700px) that goes to one column looks at the window, not the dialog,
+      so it never applies there. Fix: .keys one column; let a long kbd wrap
+      Fixed: one column; keys take up to 60% of a row and wrap
+- [x] A Markdown file's page isn't sharp: its text looks soft (seen at 117%, with Dark pages on).
+      Not found yet: the engine draws a Markdown page exactly as a PDF's (render_now, MuPDF lays out the Markdown)
+      and the viewer asks for the same sharp pass. Suspects, to check by putting the same page as a PDF beside it:
+      Dark pages (.night: invert(0.9) and contrast(0.92) turn black on white into light grey on dark grey, softer
+      edges, the same for PDFs); MuPDF's built-in fonts for Markdown (thin Courier-like monospace for code), drawn
+      without hinting, next to the app's own text that Windows draws with ClearType; or the page placed at a
+      fraction of a pixel (Viewer.ts, the page's translate), which blurs a bitmap
+      Found in the code: the last, and for every document, not Markdown only. A page is placed at a fraction of a
+      pixel, and its sharp bitmap (whole pixels, at the zoom rounded to 0.001) is stretched to the page's size in CSS
+      px, which rarely comes out whole: the browser resamples it by a hair, enough to soften small text. Fixed: pages
+      are placed on whole device pixels and the sharp bitmap is shown at exactly its own pixels (Viewer.ts place,
+      sizeHi). Dark pages still lowers the contrast (as it's meant to). Whether this was all of it needs a look in
+      the running app
+
 ### Android (0.6.6; reported again 2026-11-21, on a phone)
 
 - [ ] Opening a PDF from another app while Paginaut isn't running still fails at random: sometimes it opens,

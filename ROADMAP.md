@@ -624,6 +624,30 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
 - [ ] Installer code signing — prepared: bundle.windows.signCommand runs tools/sign.ps1 on every binary and the
       installer, a no-op until PAGINAUT_SIGN_THUMBPRINT (certificate in the store) or PAGINAUT_SIGN_DLIB/METADATA
       (Azure Trusted Signing) is set. Waiting on a certificate (options in the Phase 8 notes)
+      Chosen (2026-11-25, now that Paginaut is open source): SignPath Foundation's free signing for open source.
+      Ready, not run yet: .github/workflows/release-windows.yml builds the Windows release on GitHub's runners
+      (MuPDF from Artifex's repository at 1.28.5's commit, patched by native/build-mupdf.ps1; OCR models; the app
+      with `tauri build --no-bundle`), has SignPath sign paginaut.exe, makes the installer with `tauri bundle` and has
+      SignPath sign that. Without SignPath set up it stops after the unsigned installer. The SignPath artifact
+      configurations are in .signpath/artifact-configurations (app.xml, installer.xml). tools/release.ps1 -FromCI
+      fetches the signed installer from the newest successful run, checks its signature, and signs it with the update
+      key here (the update key stays off GitHub, and is applied after the code signature, which would otherwise
+      break it). CODE_SIGNING_POLICY.md is the policy page SignPath asks for, linked from README.md.
+      Left to do, by hand:
+      1. Push, and run the workflow once (gh workflow run release-windows.yml --ref main) to see the build pass on
+         GitHub: the MuPDF build from git (with its submodules) and `tauri bundle` haven't been tried there.
+      2. Two-factor sign-in on GitHub, if not on already.
+      3. Apply at signpath.org/apply.html (an OSI licence, AGPL-3.0, released, maintained: all met).
+      4. Once accepted: in SignPath, add the GitHub.com trusted build system to the project, install the SignPath
+         GitHub App on the repository, create the artifact configurations "app" and "installer" from the two XML
+         files, and a signing policy (release-signing) with manual approval. Check that `${version}` reaches the
+         product-version restriction and that it matches what the files carry (0.9.15 or 0.9.15.0).
+      5. On GitHub: repository variable SIGNPATH_ORGANIZATION_ID (and SIGNPATH_PROJECT_SLUG /
+         SIGNPATH_SIGNING_POLICY_SLUG if not paginaut / release-signing), secret SIGNPATH_API_TOKEN.
+      6. Release: bump, push, run the workflow, approve both signings in SignPath, then
+         tools/release.ps1 -FromCI -Publish (Linux as before). Then README's line can say releases are signed.
+      Not covered: the NSIS uninstaller inside the installer stays unsigned (bundle.windows.signCommand is a no-op
+      on GitHub)
 - [x] Settings › Default app: tick the kinds Paginaut is offered for (PDF, XPS, e-books, comics, Markdown;
       pictures and Office files unticked unless picked), "Make Paginaut the default…" opens Windows' Default apps
       at Paginaut (IApplicationAssociationRegistrationUI, the ms-settings link as a fallback), each kind shows

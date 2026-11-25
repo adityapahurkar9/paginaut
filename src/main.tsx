@@ -187,6 +187,7 @@ window.addEventListener("keydown", (e) => {
       case "0": handled(); return A.zoomTo(1);
       case "1": handled(); return A.fitPage();
       case "2": handled(); return A.fitWidth();
+      case "3": handled(); return A.fitRead();
       case "tab": handled(); return A.nextTab();
       case "h": if (ready) { handled(); A.toggleMode("read"); } return;
       case "d": if (ready) { handled(); startProperties(ready); } return;

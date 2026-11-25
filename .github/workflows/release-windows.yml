@@ -1,0 +1,170 @@
+# Builds the Windows release from the repository, on GitHub's own runners, and has SignPath sign it
+# (free code signing for open source: CODE_SIGNING_POLICY.md). Run by hand for the commit to release:
+#   gh workflow run release-windows.yml --ref main
+# then approve the two signing requests in SignPath. tools/release.ps1 -FromCI fetches the signed installer from
+# the run, signs it with the update key (on your PC: that key never comes here), and publishes as before.
+#
+# Two signings: paginaut.exe first, so the installer carries a signed app, then the installer itself.
+# Until SignPath is set up (the repository variable SIGNPATH_ORGANIZATION_ID and the secret SIGNPATH_API_TOKEN),
+# the run builds and keeps the installer unsigned, and release.ps1 -FromCI refuses it.
+name: Windows release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  # MuPDF 1.28.5 (tag 1.28.5 of Artifex's repository, pinned by its commit); native/build-mupdf.ps1 patches it.
+  MUPDF_COMMIT: 8ad45e92f0935d3d87f1db3f873086472a5e1b24
+  SIGNPATH_ON: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+
+jobs:
+  windows:
+    # GitHub-hosted, as SignPath asks of open-source projects.
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Paginaut $v from $env:GITHUB_SHA"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # MuPDF's static libraries take long to build: kept between runs while the commit and the patches stay.
+      - name: MuPDF (cached)
+        id: mupdf-cache
+        uses: actions/cache@v6
+        with:
+          path: native/mupdf
+          key: mupdf-${{ env.MUPDF_COMMIT }}-${{ hashFiles('native/build-mupdf.ps1') }}
+
+      - name: MuPDF source
+        if: steps.mupdf-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git init native/mupdf
+          git -C native/mupdf remote add origin https://github.com/ArtifexSoftware/mupdf.git
+          git -C native/mupdf fetch --depth 1 origin $env:MUPDF_COMMIT
+          git -C native/mupdf checkout --quiet FETCH_HEAD
+          git -C native/mupdf submodule update --init --recursive --depth 1
+
+      - name: MuPDF build
+        if: steps.mupdf-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: ./native/build-mupdf.ps1
+
+      - name: OCR models
+        shell: pwsh
+        run: ./native/get-tessdata.ps1
+
+      - name: Packages
+        run: npm ci
+
+      - name: TypeScript
+        run: npx tsc --noEmit -p .
+
+      - name: Build the app
+        run: npx tauri build --no-bundle
+
+      # --- paginaut.exe signed -------------------------------------------------------------------
+      - name: Upload the unsigned app
+        id: app-unsigned
+        if: env.SIGNPATH_ON == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-unsigned-v${{ steps.version.outputs.version }}
+          path: src-tauri/target/release/paginaut.exe
+          if-no-files-found: error
+
+      - name: Sign the app (SignPath)
+        if: env.SIGNPATH_ON == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'paginaut' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: app
+          github-artifact-id: ${{ steps.app-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          # Room for approving the request in SignPath.
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed/app
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+
+      - name: Use the signed app
+        if: env.SIGNPATH_ON == 'true'
+        shell: pwsh
+        run: |
+          $s = Get-AuthenticodeSignature signed/app/paginaut.exe
+          if ($s.Status -ne "Valid") { throw "paginaut.exe came back without a valid signature: $($s.StatusMessage)" }
+          Copy-Item signed/app/paginaut.exe src-tauri/target/release/paginaut.exe -Force
+
+      # --- the installer, then signed ------------------------------------------------------------
+      - name: Make the installer
+        run: npx tauri bundle --bundles nsis
+
+      - name: Upload the unsigned installer
+        id: setup-unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-unsigned-v${{ steps.version.outputs.version }}
+          path: src-tauri/target/release/bundle/nsis/Paginaut_${{ steps.version.outputs.version }}_x64-setup.exe
+          if-no-files-found: error
+
+      - name: Sign the installer (SignPath)
+        if: env.SIGNPATH_ON == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'paginaut' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.setup-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed/setup
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+
+      - name: Check the signed installer
+        if: env.SIGNPATH_ON == 'true'
+        shell: pwsh
+        run: |
+          $f = "signed/setup/Paginaut_${{ steps.version.outputs.version }}_x64-setup.exe"
+          $s = Get-AuthenticodeSignature $f
+          if ($s.Status -ne "Valid") { throw "The installer came back without a valid signature: $($s.StatusMessage)" }
+          Write-Host "Signed by $($s.SignerCertificate.Subject)"
+
+      # What tools/release.ps1 -FromCI fetches.
+      - name: Keep the signed installer
+        if: env.SIGNPATH_ON == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-signed-v${{ steps.version.outputs.version }}
+          path: signed/setup/Paginaut_${{ steps.version.outputs.version }}_x64-setup.exe
+          if-no-files-found: error

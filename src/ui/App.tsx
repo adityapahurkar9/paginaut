@@ -34,6 +34,7 @@ import { ConvertPane } from "./ConvertPane";
 import { MarkdownPane } from "./MarkdownPane";
 import { OrganizePane } from "./OrganizePane";
 import { Rail } from "./Rail";
+import { PaneSlot } from "./PaneSlot";
 import { ReadingPane } from "./ReadingPane";
 import { SettingsDialog } from "./SettingsDialog";
 import { CompareDialog, CompareView } from "./CompareUI";
@@ -93,24 +94,26 @@ export function App() {
             <PrintBar />
           </div>
         </div>
-        <OrganizePane />
-        <SignPane />
-        <RedactPane />
-        <ConvertPane />
-        <MarkdownPane />
-        <ReadingPane />
-        {/* Tools in the pane on the right (toolpanes.ts): one at a time. */}
-        <PageSizePanel />
-        <LayoutPanel />
-        <InsertDialog />
-        <MergeDialog />
-        <SplitDialog />
-        <HeaderDialog />
-        <WatermarkDialog />
-        <LabelsDialog />
-        <OcrDialog />
-        <TableDialog />
-        <ReportPane />
+        <PaneSlot>
+          <OrganizePane />
+          <SignPane />
+          <RedactPane />
+          <ConvertPane />
+          <MarkdownPane />
+          <ReadingPane />
+          {/* Tools in the pane on the right (toolpanes.ts): one at a time. */}
+          <PageSizePanel />
+          <LayoutPanel />
+          <InsertDialog />
+          <MergeDialog />
+          <SplitDialog />
+          <HeaderDialog />
+          <WatermarkDialog />
+          <LabelsDialog />
+          <OcrDialog />
+          <TableDialog />
+          <ReportPane />
+        </PaneSlot>
         <Rail />
       </div>
       <StatusBar />
@@ -327,7 +330,7 @@ function TabView({ tab, active }: { tab: Tab; active: boolean }) {
     if (tab.info.value?.isPdf) attachAnnotLayer(tab);
     const prev = tab.carriedView ?? recent.value.find((r) => samePath(r.path, tab.path))?.view;
     tab.carriedView = null;
-    v.restore(prev ?? { page: 0, frac: 0, zoom: 1, fit: "width" });
+    v.restore(prev ?? { page: 0, frac: 0, zoom: 1, fit: "read" });
     if (tab.sizes.value && tab.edits.value) v.setPages(specs(tab.edits.value, tab.sizes.value));
     if (active) v.focus();
   }, [status]);

@@ -8,7 +8,7 @@ import { api } from "../api";
 import type { ComponentChild } from "preact";
 import {
   BookOpen, ChevronDown, ChevronsRight, ChevronUp, Columns2, Combine, Expand, File, FileOutput, FolderOpen, FormInput, Hand, Highlighter, Info, Keyboard,
-  Minus, Moon, MousePointer2, MoveHorizontal, PanelLeft, PanelRight, Plus, Redo2, RefreshCw, RotateCcw, RotateCw, Save, ScanText, ScrollText,
+  Minus, Moon, MousePointer2, MoveHorizontal, FoldHorizontal, PanelLeft, PanelRight, Plus, Redo2, RefreshCw, RotateCcw, RotateCw, Save, ScanText, ScrollText,
   Search, Signature, SquareSplitHorizontal, Sun, SunMoon, Trash2, FilePlus2, LayoutGrid, Type, Undo2, Wrench, Underline, Strikethrough, SquareDashed,
   PenLine, StickyNote, TypeOutline, Square, Circle, Slash, MoveUpRight, Stamp, MessagesSquare, Check, X, CalendarDays, UserRound,
   FileLock2, ShieldCheck, TextCursorInput, EyeOff, FileDiff, Settings2, AudioLines,
@@ -341,6 +341,7 @@ function ViewTools({ tab }: { tab: Tab | null }) {
       )}
       {(vm === "single" || vm === "double") && (
         <>
+          <TB icon={I(FoldHorizontal, 17)} label="Reading width" title="Fit the width, up to a comfortable reading width: how documents open (Ctrl+3)" on={tab?.fit.value === "read"} disabled={!tab} onClick={A.fitRead} />
           <TB icon={I(MoveHorizontal, 17)} label="Fit width" title="Fit width (Ctrl+2)" on={tab?.fit.value === "width"} disabled={!tab} onClick={A.fitWidth} />
           <TB icon={I(Expand, 17)} label="Fit page" title="Fit page (Ctrl+1)" on={tab?.fit.value === "page"} disabled={!tab} onClick={A.fitPage} />
         </>
@@ -557,6 +558,7 @@ export function ViewControls({ tab }: { tab: Tab | null }) {
       text
         ? [14, 16, 17, 19, 21, 24, 28, 32].map((z) => ({ label: `${z}px`, check: z === size, hint: z === 19 ? "Ctrl+0" : undefined, run: () => A.textSize(z) }))
         : [
+            { label: "Reading width", hint: "Ctrl+3", run: A.fitRead },
             { label: "Fit width", hint: "Ctrl+2", run: A.fitWidth },
             { label: "Fit page", hint: "Ctrl+1", run: A.fitPage },
             { sep: true },
@@ -581,6 +583,7 @@ export function ViewControls({ tab }: { tab: Tab | null }) {
       </button>
       {!text && (
         <div class="modeseg" role="group" aria-label="Fit">
+          <IB icon={I(FoldHorizontal, 15)} label="Reading width" title="Reading width: fit the width, up to a comfortable reading width, how documents open (Ctrl+3)" on={tab?.fit.value === "read"} disabled={!tab} onClick={A.fitRead} />
           <IB icon={I(MoveHorizontal, 15)} label="Fit width" title="Fit width (Ctrl+2)" on={tab?.fit.value === "width"} disabled={!tab} onClick={A.fitWidth} />
           <IB icon={I(Expand, 15)} label="Fit page" title="Fit page (Ctrl+1)" on={tab?.fit.value === "page"} disabled={!tab} onClick={A.fitPage} />
         </div>

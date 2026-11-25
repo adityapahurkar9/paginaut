@@ -19,6 +19,8 @@
   --hit-active: rgba(255, 128, 0, 0.55);
   --sel: rgba(43, 88, 209, 0.28);
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* The panes on the right: 440 px on a big window, narrower on a small one (never under 320). */
+  --pane-w: clamp(320px, 28vw, 440px);
   --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   color-scheme: light;
 }
@@ -391,15 +393,15 @@ kbd { font: 11px var(--font); padding: 2px 6px; border-radius: 5px; border: 1px 
 .readbar .rb-page { min-width: 84px; text-align: center; color: var(--tx2); font-variant-numeric: tabular-nums; }
 
 /* ---------------------------------------------------------------- help */
-.keys { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 26px; }
+.keys { display: flex; flex-direction: column; gap: 6px; }
 .keys h3 { margin: 10px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tx3); }
 .krow { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--bd2); font-size: 12.5px; }
-.krow kbd { font-family: inherit; color: var(--tx2); text-align: right; }
+.krow > span { flex: 1 1 auto; min-width: 0; }
+.krow kbd { flex: 0 1 auto; max-width: 60%; font-family: inherit; color: var(--tx2); text-align: right; white-space: normal; }
 .about-rows { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .about-rows div { display: flex; gap: 14px; }
 .about-rows div span:first-child { width: 110px; color: var(--tx3); flex-shrink: 0; }
 .dialog .muted { color: var(--tx2); }
-@media (max-width: 700px) { .keys { grid-template-columns: 1fr; } }
 .app.reading .pg-ctl { display: none; }
 
 /* ---------------------------------------------------------------- view mode switch */
@@ -746,7 +748,14 @@ select.fw { appearance: none; -webkit-appearance: none; padding-right: 12px; bac
 .sidebar-inner .seg .segb { padding: 0 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------------------------------------------------------------- Sign pane */
-.signpane { flex: 0 0 360px; width: 360px; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--bd); min-height: 0; animation: fade 0.12s; }
+.signpane { flex: 0 0 var(--pane-w); width: var(--pane-w); display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--bd); min-height: 0; animation: pane-in 0.18s var(--ease); }
+/* Panes slide in from the side bar and back out to it (PaneSlot.tsx keeps a closed pane a moment to show it go). */
+@keyframes pane-in { from { opacity: 0; transform: translateX(32px); } }
+@keyframes pane-out { to { opacity: 0; transform: translateX(32px); } }
+.pane-slot { display: contents; }
+.pane-ghost { position: relative; flex: 0 0 0; width: 0; }
+.pane-ghost > .pane-leaving { position: absolute; top: 0; bottom: 0; right: 0; z-index: 5; pointer-events: none; animation: pane-out 0.16s var(--ease) forwards; }
+@media (prefers-reduced-motion: reduce) { .signpane { animation: none; } }
 .signpane-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--bd2); }
 .signpane-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 14px 16px; }
 .pane-sec { padding: 10px 0 12px; border-bottom: 1px solid var(--bd2); display: flex; flex-direction: column; gap: 8px; }
@@ -1032,7 +1041,6 @@ body.text-edit .pg { cursor: default; }
 .pdfa-issues, .pdfa-done { margin: 2px 0; padding-left: 18px; font-size: 12.5px; line-height: 1.4; display: flex; flex-direction: column; gap: 3px; }
 .pdfa-issues small { color: var(--tx3); }
 .pdfa-issues .pdfa-stays { color: var(--tx2); font-style: italic; }
-.mdpane { flex-basis: 440px; width: 440px; }
 .mdpane .signpane-body { display: flex; flex-direction: column; padding: 8px 12px 12px; gap: 8px; }
 .md-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--tx3); }
 .md-bar span { flex: 1; }

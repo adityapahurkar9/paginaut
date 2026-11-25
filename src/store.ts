@@ -235,7 +235,7 @@ export class Tab {
   page = signal(0);
   pageCount = signal(0);
   zoom = signal(1);
-  fit = signal<FitMode>("width");
+  fit = signal<FitMode>("read");
   outline = signal<OutlineItem[] | null>(null);
   hasSelection = signal(false);
   search = signal<SearchState | null>(null);
