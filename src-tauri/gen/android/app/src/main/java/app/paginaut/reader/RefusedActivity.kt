@@ -10,7 +10,9 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 
 /**
  * What a copy of Paginaut asking for permissions it doesn't use shows instead of itself (MainActivity
@@ -53,12 +55,12 @@ class RefusedActivity : AppCompatActivity() {
     }
     val root = ScrollView(this).apply {
       addView(column, MATCH_PARENT, WRAP_CONTENT)
-      // Clear of the status and navigation bars (the app draws under them).
-      setOnApplyWindowInsetsListener { v, insets ->
-        @Suppress("DEPRECATION")
-        v.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
-        insets
-      }
+    }
+    // Clear of the status and navigation bars and any camera cutout (the app draws under them).
+    ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+      val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+      v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+      insets
     }
     setContentView(root)
     // Dark status bar icons on the light page (light ones in the dark theme).
