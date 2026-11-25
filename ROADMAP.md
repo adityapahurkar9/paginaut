@@ -634,10 +634,12 @@ The Tools › Convert menu was a placeholder ("Phase 7"), and Phase 7 only cover
       key here (the update key stays off GitHub, and is applied after the code signature, which would otherwise
       break it). CODE_SIGNING_POLICY.md is the policy page SignPath asks for, linked from README.md.
       Left to do, by hand:
-      1. Push, and run the workflow once (gh workflow run release-windows.yml --ref main) to see the build pass on
-         GitHub: the MuPDF build from git (with its submodules) and `tauri bundle` haven't been tried there.
+      1. Done 2026-11-25: the workflow builds the unsigned installer on GitHub (second run; the first showed the NAN
+         patch broke isnan( and the CRLF checkout kept two patches out, both fixed in native/build-mupdf.ps1 and the
+         workflow).
       2. Two-factor sign-in on GitHub, if not on already.
-      3. Apply at signpath.org/apply.html (an OSI licence, AGPL-3.0, released, maintained: all met).
+      3. Apply at signpath.org/apply.html (an OSI licence, AGPL-3.0, released, maintained: all met). Homepage:
+         https://adityapahurkar9.github.io/paginaut/ (site/, published by .github/workflows/pages.yml)
       4. Once accepted: in SignPath, add the GitHub.com trusted build system to the project, install the SignPath
          GitHub App on the repository, create the artifact configurations "app" and "installer" from the two XML
          files, and a signing policy (release-signing) with manual approval. Check that `${version}` reaches the
