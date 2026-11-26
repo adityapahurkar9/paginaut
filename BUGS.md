@@ -67,6 +67,17 @@ from the "Report a problem" form (labels bug and from-app), with only the parts 
       sizeHi). Dark pages still lowers the contrast (as it's meant to). Whether this was all of it needs a look in
       the running app
 
+### Android (reported 2026-11-26, on a phone)
+
+- [ ] Settings: swiping sideways through the colour themes moves the whole Settings sheet up and down. A thumb
+      swipes in an arc, not a straight line, so the swipe also goes a little down, and the sheet follows it.
+      Wanted: browsing themes leaves the sheet where it is (or moves it far less).
+      Cause: useDragDown (src/mobile/Sheets.tsx) starts pulling the sheet down once a touch has gone 8 px down and
+      never looks at sideways movement, so a swipe that starts on .theme-strip and dips 8 px turns into a pull.
+      Likely fix: decide the direction once, at the threshold: if the touch has gone further sideways than down,
+      the gesture belongs to the strip (maybe = false) for the rest of the touch; and/or never start a pull from
+      inside a sideways scroller (.theme-strip). Same check worth making for any other sideways strip in a sheet
+
 ### Android (0.6.6; reported again 2026-11-21, on a phone)
 
 - [ ] Opening a PDF from another app while Paginaut isn't running still fails at random: sometimes it opens,

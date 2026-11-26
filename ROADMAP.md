@@ -694,7 +694,9 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
       (assets/android-icons.py)
 - [x] Release signing key (0.3.0, 2026-10-08): an upload key (RSA 4096) in %USERPROFILE%\.paginaut\paginaut-upload.jks,
       its passwords in android-signing.properties beside it (both must be backed up, like updater.key); Gradle signs release builds
-      with it when the file is there. `bash tools/android.sh all --release` makes the Play bundle (.aab, all ABIs)
+      with it when the file is there. `bash tools/android.sh all --release` makes the Play bundle (.aab, all ABIs).
+      This key is also the Play app signing key (Play Console's option to use your own key: Google's PEPK tool
+      encrypted it and the zip was uploaded), so Play and GitHub copies are signed alike
 - [ ] Store listing, AAB upload (a personal Play account must run a closed test with 12 testers for 14 days
       first); source made public first (AGPL); 1.0 for the store release
       Listing drafted 2026-11-22: docs/PLAY-LISTING.md (name, short and full description, category, App content
@@ -719,8 +721,9 @@ internet permission at all (release builds). Kept clearly apart from Adobe's rea
 - [x] Native debug symbols for Play (Android 0.6.8): the Play bundle carries the symbol tables itself
       (build.gradle.kts debugSymbolLevel SYMBOL_TABLE; tools/android.sh builds the release library unstripped and
       Gradle strips what it packs), so no zip to upload by hand. See "Error logs" below
-- [ ] README.md: the Play app signing certificate's SHA-256 (App integrity › App signing) in place of
-      PLAY_APP_SIGNING_FINGERPRINT
+- [x] README.md: the Play app signing certificate's SHA-256. Play signs with Paginaut's own key (handed to Google
+      for Play App Signing), so Play copies and the GitHub APKs share one certificate, 7A:27:…:01:96; the README
+      lists it once
 - [x] LICENSE file (the AGPL 3.0 text) at the repo root before the repo goes public; package.json already says
       AGPL-3.0-or-later
 - [x] CBR comics: unarr (RAR 1.5–4, solid ones too) and libarchive (RAR 5) behind native/cbr.c; RarLab's unRAR left out (its licence clashes with the AGPL)
