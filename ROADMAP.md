@@ -940,9 +940,13 @@ Version set 2026-11-26.
       was slow to start changing; and the layouts flyout opened under the mouse and took clicks meant for the
       button. Measured afterwards: the window resizes 5 to 10 ms after the button is let go. Layouts still come
       from Win+Z and dragging the window to the top of the screen
-- [ ] Windows: tools/test-all.ps1 passed on this code
-- [ ] Built: release/v0.9.17 (Windows installer, Linux .deb and AppImage from Ubuntu 22.04)
-- [ ] Published as the latest GitHub release
+- [x] Windows: tools/test-all.ps1 passed on this code
+- [x] Built 2026-11-26: release/v0.9.17 (Windows installer, Linux .deb and AppImage from Ubuntu 22.04, each with its
+      .sig; latest.json; addons.json). WSL had lost its DNS after a network reset, so the AppImage step couldn't
+      download the AppImage runtime: built with LDAI_RUNTIME_FILE=/root/.cache/tauri/runtime-x86_64 (the one Tauri
+      had downloaded before)
+- [x] Published 2026-11-26: v0.9.17 as the latest GitHub release (releases/latest/download/latest.json checked:
+      0.9.17, all three platforms)
 
 ## 0.9.16 (Windows, Linux): reading width, panes that fit the window, sharper pages
 Versions set 2026-11-25. Details in BUGS.md ("Windows (0.9.15; reported 2026-11-25)").
