@@ -69,7 +69,7 @@ from the "Report a problem" form (labels bug and from-app), with only the parts 
 
 ### Android (reported 2026-11-26, on a phone)
 
-- [ ] Settings: swiping sideways through the colour themes moves the whole Settings sheet up and down. A thumb
+- [x] Settings: swiping sideways through the colour themes moves the whole Settings sheet up and down. A thumb
       swipes in an arc, not a straight line, so the swipe also goes a little down, and the sheet follows it.
       Wanted: browsing themes leaves the sheet where it is (or moves it far less).
       Cause: useDragDown (src/mobile/Sheets.tsx) starts pulling the sheet down once a touch has gone 8 px down and
@@ -77,6 +77,10 @@ from the "Report a problem" form (labels bug and from-app), with only the parts 
       Likely fix: decide the direction once, at the threshold: if the touch has gone further sideways than down,
       the gesture belongs to the strip (maybe = false) for the rest of the touch; and/or never start a pull from
       inside a sideways scroller (.theme-strip). Same check worth making for any other sideways strip in a sheet
+      Fixed (not built or tried on a phone yet): useDragDown decides the direction before pulling. A touch that
+      goes 8 px sideways before it goes as far down is never a pull; a pull needs more down than sideways, and over
+      .theme-strip (the only sideways strip in a sheet) twice as much. A straight pull down still closes the sheet
+      from anywhere on it, the strip included
 
 ### Android (0.6.6; reported again 2026-11-21, on a phone)
 

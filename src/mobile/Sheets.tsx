@@ -26,6 +26,9 @@ export function openSheet(s: Exclude<Sheet, null>) {
 /**
  * Pulling a sheet down closes it: from anywhere on it, once its list (if any) is scrolled to the
  * top. Let go before it's a quarter of the way down (and not flicked) and it settles back.
+ * A touch that goes sideways first belongs to what's under it (the theme strip): a thumb swipes
+ * in an arc, and that dip mustn't pull the sheet. Over a sideways strip a pull has to be clearly
+ * downward.
  */
 function useDragDown(open: Sheet) {
   const ref = useRef<HTMLDivElement>(null);
@@ -35,15 +38,17 @@ function useDragDown(open: Sheet) {
     // The same sheet element shows the next sheet (Storage back to Settings): not left pulled away.
     el.style.transition = "";
     el.style.transform = "";
-    let y0 = 0, t0 = 0, dy = 0, live = false, maybe = false;
+    let x0 = 0, y0 = 0, t0 = 0, dy = 0, live = false, maybe = false, strip = false;
     const scrollerAt = (t: EventTarget | null) => (t as HTMLElement | null)?.closest?.<HTMLElement>(".sheet-scroll") ?? null;
     const start = (e: TouchEvent) => {
       const t = e.target as HTMLElement;
       const sc = scrollerAt(t);
       // A slider or a list partway down keeps the gesture.
       maybe = e.touches.length === 1 && !t.closest("input") && !(sc && sc.scrollTop > 0);
+      strip = !!t.closest(".theme-strip");
       live = false;
       dy = 0;
+      x0 = e.touches[0].clientX;
       y0 = e.touches[0].clientY;
       t0 = e.timeStamp;
     };
@@ -51,8 +56,15 @@ function useDragDown(open: Sheet) {
       if (!maybe) return;
       const d = e.touches[0].clientY - y0;
       if (!live) {
+        const side = Math.abs(e.touches[0].clientX - x0);
+        // Sideways first (or mostly): not a pull, for the rest of this touch.
+        if (side > 8 && side >= d) maybe = false;
         if (d < -4) maybe = false; // scrolling the list up
-        if (d < 8) return;
+        if (!maybe || d < 8) return;
+        if (side * (strip ? 2 : 1) >= d) {
+          maybe = false;
+          return;
+        }
         live = true;
         el.style.transition = "none";
       }
