@@ -71,19 +71,14 @@ pub fn window_index(label: &str) -> u64 {
     label.strip_prefix("w-").and_then(|n| n.parse().ok()).unwrap_or(0)
 }
 
-/// Window setup that needs the window itself (each window, "main" included): touchpad pinches and Snap Layouts on
-/// the maximize button. Runs on the UI thread, where the window's own child windows must be made.
+/// Window setup that needs the window itself (each window, "main" included): touchpad pinches. Runs on the UI
+/// thread.
 pub fn window_ready(win: &WebviewWindow) {
     #[cfg(windows)]
     {
         let w = win.clone();
         let _ = win.run_on_main_thread(move || {
             crate::enable_touchpad_pinch(&w);
-            if let Ok(hwnd) = w.hwnd() {
-                if let Err(e) = crate::snap::install(w.app_handle(), hwnd.0 as isize, w.label()) {
-                    crate::errlog::write("app", &format!("Snap layouts: {e}"));
-                }
-            }
         });
     }
     #[cfg(not(windows))]
@@ -110,8 +105,6 @@ pub fn on_window_event(win: &tauri::Window, event: &tauri::WindowEvent) {
                     let _ = w.emit_to(w.label(), "tab-arrive", serde_json::json!({ "tab": tab, "atX": null }));
                 }
             }
-            #[cfg(windows)]
-            crate::snap::forget(win.label());
         }
         _ => {}
     }

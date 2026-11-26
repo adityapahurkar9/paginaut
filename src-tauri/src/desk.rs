@@ -1891,18 +1891,6 @@ pub fn print_stop() {
     PRINT_STOP.store(true, std::sync::atomic::Ordering::Release);
 }
 
-/// Where the page's maximize button is (physical pixels of the client area), for Snap Layouts (snap.rs).
-#[tauri::command]
-pub fn snap_button(window: tauri::WebviewWindow, x: i32, y: i32, w: i32, h: i32, shown: bool) -> Res<()> {
-    #[cfg(windows)]
-    return crate::snap::place(window.hwnd().map_err(|e| e.to_string())?.0 as isize, x, y, w, h, shown);
-    #[cfg(not(windows))]
-    {
-        let _ = (window, x, y, w, h, shown);
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{decode_text, openable};

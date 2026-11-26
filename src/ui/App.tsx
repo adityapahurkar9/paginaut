@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { invoke } from "@tauri-apps/api/core";
 import { BookOpen, FileDiff, FileImage, FileSpreadsheet, FileText, House, Plus, Presentation, X } from "lucide-preact";
 import { Logo } from "./Logo";
 import * as A from "../actions";
@@ -145,43 +143,9 @@ export function tabIcon(t: Tab) {
   return <FileText size={15} />;
 }
 
-/** Windows 11 Snap Layouts on our maximize button: a native window sits over it (snap.rs), told where it is here;
- * it takes the mouse there, so it says when the mouse is over it and the button lights up as on hover. */
-function useSnapButton() {
-  const ref = useRef<HTMLButtonElement>(null);
-  const [hot, setHot] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    let raf = 0;
-    const report = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const r = el.getBoundingClientRect(), k = devicePixelRatio;
-        const shown = r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
-        invoke("snap_button", { x: Math.round(r.left * k), y: Math.round(r.top * k), w: Math.round(r.width * k), h: Math.round(r.height * k), shown }).catch(() => {});
-      });
-    };
-    const ro = new ResizeObserver(report);
-    ro.observe(el);
-    ro.observe(document.documentElement);
-    window.addEventListener("resize", report);
-    const unlisten = getCurrentWebviewWindow().listen<boolean>("snap-hover", (e) => setHot(e.payload));
-    report();
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-      window.removeEventListener("resize", report);
-      void unlisten.then((f) => f());
-    };
-  }, []);
-  return { ref, hot };
-}
-
 function TitleBar() {
   const win = getCurrentWindow();
   const strip = useRef<HTMLDivElement>(null);
-  const snap = useSnapButton();
   return (
     <div class="titlebar">
       <div class="brand" data-tauri-drag-region>
@@ -287,7 +251,7 @@ function TitleBar() {
         <button class="winbtn" aria-label="Minimize" onClick={() => win.minimize()}>
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" /></svg>
         </button>
-        <button ref={snap.ref} class={`winbtn ${snap.hot ? "hot" : ""}`} aria-label="Maximize" onClick={() => win.toggleMaximize()}>
+        <button class="winbtn" aria-label="Maximize" onClick={() => win.toggleMaximize()}>
           <svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" /></svg>
         </button>
         <button class="winbtn close" aria-label="Close" onClick={() => win.close()}>

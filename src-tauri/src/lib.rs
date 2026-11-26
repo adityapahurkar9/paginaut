@@ -22,7 +22,6 @@ mod appwindows;
 #[cfg(desktop)]
 mod defaults;
 #[cfg(windows)]
-mod snap;
 #[cfg(windows)]
 mod dragghost;
 #[cfg(windows)]
@@ -396,7 +395,6 @@ fn run_desktop() {
             desk::default_apps_set,
             desk::default_apps_open,
             desk::tts_voices,
-            desk::snap_button,
             desk::tts_speak,
             desk::piper_voices,
             desk::piper_download,

@@ -49,6 +49,10 @@ Deferred:
       a child window). Layered child windows need the app to declare Windows 10/11 support: Paginaut now has its
       own manifest (src-tauri/windows/app.manifest). Checked with hit tests and window messages; the flyout
       itself needs a real mouse over the button
+      Taken out again after 0.9.16 (2026-11-26): Windows holds a press on such a button back until it's let go, then
+      sends it with the release about 220 ms later (measured), so the button was slow to answer; and the flyout
+      opened under the mouse and took clicks meant for the button. The maximize button is a plain one now;
+      layouts still come from Win+Z and dragging the window to the top of the screen
 - [ ] Faster JPEG decoding for heavy scans (first sharp page on the 914 MB scan: 0.31 s vs 0.3 s target).
       Needs libjpeg-turbo built into MuPDF (extra build tools: NASM, CMake). Left as is by choice (2026-10-01):
       the gain is small (0.31 s against 0.3 s)

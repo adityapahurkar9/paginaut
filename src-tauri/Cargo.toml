@@ -77,8 +77,8 @@ windows = { version = "0.62", features = [
   "Win32_UI_Shell",
   # Compare: Excel's short date follows Windows' own.
   "Win32_Globalization",
-  # Snap Layouts on our own maximize button (snap.rs).
-  "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader",
+  # Windows' own windows: the dragged tab's picture (dragghost.rs), finding a window under the mouse (appwindows.rs).
+  "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader",
   # The tab being dragged, shown under the mouse outside the window (dragghost.rs).
   "Win32_UI_HiDpi",
   # Printing: Windows' print dialog and GDI.
