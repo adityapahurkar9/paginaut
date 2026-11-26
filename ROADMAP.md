@@ -933,6 +933,17 @@ themselves (docs/PLAY-DATA-SAFETY.md stays "no data collected").
 - [ ] More detail in the log when turned on in Settings
 - [ ] On Linux, tried in the running app (WebKitGTK): the pane, the crash offer, the issue form filled in
 
+## 0.9.17 (Windows, Linux): the maximize button answers at once
+Version set 2026-11-26.
+- [x] The maximize/restore button is a plain one again, without Snap Layouts on hover (snap.rs taken out). Windows
+      held a press on it back until it was let go and sent it with the release about 220 ms later, so the window
+      was slow to start changing; and the layouts flyout opened under the mouse and took clicks meant for the
+      button. Measured afterwards: the window resizes 5 to 10 ms after the button is let go. Layouts still come
+      from Win+Z and dragging the window to the top of the screen
+- [ ] Windows: tools/test-all.ps1 passed on this code
+- [ ] Built: release/v0.9.17 (Windows installer, Linux .deb and AppImage from Ubuntu 22.04)
+- [ ] Published as the latest GitHub release
+
 ## 0.9.16 (Windows, Linux): reading width, panes that fit the window, sharper pages
 Versions set 2026-11-25. Details in BUGS.md ("Windows (0.9.15; reported 2026-11-25)").
 - [x] Documents open at a new fit, Reading width: the page's width up to 940 px or half the view, whichever is
